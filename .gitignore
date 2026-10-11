@@ -1,0 +1,38 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Local data (large / regenerable; never commit market data) ---
+data/raw/
+data/processed/
+data/exports/
+*.duckdb
+*.duckdb.wal
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Secrets & local env ---
+.env
+.env.local
+*.key
+*.pem
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# --- Model artifacts / experiment outputs ---
+models/*.pkl
+models/*.joblib
+experiments/runs/
