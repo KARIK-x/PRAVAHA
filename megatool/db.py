@@ -20,7 +20,7 @@ from typing import Any
 
 from megatool.config import PATHS, ensure_dirs
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -120,6 +120,38 @@ CREATE TABLE IF NOT EXISTS journal_entries (
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
+
+-- One row per imported floor-sheet file. `content_hash` makes a re-import of the
+-- same file a no-op, so the same session cannot be double-counted.
+CREATE TABLE IF NOT EXISTS floorsheet_imports (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    source        TEXT NOT NULL,              -- free-text label for where the file came from
+    content_hash  TEXT NOT NULL,              -- sha256 of the raw text
+    traded_at     TEXT NOT NULL,              -- the session date the sheet describes
+    rows_total    INTEGER NOT NULL,
+    rows_imported INTEGER NOT NULL,
+    rows_skipped  INTEGER NOT NULL,
+    imported_at   TEXT NOT NULL,
+    UNIQUE (content_hash, traded_at)
+);
+
+-- Individual prints. The unique key is the trade itself, so two different files
+-- describing the same session cannot inflate the counts.
+CREATE TABLE IF NOT EXISTS floorsheet_trades (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    traded_at  TEXT NOT NULL,
+    symbol     TEXT NOT NULL,
+    buyer      TEXT NOT NULL,
+    seller     TEXT NOT NULL,
+    quantity   INTEGER NOT NULL,
+    rate       REAL NOT NULL,
+    amount     REAL NOT NULL,
+    source     TEXT NOT NULL,
+    UNIQUE (traded_at, symbol, buyer, seller, quantity, rate)
+);
+
+CREATE INDEX IF NOT EXISTS idx_floorsheet_trades_symbol
+    ON floorsheet_trades (traded_at, symbol);
 
 -- Dedupe key for alerts so a condition cannot fire every poll cycle.
 CREATE TABLE IF NOT EXISTS alert_history (

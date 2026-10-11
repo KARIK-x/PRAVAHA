@@ -30,6 +30,18 @@ from megatool.backtest import (
 )
 from megatool.config import HOST, PATHS, PORT, ensure_dirs
 from megatool.db import get_conn, init_app_db
+from megatool.floorsheet import (
+    FloorSheetError,
+)
+from megatool.floorsheet import (
+    import_floorsheet as floorsheet_import,
+)
+from megatool.floorsheet import (
+    list_sessions as floorsheet_sessions,
+)
+from megatool.floorsheet import (
+    summary as floorsheet_summary,
+)
 from megatool.forecast import (
     MODELS as FORECAST_MODELS,
 )
@@ -189,6 +201,14 @@ class PydanticAskRequest(BaseModel):
 
     symbol: str
     question: str = Field("", max_length=500)
+
+
+class PydanticFloorSheetRequest(BaseModel):
+    """One session's floor sheet, pasted as CSV text."""
+
+    text: str = Field(min_length=1, max_length=20_000_000)
+    traded_at: str
+    source: str = "manual import"
 
 
 def create_app(store: MarketStore | None = None) -> FastAPI:
@@ -542,6 +562,37 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
             "`assumptions`; past performance does not indicate future results."
         )
         return payload
+
+    # ------------------------------------------------------------ floor sheet
+    @app.post("/api/floorsheet/import")
+    def floorsheet_import_route(req: PydanticFloorSheetRequest) -> dict[str, Any]:
+        """Import one session's floor sheet (CSV text).
+
+        There is no floor-sheet API to call, so this is import-based by design.
+        Re-importing the same file for the same session adds nothing.
+        """
+        try:
+            return floorsheet_import(req.text, req.traded_at, source=req.source)
+        except FloorSheetError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/api/floorsheet/sessions")
+    def floorsheet_session_list() -> dict[str, Any]:
+        sessions = floorsheet_sessions()
+        return {
+            "sessions": sessions,
+            "note": "Sessions with an imported floor sheet. An empty list means "
+            "nothing has been imported, not that nothing traded.",
+        }
+
+    @app.get("/api/floorsheet/summary")
+    def floorsheet_summary_route(
+        traded_at: str | None = None,
+        symbol: str | None = None,
+        top: int = Query(10, ge=1, le=100),
+    ) -> dict[str, Any]:
+        """Concentration and counterparty analysis. Descriptive, never a signal."""
+        return floorsheet_summary(traded_at=traded_at, symbol=symbol, top=top)
 
     # ----------------------------------------------------------- forecasting
     @app.get("/api/forecast/models")

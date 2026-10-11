@@ -143,7 +143,26 @@ could move money — the application places no orders, by design.
 | `GET /api/screen/export.csv` | CSV export of a screen |
 | `GET /api/dashboard` | breadth, movers, most active — explicitly `is_live: false` |
 | `GET /api/quality` | per-symbol validation reports |
-| `GET /api/portfolio` | positions (empty by default) |
+| `GET /api/strategies` | backtest strategy catalogue + defaults |
+| `POST /api/backtest` | run one strategy; returns assumptions and a benchmark |
+| `GET /api/forecast/models` | forecasting models on offer |
+| `POST /api/forecast` | fit on the past, score on an unseen hold-out, then project |
+| `POST /api/forecast/compare` | every model on one identical split, ranked |
+| `GET /api/research/topics` | what the assistant answers — and refuses |
+| `GET /api/research/{symbol}` | full cited descriptive report for one symbol |
+| `POST /api/research/ask` | plain-language question; predictive ones are refused |
+| `GET /api/portfolio` | positions **derived from the ledger**, valued at the latest stored close |
+| `GET/POST /api/portfolio/transactions` | the ledger (400 with a plain-English reason on oversell) |
+| `DELETE /api/portfolio/transactions/{id}` | remove one ledger row |
+| `POST/DELETE /api/portfolio/manual[/{symbol}]` | manual holdings with no trade history |
+| `GET/POST /api/journal`, `GET/PATCH/DELETE /api/journal/{id}` | journal CRUD (404 on a missing id) |
+| `GET /api/journal/stats` | win rate, R multiples, plan adherence, per-strategy |
+| `GET /api/journal/{id}/grade` | grade one closed entry against its own plan |
+| `POST /api/planning` | R multiples, risk:reward, position size for a risk budget |
+| `POST /api/planning/grade` | grade a finished trade against the plan made at entry |
+
+Route order matters: literal paths (`/api/journal/stats`, `/api/research/topics`) are
+registered **before** the `{id}` / `{symbol}` patterns that would otherwise swallow them.
 
 Two contracts worth knowing:
 

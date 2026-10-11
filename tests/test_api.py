@@ -638,3 +638,66 @@ def test_research_ask_refuses_to_recommend(client):
     assert out["refused"] is True
     assert out["findings"] == []
     assert "will not produce one" in out["refusal_reason"]
+
+
+# -------------------------------------------------------------- floor sheet
+SHEET = (
+    "Symbol,Buyer,Seller,Quantity,Rate,Amount\n"
+    "NABIL,B1,B2,100,500,50000\n"
+    "NICA,B2,B3,300,250,75000\n"
+)
+
+
+def test_floorsheet_import_then_summary(client):
+    out = client.post(
+        "/api/floorsheet/import",
+        json={"text": SHEET, "traded_at": "2026-10-09", "source": "test sheet"},
+    ).json()
+    assert out["rows_imported"] == 2
+    assert out["rows_skipped"] == 0
+
+    again = client.post(
+        "/api/floorsheet/import", json={"text": SHEET, "traded_at": "2026-10-09"}
+    ).json()
+    assert again["already_imported"] is True
+    assert again["rows_imported"] == 0
+
+    s = client.get("/api/floorsheet/summary").json()
+    assert s["totals"]["trades"] == 2
+    assert s["totals"]["amount"] == pytest.approx(125000.0)
+    assert {row["buyer"] for row in s["top_buyers"]} == {"B1", "B2"}
+    assert s["concentration"]["unique_buyers"] == 2
+
+    sessions = client.get("/api/floorsheet/sessions").json()["sessions"]
+    assert sessions[0]["traded_at"] == "2026-10-09"
+    assert sessions[0]["prints"] == 2
+
+
+def test_floorsheet_summary_filters(client):
+    client.post("/api/floorsheet/import", json={"text": SHEET, "traded_at": "2026-10-09"}).json()
+    s = client.get("/api/floorsheet/summary", params={"symbol": "NICA"}).json()
+    assert s["totals"]["trades"] == 1
+    assert s["filter"]["symbol"] == "NICA"
+
+
+def test_floorsheet_rejects_a_file_that_is_not_a_floor_sheet(client):
+    r = client.post(
+        "/api/floorsheet/import",
+        json={"text": "Symbol,Quantity\nNABIL,100\n", "traded_at": "2026-10-09"},
+    )
+    assert r.status_code == 400
+    assert "missing required column" in r.json()["detail"]
+
+
+def test_floorsheet_requires_text(client):
+    assert (
+        client.post("/api/floorsheet/import", json={"traded_at": "2026-10-09"}).status_code == 422
+    )
+
+
+def test_floorsheet_summary_without_any_import_is_honest(client):
+    s = client.get("/api/floorsheet/summary").json()
+    assert s["totals"]["trades"] == 0
+    assert any("No floor sheet has been imported" in w for w in s["warnings"])
+    assert any("investment advice" in x for x in s["limits"])
+    assert client.get("/api/floorsheet/sessions").json()["sessions"] == []

@@ -96,7 +96,7 @@ thread-safe without shared-state reasoning.
 - Alternative: a pooled/shared connection — rejected: `sqlite3` connections are
   thread-affine by default and would need `check_same_thread=False` plus locking.
 
-## 9. Testing: pytest + ruff, 175 tests
+## 9. Testing: pytest + ruff, 376 tests
 
 `uv run pytest` (unit + API tests via `fastapi.testclient`), `ruff check` + `ruff format`.
 No network in tests: fixtures are synthetic and labelled, written to `tmp_path`.
@@ -104,6 +104,12 @@ No network in tests: fixtures are synthetic and labelled, written to `tmp_path`.
 - Alternative: Hypothesis — good future addition for indicator properties; not added yet
   (dependency budget).
 - Note: assertions are never disabled and failures are never skipped to go green.
+- **An autouse fixture in `tests/conftest.py` redirects BOTH databases to a throwaway
+  directory for every test.** This exists because a helper that forgot to pass its
+  `db_path` wrote 14 synthetic rows into the owner's real database. The rows were found
+  and deleted, and the guard now makes that class of mistake impossible rather than
+  relying on every test remembering to pass a path. A full suite run is verified to leave
+  the real database empty.
 
 ## 10. Disk and memory budget
 
@@ -116,3 +122,44 @@ Machine: MacBook M1 (arm64), 8 GB RAM, ~9.7 GB free at start.
 | `data/` git-ignored (currently 4.0 MB) | keeps the repo small; no market data committed |
 | no local LLM / no GPU code | brief: unavailable |
 | own indicator code, few dependencies | keeps `.venv` small and auditable |
+
+## 11. Research Assistant: deterministic rules, not an LLM
+
+The brief asks for an AI research assistant. There is **no LLM key in this project and no
+local model fits this machine** (8 GB RAM, no GPU), so shipping anything that called
+itself an AI would be dishonest labelling.
+
+What `megatool/research.py` is instead: a rules engine that runs named calculations over
+stored bars and returns, for every claim, the value, the **window** it covers and the
+**definition** used. That makes each claim checkable by the owner rather than
+authoritative-sounding. It answers descriptive questions (trend, momentum, risk, volume,
+levels, relative strength, data quality) and **refuses** predictive or prescriptive ones,
+explaining why and listing what it can answer instead.
+
+The API route is `/api/research/ask`. A request asking "will it go up", "should I buy",
+"what is the target price" returns `refused: true` with a written reason and no numbers.
+This is a deliberate design constraint, not a missing feature.
+
+## 12. Own backtest engine (not VectorBT, not backtesting.py)
+
+Long/flat engine in `megatool/backtest.py`: **next-bar-open fills by default**, fees and
+slippage applied, shorting refused, and every run returns its assumptions plus a
+buy-and-hold benchmark on the same window. A `same_close` mode exists but is labelled
+optimistic in the UI because it fills at the price that produced the signal.
+
+Rejected alternatives were `VectorBT` (heavy, vectorised API that hides the fill
+semantics an owner needs to audit) and `backtesting.py` (its default same-bar close fill
+overstates results). Both rejections are from documented reasoning, **not** from measured
+failures — recorded honestly as such in the research register.
+
+## 13. Forecasting: baselines and a skill test, not a black box
+
+`megatool/forecast.py` ships six transparent models and scores every one on a hold-out
+window it never saw, against the naive "last value" baseline. A model that cannot beat
+"use yesterday's close" is reported in plain words as **NO DEMONSTRATED SKILL**, with the
+RMSE ratio that says so. The interval drawn on future steps is the 5th–95th percentile of
+historical hold-out errors and is labelled exactly that — not a confidence interval.
+
+This shape was chosen because a smooth projected line is easy to produce and easy to
+misread. Making the naive comparison the headline number means the tool cannot quietly
+impress the owner with a model that has, in fact, learned nothing.

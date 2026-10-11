@@ -35,6 +35,12 @@ def rng() -> np.random.Generator:
 
 
 @pytest.fixture
+def db_path(tmp_path: Path) -> Path:
+    """An isolated SQLite file for a single test (never the owner's database)."""
+    return tmp_path / "test_state.sqlite"
+
+
+@pytest.fixture
 def closes(rng: np.random.Generator) -> np.ndarray:
     """A deterministic, mildly trending daily close series."""
     steps = rng.normal(0.0005, 0.015, size=400)
