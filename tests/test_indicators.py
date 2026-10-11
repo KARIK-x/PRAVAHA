@@ -98,10 +98,10 @@ def test_obv_hand_computed():
     vol = np.array([100.0, 200.0, 150.0, 50.0, 300.0])
     obv = ta.compute("obv", {"close": close, "volume": vol}).values["obv"]
     assert obv[0] == pytest.approx(0.0)
-    assert obv[1] == pytest.approx(200.0)   # up
-    assert obv[2] == pytest.approx(50.0)    # down -150
-    assert obv[3] == pytest.approx(50.0)    # flat
-    assert obv[4] == pytest.approx(350.0)   # up +300
+    assert obv[1] == pytest.approx(200.0)  # up
+    assert obv[2] == pytest.approx(50.0)  # down -150
+    assert obv[3] == pytest.approx(50.0)  # flat
+    assert obv[4] == pytest.approx(350.0)  # up +300
 
 
 def test_bollinger_uses_population_std():
@@ -119,8 +119,26 @@ def test_rsi_matches_wilder_published_example():
     """Wilder's own worked example; first two published values must match."""
     close = np.array(
         [
-            44.34, 44.09, 44.15, 43.61, 44.33, 44.83, 45.10, 45.42, 45.84, 46.08,
-            45.89, 46.03, 45.61, 46.28, 46.28, 46.00, 46.03, 46.41, 46.22, 45.64,
+            44.34,
+            44.09,
+            44.15,
+            43.61,
+            44.33,
+            44.83,
+            45.10,
+            45.42,
+            45.84,
+            46.08,
+            45.89,
+            46.03,
+            45.61,
+            46.28,
+            46.28,
+            46.00,
+            46.03,
+            46.41,
+            46.22,
+            45.64,
         ]
     )
     rsi = ta.compute("rsi", {"close": close}, period=14).values["rsi"]
@@ -191,7 +209,11 @@ def test_no_lookahead_full_series_equals_prefix(name, ohlcv):
             a = full.values[col][:cut]
             b = part.values[col]
             np.testing.assert_allclose(
-                a, b, rtol=1e-9, atol=1e-9, equal_nan=True,
+                a,
+                b,
+                rtol=1e-9,
+                atol=1e-9,
+                equal_nan=True,
                 err_msg=f"{name}.{col} changed when the future was removed",
             )
 

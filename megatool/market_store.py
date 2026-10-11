@@ -14,6 +14,7 @@ Guarantees:
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterable, Sequence
 from datetime import date, datetime
 from pathlib import Path
@@ -93,6 +94,12 @@ class MarketStore:
         self.path = db_path or PATHS.market_db
         self.read_only = read_only
         self._conn: duckdb.DuckDBPyConnection | None = None
+        # DuckDB's Python connection is not safe to share across threads: the
+        # API serves requests from a threadpool, and a read overlapping another
+        # read/write can return a truncated row (observed as a short tuple from
+        # ``global_coverage``). Every statement therefore goes through this
+        # re-entrant lock, and multi-statement sequences hold it throughout.
+        self._lock = threading.RLock()
 
     @property
     def conn(self) -> duckdb.DuckDBPyConnection:
@@ -103,10 +110,19 @@ class MarketStore:
                 self._conn.execute(_SECURITIES_DDL)
         return self._conn
 
+    def execute(self, query: str, params: Sequence[Any] | None = None) -> Any:
+        """Run one statement while holding the store lock."""
+        with self._lock:
+            conn = self.conn  # property: connects (and creates schema) once
+            if params is None:
+                return conn.execute(query)
+            return conn.execute(query, params)
+
     def close(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
 
     def __enter__(self) -> MarketStore:
         # Force the connection (and schema creation) before the caller uses it.
@@ -159,42 +175,44 @@ class MarketStore:
                 work[col] = default
         work = work[list(_BARS_COLUMNS)]
 
-        before = int(self.conn.execute("SELECT COUNT(*) FROM price_bars").fetchone()[0])
+        with self._lock:
+            before = int(self.execute("SELECT COUNT(*) FROM price_bars").fetchone()[0])
 
-        # Register the frame under a stable name, then merge.
-        self.conn.unregister("staging_bars")
-        self.conn.register("staging_bars", work)
+            # Register the frame under a stable name, then merge. The name is
+            # shared, so this whole sequence must hold the lock.
+            self.conn.unregister("staging_bars")
+            self.conn.register("staging_bars", work)
 
-        self.conn.execute(
-            """
-            INSERT INTO price_bars
-              (symbol, trading_date, open, high, low, close, volume, turnover,
-               percent_change, transactions, source, source_url, retrieved_at,
-               validation_status, adjustment_status, flags)
-            SELECT symbol, trading_date, open, high, low, close, volume, turnover,
+            self.execute(
+                """
+                INSERT INTO price_bars
+                  (symbol, trading_date, open, high, low, close, volume, turnover,
                    percent_change, transactions, source, source_url, retrieved_at,
-                   COALESCE(validation_status,'valid'),
-                   COALESCE(adjustment_status,'unadjusted'),
-                   flags
-            FROM staging_bars
-            ON CONFLICT (symbol, trading_date) DO UPDATE SET
-               open = excluded.open,
-               high = excluded.high,
-               low = excluded.low,
-               close = excluded.close,
-               volume = excluded.volume,
-               turnover = excluded.turnover,
-               percent_change = excluded.percent_change,
-               transactions = excluded.transactions,
-               source = excluded.source,
-               source_url = excluded.source_url,
-               retrieved_at = excluded.retrieved_at,
-               validation_status = excluded.validation_status,
-               adjustment_status = excluded.adjustment_status,
-               flags = excluded.flags
-            """
-        )
-        after = int(self.conn.execute("SELECT COUNT(*) FROM price_bars").fetchone()[0])
+                   validation_status, adjustment_status, flags)
+                SELECT symbol, trading_date, open, high, low, close, volume, turnover,
+                       percent_change, transactions, source, source_url, retrieved_at,
+                       COALESCE(validation_status,'valid'),
+                       COALESCE(adjustment_status,'unadjusted'),
+                       flags
+                FROM staging_bars
+                ON CONFLICT (symbol, trading_date) DO UPDATE SET
+                   open = excluded.open,
+                   high = excluded.high,
+                   low = excluded.low,
+                   close = excluded.close,
+                   volume = excluded.volume,
+                   turnover = excluded.turnover,
+                   percent_change = excluded.percent_change,
+                   transactions = excluded.transactions,
+                   source = excluded.source,
+                   source_url = excluded.source_url,
+                   retrieved_at = excluded.retrieved_at,
+                   validation_status = excluded.validation_status,
+                   adjustment_status = excluded.adjustment_status,
+                   flags = excluded.flags
+                """
+            )
+            after = int(self.execute("SELECT COUNT(*) FROM price_bars").fetchone()[0])
         total = len(work)
         inserted = max(0, after - before)
         updated = total - inserted
@@ -202,9 +220,10 @@ class MarketStore:
 
     def upsert_securities(self, rows: Iterable[dict[str, Any]]) -> int:
         n = 0
-        for r in rows:
-            self.conn.execute(
-                """
+        with self._lock:
+            for r in rows:
+                self.execute(
+                    """
                 INSERT INTO security_master
                   (symbol, name, sector, instrument_type, delisted, source,
                    first_seen, last_updated)
@@ -217,23 +236,23 @@ class MarketStore:
                    delisted = excluded.delisted,
                    last_updated = excluded.last_updated
                 """,
-                (
-                    str(r["symbol"]).upper(),
-                    r.get("name"),
-                    r.get("sector"),
-                    r.get("instrument_type"),
-                    bool(r.get("delisted", False)),
-                    r.get("source"),
-                    r.get("first_seen"),
-                    r.get("last_updated"),
-                ),
-            )
-            n += 1
+                    (
+                        str(r["symbol"]).upper(),
+                        r.get("name"),
+                        r.get("sector"),
+                        r.get("instrument_type"),
+                        bool(r.get("delisted", False)),
+                        r.get("source"),
+                        r.get("first_seen"),
+                        r.get("last_updated"),
+                    ),
+                )
+                n += 1
         return n
 
     # ------------------------------------------------------------------- read
     def symbols(self, min_bars: int = 1) -> list[str]:
-        rows = self.conn.execute(
+        rows = self.execute(
             """
             SELECT symbol FROM price_bars GROUP BY symbol
             HAVING COUNT(*) >= ? ORDER BY symbol
@@ -244,7 +263,7 @@ class MarketStore:
 
     def coverage(self) -> pd.DataFrame:
         """Per-symbol coverage report: bar count, date span, latest source."""
-        return self.conn.execute(
+        return self.execute(
             """
             SELECT symbol,
                    COUNT(*)                          AS bars,
@@ -261,7 +280,7 @@ class MarketStore:
         ).df()
 
     def global_coverage(self) -> dict[str, Any]:
-        row = self.conn.execute(
+        row = self.execute(
             """
             SELECT COUNT(*) AS bars,
                    COUNT(DISTINCT symbol) AS symbols,
@@ -287,25 +306,32 @@ class MarketStore:
         end: date | None = None,
         limit: int | None = None,
     ) -> pd.DataFrame:
-        """Return one symbol's bars ascending by date, as a DataFrame."""
-        sql = "SELECT * FROM price_bars WHERE symbol = ?"
+        """Return one symbol's bars ascending by date, as a DataFrame.
+
+        ``limit`` keeps the **most recent** N bars (the charting-terminal
+        meaning of "last 6 months"), not the oldest N. The ordering is applied
+        inside a subquery so the returned frame is still chronological.
+        """
+        inner = "SELECT * FROM price_bars WHERE symbol = ?"
         params: list[Any] = [symbol.upper()]
         if start is not None:
-            sql += " AND trading_date >= ?"
+            inner += " AND trading_date >= ?"
             params.append(start)
         if end is not None:
-            sql += " AND trading_date <= ?"
+            inner += " AND trading_date <= ?"
             params.append(end)
-        sql += " ORDER BY trading_date ASC"
         if limit is not None:
-            sql += f" LIMIT {int(limit)}"
-        return self.conn.execute(sql, params).df()
+            inner += f" ORDER BY trading_date DESC LIMIT {int(limit)}"
+            sql = f"SELECT * FROM ({inner}) ORDER BY trading_date ASC"
+        else:
+            sql = f"{inner} ORDER BY trading_date ASC"
+        return self.execute(sql, params).df()
 
     def latest_bars(self, symbols: Sequence[str] | None = None) -> pd.DataFrame:
         """Most recent bar per symbol - the dashboard's snapshot view."""
         if symbols:
             ph = ",".join("?" for _ in symbols)
-            return self.conn.execute(
+            return self.execute(
                 f"""
                 SELECT * EXCLUDE (rn) FROM (
                     SELECT *, ROW_NUMBER() OVER (
@@ -315,7 +341,7 @@ class MarketStore:
                 """,
                 [s.upper() for s in symbols],
             ).df()
-        return self.conn.execute(
+        return self.execute(
             """
             SELECT * EXCLUDE (rn) FROM (
                 SELECT *, ROW_NUMBER() OVER (
@@ -327,7 +353,7 @@ class MarketStore:
 
     def all_closes(self) -> pd.DataFrame:
         """Wide close-price matrix (dates x symbols) for cross-sectional work."""
-        return self.conn.execute(
+        return self.execute(
             """
             PIVOT (
                 SELECT trading_date, symbol, close FROM price_bars WHERE close IS NOT NULL
@@ -339,17 +365,15 @@ class MarketStore:
         ).df()
 
     def bar_count(self) -> int:
-        return int(self.conn.execute("SELECT COUNT(*) FROM price_bars").fetchone()[0])
+        return int(self.execute("SELECT COUNT(*) FROM price_bars").fetchone()[0])
 
     def purge_symbol(self, symbol: str) -> int:
         """Delete all bars for a symbol. Returns the number of rows removed."""
         sym = symbol.upper()
         n = int(
-            self.conn.execute(
-                "SELECT COUNT(*) FROM price_bars WHERE symbol = ?", (sym,)
-            ).fetchone()[0]
+            self.execute("SELECT COUNT(*) FROM price_bars WHERE symbol = ?", (sym,)).fetchone()[0]
         )
-        self.conn.execute("DELETE FROM price_bars WHERE symbol = ?", (sym,))
+        self.execute("DELETE FROM price_bars WHERE symbol = ?", (sym,))
         return n
 
 

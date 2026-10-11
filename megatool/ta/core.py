@@ -51,6 +51,21 @@ class IndicatorMeta:
     formula: str = ""
     notes: str = ""
 
+    def resolved_output_warmup(self, params: dict[str, Any] | None = None) -> dict[str, int]:
+        """Warm-up for every declared output, falling back to the overall figure.
+
+        Always populated, so a consumer never has to guess whether a missing
+        entry means "same as overall" or "not known".
+        """
+        p = params if params is not None else self.params
+        default = _resolve_scalar(self.warmup, p)
+        return {
+            out: _resolve_scalar(self.output_warmup[out], p)
+            if (self.output_warmup and out in self.output_warmup)
+            else default
+            for out in self.outputs
+        }
+
     def describe(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -60,10 +75,7 @@ class IndicatorMeta:
             "inputs": list(self.inputs),
             "outputs": list(self.outputs),
             "warmup": self.warmup(self.params) if callable(self.warmup) else self.warmup,
-            "output_warmup": {
-                k: (v(self.params) if callable(v) else v)
-                for k, v in (self.output_warmup or {}).items()
-            },
+            "output_warmup": self.resolved_output_warmup(),
             "reference": self.reference,
             "formula": self.formula,
             "notes": self.notes,
@@ -184,8 +196,7 @@ def _validate_params(meta: IndicatorMeta, params: dict[str, Any]) -> None:
     unknown = set(params) - set(meta.params)
     if unknown:
         raise ValueError(
-            f"{meta.name}: unknown parameter(s) {sorted(unknown)}; "
-            f"declared {sorted(meta.params)}"
+            f"{meta.name}: unknown parameter(s) {sorted(unknown)}; declared {sorted(meta.params)}"
         )
     for k, v in params.items():
         default = meta.params[k]
@@ -258,12 +269,12 @@ def rolling_sum(values: np.ndarray, period: int) -> np.ndarray:
         return out
     c = np.cumsum(np.where(np.isnan(values), 0.0, values))
     out[period - 1 :] = c[period - 1 :]
-    out[period - 1 :] -= np.concatenate(([0.0], c[: -period]))
+    out[period - 1 :] -= np.concatenate(([0.0], c[:-period]))
     # Only valid once every window element is non-NaN.
     valid = ~np.isnan(values)
     cv = np.cumsum(valid.astype(int))
     cnt = np.empty(n, dtype=int)
-    cnt[period - 1 :] = cv[period - 1 :] - np.concatenate(([0], cv[: -period]))
+    cnt[period - 1 :] = cv[period - 1 :] - np.concatenate(([0], cv[:-period]))
     out[cnt < period] = np.nan
     return out
 

@@ -156,7 +156,9 @@ class NepseDataRepoAdapter(BaseAdapter):
         return self.cache_dir / f"{symbol.upper()}.csv"
 
     def _cache_is_fresh(self, path: Path) -> bool:
-        return path.exists() and (utcnow().timestamp() - path.stat().st_mtime) < self.cache_ttl_seconds
+        return (
+            path.exists() and (utcnow().timestamp() - path.stat().st_mtime) < self.cache_ttl_seconds
+        )
 
     # --------------------------------------------------------------- API
     def list_symbols(self, use_cache: bool = True) -> list[str]:
@@ -233,9 +235,7 @@ class NepseDataRepoAdapter(BaseAdapter):
         """Map the source's column names onto the canonical schema."""
         missing = {"published_date", "close"} - set(raw.columns)
         if missing:
-            raise SourceError(
-                f"{symbol}: source CSV is missing expected columns {sorted(missing)}"
-            )
+            raise SourceError(f"{symbol}: source CSV is missing expected columns {sorted(missing)}")
 
         df = raw.rename(columns=_RAW_COLUMNS).copy()
         df["trading_date"] = pd.to_datetime(df["trading_date"], errors="coerce")

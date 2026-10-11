@@ -32,19 +32,44 @@ from megatool.models import DataSource
 #: canonical -> accepted source spellings (lowered, non-alnum collapsed).
 _ALIASES: dict[str, tuple[str, ...]] = {
     "trading_date": (
-        "published_date", "date", "trading date", "trade date", "nepse date",
-        "business date", "datetime",
+        "published_date",
+        "date",
+        "trading date",
+        "trade date",
+        "nepse date",
+        "business date",
+        "datetime",
     ),
     "open": ("open", "opening", "open price", "l_open", "open价"),
     "high": ("high", "high price", "l_high", "max"),
     "low": ("low", "low price", "l_low", "min"),
     "close": ("close", "closing", "close price", "l_close", "last", "closing price"),
-    "volume": ("volume", "traded_quantity", "traded quantity", "qty", "quantity",
-               "shares traded", "units"),
-    "turnover": ("turnover", "traded_amount", "traded amount", "amount",
-                 "transaction amount", "revenue"),
-    "percent_change": ("percent_change", "per_change", "per change", "pct change",
-                       "% change", "change", "change_percent"),
+    "volume": (
+        "volume",
+        "traded_quantity",
+        "traded quantity",
+        "qty",
+        "quantity",
+        "shares traded",
+        "units",
+    ),
+    "turnover": (
+        "turnover",
+        "traded_amount",
+        "traded amount",
+        "amount",
+        "transaction amount",
+        "revenue",
+    ),
+    "percent_change": (
+        "percent_change",
+        "per_change",
+        "per change",
+        "pct change",
+        "% change",
+        "change",
+        "change_percent",
+    ),
     "transactions": ("transactions", "trades", "no_of_transactions", "deal_count"),
     "symbol": ("symbol", "scrip", "security", "code", "ticker", "stock"),
 }
@@ -112,18 +137,14 @@ class LocalFileAdapter(BaseAdapter):
             return sorted(str(s).upper().strip() for s in df["symbol"].dropna().unique())
         if self.forced_symbol:
             return [self.forced_symbol]
-        raise SourceError(
-            "file has no symbol column and no symbol was supplied to the importer"
-        )
+        raise SourceError("file has no symbol column and no symbol was supplied to the importer")
 
     def fetch_history(self, symbol: str) -> pd.DataFrame:
         df = self._read()
         if "symbol" in df.columns:
             df = df[df["symbol"].astype(str).str.upper().str.strip() == symbol.upper()]
         elif self.forced_symbol and symbol.upper() != self.forced_symbol:
-            raise SourceError(
-                f"file was imported as {self.forced_symbol}, not {symbol.upper()}"
-            )
+            raise SourceError(f"file was imported as {self.forced_symbol}, not {symbol.upper()}")
         if df.empty:
             raise SourceError(f"no rows for {symbol} in {self.path.name}")
         return self.normalise(df, symbol)
@@ -154,8 +175,7 @@ class LocalFileAdapter(BaseAdapter):
     def normalise(self, raw: pd.DataFrame, symbol: str) -> pd.DataFrame:
         if "trading_date" not in raw.columns:
             raise SourceError(
-                f"{self.path.name}: no date column recognised. "
-                f"Header seen: {list(raw.columns)}"
+                f"{self.path.name}: no date column recognised. Header seen: {list(raw.columns)}"
             )
         df = raw.copy()
         df["trading_date"] = pd.to_datetime(df["trading_date"], errors="coerce")
@@ -178,8 +198,16 @@ class LocalFileAdapter(BaseAdapter):
         df["symbol"] = symbol.upper()
         df = df.sort_values("trading_date").drop_duplicates("trading_date", keep="last")
         keep = [
-            "symbol", "trading_date", "open", "high", "low", "close",
-            "volume", "turnover", "percent_change", "transactions",
+            "symbol",
+            "trading_date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "turnover",
+            "percent_change",
+            "transactions",
         ]
         return df[[c for c in keep if c in df.columns]].reset_index(drop=True)
 

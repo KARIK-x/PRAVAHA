@@ -46,11 +46,7 @@ def ingest_symbol(
 
     annotated, report = validate_series(raw, reference_date=reference_date)
     retrieved = utcnow().replace(tzinfo=None)
-    source_url = (
-        adapter.csv_url(symbol)
-        if hasattr(adapter, "csv_url")
-        else adapter.config.base_url
-    )
+    source_url = adapter.csv_url(symbol) if hasattr(adapter, "csv_url") else adapter.config.base_url
 
     annotated = annotated.assign(
         source=adapter.config.source_id.value,
@@ -200,7 +196,9 @@ def _persist(result: IngestResult, db_path: Path | None) -> None:
                 "rows_inserted": result.rows_inserted,
                 "rows_updated": result.rows_updated,
                 "rows_flagged": result.rows_flagged,
-                "coverage_start": result.coverage_start.isoformat() if result.coverage_start else None,
+                "coverage_start": result.coverage_start.isoformat()
+                if result.coverage_start
+                else None,
                 "coverage_end": result.coverage_end.isoformat() if result.coverage_end else None,
                 "synthetic": result.synthetic,
                 "detail": json.dumps(

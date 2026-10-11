@@ -286,4 +286,6 @@ def supertrend(
             direction[i] = prev_dir
         st[i] = lb if direction[i] == 1.0 else ub
 
-    return IndicatorResult(name="supertrend", params={}, values={"supertrend": st, "direction": direction})
+    return IndicatorResult(
+        name="supertrend", params={}, values={"supertrend": st, "direction": direction}
+    )

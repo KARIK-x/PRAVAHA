@@ -35,7 +35,10 @@ def rsi(data: dict[str, np.ndarray], period: int = 14) -> IndicatorResult:
     out = np.full(n, np.nan)
     if n < period + 1:
         return IndicatorResult(
-            name="rsi", params={}, values={"rsi": out}, insufficient_data=True,
+            name="rsi",
+            params={},
+            values={"rsi": out},
+            insufficient_data=True,
             message=f"rsi({period}) needs at least {period + 1} closes, got {n}",
         )
     delta = np.diff(c)
@@ -76,8 +79,7 @@ def rsi(data: dict[str, np.ndarray], period: int = 14) -> IndicatorResult:
             "histogram": lambda p: p["slow"] + p["signal"] - 2,
         },
         reference="Gerald Appel, 1979.",
-        formula="MACD = EMA(fast) - EMA(slow); signal = EMA(MACD, signal); "
-        "hist = MACD - signal",
+        formula="MACD = EMA(fast) - EMA(slow); signal = EMA(MACD, signal); hist = MACD - signal",
         notes="EMAs are seeded with an SMA of their own period.",
     )
 )
@@ -195,7 +197,9 @@ def roc(data: dict[str, np.ndarray], period: int = 12) -> IndicatorResult:
 )
 def momentum(data: dict[str, np.ndarray], period: int = 10) -> IndicatorResult:
     return IndicatorResult(
-        name="momentum", params={}, values={"momentum": data["close"] - shift(data["close"], period)}
+        name="momentum",
+        params={},
+        values={"momentum": data["close"] - shift(data["close"], period)},
     )
 
 

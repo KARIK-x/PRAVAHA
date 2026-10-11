@@ -151,9 +151,7 @@ class QualityReport:
             "info_flagged": self.info_flagged,
             "clean": self.clean,
             "flag_counts": dict(sorted(self.flag_counts.items())),
-            "flag_severity": {
-                k: FLAG_SEVERITY[k] for k in self.flag_counts if k in FLAG_SEVERITY
-            },
+            "flag_severity": {k: FLAG_SEVERITY[k] for k in self.flag_counts if k in FLAG_SEVERITY},
             "stale_days": self.stale_days,
             "flag_help": {k: FLAG_HELP[k] for k in self.flag_counts if k in FLAG_HELP},
         }
@@ -274,7 +272,11 @@ def validate_series(
         last_date = d
 
         # Day-on-day discontinuity: informational, never auto-deleted.
-        if c is not None and prev_close not in (None, 0) and abs(c / prev_close - 1.0) > PRICE_JUMP_THRESHOLD:
+        if (
+            c is not None
+            and prev_close not in (None, 0)
+            and abs(c / prev_close - 1.0) > PRICE_JUMP_THRESHOLD
+        ):
             flags.append(F_PRICE_JUMP)
 
         # Unusual volume vs a baseline built only from earlier rows.

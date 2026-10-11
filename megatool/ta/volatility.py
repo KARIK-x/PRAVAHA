@@ -47,7 +47,13 @@ def bollinger(
     return IndicatorResult(
         name="bollinger",
         params={},
-        values={"upper": up, "middle": mid, "lower": lo, "bandwidth": bandwidth, "percent_b": percent_b},
+        values={
+            "upper": up,
+            "middle": mid,
+            "lower": lo,
+            "bandwidth": bandwidth,
+            "percent_b": percent_b,
+        },
     )
 
 
@@ -95,7 +101,11 @@ def keltner(
     return IndicatorResult(
         name="keltner",
         params={},
-        values={"upper": mid + multiplier * atr_v, "middle": mid, "lower": mid - multiplier * atr_v},
+        values={
+            "upper": mid + multiplier * atr_v,
+            "middle": mid,
+            "lower": mid - multiplier * atr_v,
+        },
     )
 
 
@@ -145,5 +155,7 @@ def historical_volatility(
 )
 def true_range_ind(data: dict[str, np.ndarray]) -> IndicatorResult:
     return IndicatorResult(
-        name="true_range", params={}, values={"true_range": true_range(data["high"], data["low"], data["close"])}
+        name="true_range",
+        params={},
+        values={"true_range": true_range(data["high"], data["low"], data["close"])},
     )

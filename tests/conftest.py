@@ -48,13 +48,29 @@ def tiny() -> dict[str, np.ndarray]:
     """
     close = np.array(
         [
-            44.34, 44.09, 44.15, 43.61, 44.33, 44.83, 45.10, 45.42, 45.84, 46.08,
-            45.89, 46.03, 45.61, 46.28, 46.28, 46.00, 46.03, 46.41, 46.22, 45.64,
+            44.34,
+            44.09,
+            44.15,
+            43.61,
+            44.33,
+            44.83,
+            45.10,
+            45.42,
+            45.84,
+            46.08,
+            45.89,
+            46.03,
+            45.61,
+            46.28,
+            46.28,
+            46.00,
+            46.03,
+            46.41,
+            46.22,
+            45.64,
         ]
     )
-    high = close + np.array(
-        [0.5] * len(close), dtype=float
-    )
+    high = close + np.array([0.5] * len(close), dtype=float)
     low = close - np.array([0.5] * len(close), dtype=float)
     volume = np.full(len(close), 10_000.0)
     return {

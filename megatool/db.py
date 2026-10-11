@@ -170,9 +170,7 @@ def init_app_db(db_path: Path | None = None) -> int:
     ensure_dirs()
     with get_conn(db_path) as conn:
         conn.executescript(_SCHEMA)
-        row = conn.execute(
-            "SELECT value FROM schema_meta WHERE key='schema_version'"
-        ).fetchone()
+        row = conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()
         current = int(row["value"]) if row else 0
         if current < SCHEMA_VERSION:
             conn.execute(

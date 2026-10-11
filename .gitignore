@@ -32,6 +32,10 @@ Thumbs.db
 .idea/
 .vscode/
 
+# --- Local tooling artifacts (browser session state, logs) ---
+.playwright-cli/
+*.log
+
 # --- Model artifacts / experiment outputs ---
 models/*.pkl
 models/*.joblib

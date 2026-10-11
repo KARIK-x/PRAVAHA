@@ -151,7 +151,9 @@ def relative_volume(data: dict[str, np.ndarray], baseline: int = 20) -> Indicato
 )
 def volume_sma(data: dict[str, np.ndarray], period: int = 20) -> IndicatorResult:
     v = _require_volume(data, "volume_sma").astype(float)
-    return IndicatorResult(name="volume_sma", params={}, values={"volume_sma": rolling_mean(v, period)})
+    return IndicatorResult(
+        name="volume_sma", params={}, values={"volume_sma": rolling_mean(v, period)}
+    )
 
 
 @register(

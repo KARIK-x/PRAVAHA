@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mega Tool — NEPSE Research Terminal</title>
+<!-- Inline SVG favicon: no extra request, so the app works fully offline. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230e1a2b'/%3E%3Cpath d='M6 22l6-7 5 4 4-6 5 5' stroke='%233ddc97' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/styles.css" />
+<script src="/vendor/lightweight-charts.standalone.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">MT</span>
+    <div>
+      <h1>Mega Tool</h1>
+      <p class="sub">Local NEPSE research terminal</p>
+    </div>
+  </div>
+  <div id="freshness" class="freshness">Checking data…</div>
+</header>
+
+<nav class="nav" id="nav">
+  <button data-view="overview" class="active">Overview</button>
+  <button data-view="charts">Charts</button>
+  <button data-view="screener">Screener</button>
+  <button data-view="data">Data &amp; Quality</button>
+  <span class="nav-spacer"></span>
+  <span class="nav-note">Not financial advice · historical data only</span>
+</nav>
+
+<main>
+  <!-- ------------------------------------------------------------ OVERVIEW -->
+  <section id="view-overview" class="view active">
+    <div class="banner" id="overview-banner">
+      Loading market snapshot…
+    </div>
+    <div class="grid">
+      <div class="card">
+        <h2>Market breadth</h2>
+        <div id="breadth" class="stat-row"></div>
+        <p class="hint" id="breadth-hint"></p>
+      </div>
+      <div class="card">
+        <h2>Totals (latest stored day)</h2>
+        <div id="totals" class="stat-row"></div>
+      </div>
+      <div class="card wide">
+        <h2>Top gainers</h2>
+        <div id="gainers" class="tablewrap"></div>
+      </div>
+      <div class="card wide">
+        <h2>Top losers</h2>
+        <div id="losers" class="tablewrap"></div>
+      </div>
+      <div class="card wide">
+        <h2>Most active by turnover</h2>
+        <div id="active" class="tablewrap"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- --------------------------------------------------------------- CHARTS -->
+  <section id="view-charts" class="view">
+    <div class="controls">
+      <label>Symbol
+        <input id="symbol-input" list="symbol-list" placeholder="NABIL" />
+        <datalist id="symbol-list"></datalist>
+      </label>
+      <label>Range
+        <select id="range">
+          <option value="60">3 months</option>
+          <option value="120" selected>6 months</option>
+          <option value="250">1 year</option>
+          <option value="750">3 years</option>
+          <option value="0">All</option>
+        </select>
+      </label>
+      <label class="chk"><input type="checkbox" id="ind-sma" checked /> SMA 20/50</label>
+      <label class="chk"><input type="checkbox" id="ind-ema" /> EMA 20</label>
+      <label class="chk"><input type="checkbox" id="ind-bb" /> Bollinger</label>
+      <label class="chk"><input type="checkbox" id="ind-vol" checked /> Volume</label>
+      <label class="chk"><input type="checkbox" id="ind-rsi" checked /> RSI pane</label>
+      <label class="chk"><input type="checkbox" id="ind-macd" /> MACD pane</label>
+      <button id="load-chart">Load</button>
+      <button id="export-csv" class="ghost">Export CSV</button>
+    </div>
+    <div id="chart-meta" class="chart-meta"></div>
+    <div id="chart" class="chartbox"></div>
+    <div id="rsi-pane" class="chartbox small"></div>
+    <div id="macd-pane" class="chartbox small"></div>
+    <div id="chart-error" class="error"></div>
+  </section>
+
+  <!-- ------------------------------------------------------------- SCREENER -->
+  <section id="view-screener" class="view">
+    <div class="controls">
+      <label>Preset
+        <select id="preset"></select>
+      </label>
+      <button id="run-screen">Run screen</button>
+      <button id="export-screen" class="ghost">Export CSV</button>
+    </div>
+    <p class="hint" id="preset-desc"></p>
+    <div class="card">
+      <h2>Results</h2>
+      <div id="screen-summary" class="stat-row"></div>
+      <div id="screen-results" class="tablewrap"></div>
+    </div>
+  </section>
+
+  <!-- ----------------------------------------------------------------- DATA -->
+  <section id="view-data" class="view">
+    <div class="grid">
+      <div class="card">
+        <h2>Stored coverage</h2>
+        <div id="coverage" class="stat-row"></div>
+      </div>
+      <div class="card">
+        <h2>Data sources</h2>
+        <div id="sources" class="tablewrap"></div>
+      </div>
+      <div class="card wide">
+        <h2>Data quality (per symbol)</h2>
+        <p class="hint">
+          <span class="pill pill-info">info</span> is a known source characteristic,
+          <span class="pill pill-review">review</span> is worth a look,
+          <span class="pill pill-hard">invalid</span> is a physically impossible value.
+          Flags are recorded, never silently deleted.
+        </p>
+        <div id="quality" class="tablewrap"></div>
+      </div>
+      <div class="card wide">
+        <h2>Recent ingestion runs</h2>
+        <div id="ingest-log" class="tablewrap"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <p id="disclaimer"></p>
+  <p class="tiny">
+    Charting by TradingView Lightweight Charts™, licensed under Apache 2.0.
+    Data source: see <em>Data &amp; Quality</em>. This tool stores no broker
+    credentials and places no orders.
+  </p>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>
