@@ -6,8 +6,27 @@ real market data, and no test asserts anything about real NEPSE prices.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_databases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirect BOTH databases to a throwaway directory for every test.
+
+    A test that forgets to pass ``db_path`` would otherwise write synthetic
+    rows into the owner's real ``data/processed/`` databases, mixing fixture
+    data with genuine records. This guard makes that failure impossible
+    instead of relying on every test remembering to pass a path.
+    """
+    from megatool.config import Paths
+
+    monkeypatch.setattr(Paths, "app_db", property(lambda self: tmp_path / "isolated_state.sqlite"))
+    monkeypatch.setattr(
+        Paths, "market_db", property(lambda self: tmp_path / "isolated_market.duckdb")
+    )
 
 
 @pytest.fixture

@@ -30,7 +30,39 @@ from megatool.backtest import (
 )
 from megatool.config import HOST, PATHS, PORT, ensure_dirs
 from megatool.db import get_conn, init_app_db
+from megatool.journal import (
+    JournalError,
+    journal_stats,
+)
+from megatool.journal import (
+    create_entry as journal_create,
+)
+from megatool.journal import (
+    delete_entry as journal_delete,
+)
+from megatool.journal import (
+    get_entry as journal_get,
+)
+from megatool.journal import (
+    grade_entry as journal_grade,
+)
+from megatool.journal import (
+    list_entries as journal_list,
+)
+from megatool.journal import (
+    update_entry as journal_update,
+)
 from megatool.market_store import MarketStore
+from megatool.planning import PlanError, make_plan, plan_outcome, position_size
+from megatool.portfolio import (
+    PortfolioError,
+    add_manual_position,
+    add_transaction,
+    delete_transaction,
+    list_transactions,
+    remove_manual_position,
+    value_portfolio,
+)
 from megatool.scanner import (
     METRIC_HELP,
     PRESET_SCREENS,
@@ -74,6 +106,41 @@ class PydanticBacktestRequest(BaseModel):
     slippage: float = Field(0.0, ge=0)
     execution: str = "next_open"
     whole_units: bool = True
+
+
+class PydanticTransactionRequest(BaseModel):
+    """One portfolio transaction."""
+
+    symbol: str
+    side: str
+    quantity: Any
+    price: Any
+    fees: Any = 0.0
+    traded_at: str | None = None
+    notes: str | None = None
+
+
+class PydanticManualPositionRequest(BaseModel):
+    symbol: str
+    quantity: int
+    avg_cost: float
+    notes: str | None = None
+
+
+class PydanticJournalRequest(BaseModel):
+    """Free-form journal payload: every field is optional and validated in
+    ``journal._clean``, so the model just needs to accept the keys."""
+
+    model_config = {"extra": "allow"}
+
+
+class PydanticPlanRequest(BaseModel):
+    entry: float
+    stop: float
+    target: float
+    exit_price: float | None = None
+    capital: float | None = None
+    risk_pct: float | None = None
 
 
 def create_app(store: MarketStore | None = None) -> FastAPI:
@@ -428,6 +495,144 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
         )
         return payload
 
+    # ------------------------------------------------------------- portfolio
+    @app.get("/api/portfolio")
+    def portfolio() -> dict[str, Any]:
+        """Positions derived from your ledger, marked to the latest stored close."""
+        return value_portfolio(get_store())
+
+    @app.get("/api/portfolio/transactions")
+    def portfolio_transactions(
+        symbol: str | None = None, limit: int = Query(500, ge=1, le=5000)
+    ) -> dict[str, Any]:
+        return {"transactions": [t.to_dict() for t in list_transactions(symbol, limit)]}
+
+    @app.post("/api/portfolio/transactions")
+    def portfolio_add_transaction(req: PydanticTransactionRequest) -> dict[str, Any]:
+        try:
+            tx = add_transaction(req.model_dump())
+        except PortfolioError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"transaction": tx.to_dict()}
+
+    @app.delete("/api/portfolio/transactions/{tx_id}")
+    def portfolio_delete_transaction(tx_id: int) -> dict[str, Any]:
+        if not delete_transaction(tx_id):
+            raise HTTPException(404, f"no transaction with id {tx_id}")
+        return {"deleted": tx_id}
+
+    @app.post("/api/portfolio/manual")
+    def portfolio_manual(req: PydanticManualPositionRequest) -> dict[str, Any]:
+        try:
+            add_manual_position(req.symbol, req.quantity, req.avg_cost, req.notes)
+        except PortfolioError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"ok": True, "symbol": req.symbol.upper()}
+
+    @app.delete("/api/portfolio/manual/{symbol}")
+    def portfolio_delete_manual(symbol: str) -> dict[str, Any]:
+        if not remove_manual_position(symbol):
+            raise HTTPException(404, f"no manual position for {symbol.upper()}")
+        return {"deleted": symbol.upper()}
+
+    # ---------------------------------------------------------------- journal
+    @app.get("/api/journal/stats")
+    def journal_statistics() -> dict[str, Any]:
+        """Win rate, R multiples and plan adherence over recorded trades."""
+        return journal_stats()
+
+    @app.get("/api/journal")
+    def journal_entries(
+        symbol: str | None = None,
+        strategy: str | None = None,
+        status: str | None = None,
+        limit: int = Query(500, ge=1, le=5000),
+    ) -> dict[str, Any]:
+        try:
+            return {"entries": journal_list(symbol, strategy, status, limit)}
+        except JournalError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/journal")
+    def journal_new(req: PydanticJournalRequest) -> dict[str, Any]:
+        try:
+            entry_id = journal_create(req.model_dump(exclude_unset=True))
+        except JournalError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"id": entry_id, "entry": journal_get(entry_id)}
+
+    @app.get("/api/journal/{entry_id}")
+    def journal_one(entry_id: int) -> dict[str, Any]:
+        try:
+            return journal_get(entry_id)
+        except JournalError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.patch("/api/journal/{entry_id}")
+    def journal_patch(entry_id: int, req: PydanticJournalRequest) -> dict[str, Any]:
+        if not journal_update(entry_id, req.model_dump(exclude_unset=True)):
+            raise HTTPException(404, f"no journal entry with id {entry_id}")
+        return journal_get(entry_id)
+
+    @app.delete("/api/journal/{entry_id}")
+    def journal_delete_entry(entry_id: int) -> dict[str, Any]:
+        # Named ``journal_delete_entry`` on purpose: a route function called
+        # ``journal_delete`` would shadow the imported helper in this scope and
+        # recurse forever.
+        if not journal_delete(entry_id):
+            raise HTTPException(404, f"no journal entry with id {entry_id}")
+        return {"deleted": entry_id}
+
+    @app.get("/api/journal/{entry_id}/grade")
+    def journal_grade_entry(entry_id: int) -> dict[str, Any]:
+        """Grade one closed entry against the plan it was supposed to follow."""
+        try:
+            graded = journal_grade(entry_id)
+        except JournalError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        if graded is None:
+            raise HTTPException(
+                400,
+                "this entry cannot be graded: it needs an exit price and a plan "
+                "(entry, target and invalidation)",
+            )
+        return graded
+
+    # -------------------------------------------------------------- planning
+    @app.post("/api/planning")
+    def planning(req: PydanticPlanRequest) -> dict[str, Any]:
+        """Turn an entry/stop/target into R multiples and a position size.
+
+        Sizing is computed only when capital and risk_pct are supplied.
+        """
+        try:
+            plan = make_plan(req.entry, req.stop, req.target)
+            payload: dict[str, Any] = {"plan": plan.to_dict()}
+            if req.capital is not None and req.risk_pct is not None:
+                payload["sizing"] = position_size(
+                    req.capital, req.risk_pct, plan.risk_per_share, req.entry
+                ).to_dict()
+            elif req.capital is not None or req.risk_pct is not None:
+                raise HTTPException(400, "capital and risk_pct must be supplied together")
+        except PlanError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        payload["note"] = (
+            "A plan is arithmetic, not a prediction: it converts your own entry, "
+            "stop and target into position size and R multiples. Whether price "
+            "reaches either level is unknown."
+        )
+        return payload
+
+    @app.post("/api/planning/grade")
+    def planning_grade(req: PydanticPlanRequest) -> dict[str, Any]:
+        """Grade a finished trade against the plan made at entry."""
+        if req.exit_price is None:
+            raise HTTPException(400, "exit_price is required to grade a trade")
+        try:
+            return plan_outcome(req.entry, req.stop, req.target, req.exit_price)
+        except PlanError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     @app.get("/api/dashboard")
     def dashboard(top: int = Query(10, le=50)) -> dict[str, Any]:
         """Market snapshot from the most recent stored bar per symbol.
@@ -519,83 +724,6 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
             "total_rows": sum(r["rows_checked"] for r in reports),
             "total_suspect": sum(r["suspect"] for r in reports),
             "total_invalid": sum(r["invalid"] for r in reports),
-        }
-
-    # ------------------------------------------------------------- portfolio
-    @app.get("/api/portfolio")
-    def portfolio() -> dict[str, Any]:
-        """Holdings valued at the latest stored close.
-
-        This is an analytical estimate, NOT a broker settlement statement.
-        """
-        store = get_store()
-        with get_conn() as conn:
-            rows = conn.execute(
-                "SELECT symbol, quantity, avg_cost, opened_at, notes FROM portfolio_positions "
-                "ORDER BY symbol"
-            ).fetchall()
-            txns = conn.execute(
-                "SELECT symbol, side, quantity, price, fees, traded_at FROM "
-                "portfolio_transactions ORDER BY traded_at"
-            ).fetchall()
-
-        positions = [dict(r) for r in rows]
-        if not positions:
-            return {
-                "positions": [],
-                "transactions": [dict(t) for t in txns],
-                "note": "No positions recorded. Add them via the Portfolio page.",
-            }
-
-        latest = {r["symbol"]: r for _, r in store.latest_bars().iterrows()}
-        out = []
-        total_value = 0.0
-        total_cost = 0.0
-        missing_price = []
-        for p in positions:
-            sym = p["symbol"]
-            row = latest.get(sym)
-            value = cost = pnl = None
-            if row is not None and row["close"] is not None and not pd.isna(row["close"]):
-                value = float(row["close"]) * p["quantity"]
-                cost = p["avg_cost"] * p["quantity"]
-                pnl = value - cost
-                total_value += value
-                total_cost += cost
-            else:
-                missing_price.append(sym)
-            out.append(
-                {
-                    **p,
-                    "last_close": _f(row["close"]) if row is not None else None,
-                    "last_date": str(row["trading_date"].date()) if row is not None else None,
-                    "market_value": value,
-                    "cost_basis": cost,
-                    "unrealised_pnl": pnl,
-                    "unrealised_pnl_pct": (pnl / cost * 100.0)
-                    if (pnl is not None and cost)
-                    else None,
-                    "priced": row is not None,
-                }
-            )
-        for p in out:
-            p["weight_pct"] = (
-                (p["market_value"] / total_value * 100.0)
-                if (p["market_value"] and total_value)
-                else None
-            )
-
-        return {
-            "positions": out,
-            "transactions": [dict(t) for t in txns],
-            "total_market_value": total_value or None,
-            "total_cost_basis": total_cost or None,
-            "total_unrealised_pnl": (total_value - total_cost) if total_value else None,
-            "unpriced_symbols": missing_price,
-            "note": (
-                "Valued at the latest stored close (see each row's `last_date`). "
-                "This is an analytical estimate, not a broker settlement record."
-            ),
         }
 
     # Serve the terminal UI (same origin, no CORS involved).

@@ -203,7 +203,9 @@ def test_quality_endpoint_reports_flags(client):
 def test_portfolio_empty_is_explicit(client):
     d = client.get("/api/portfolio").json()
     assert d["positions"] == []
-    assert "No positions recorded" in d["note"]
+    assert d["summary"]["open_positions"] == 0
+    assert "derived from your transaction ledger" in d["note"]
+    assert "not a live quote" in d["note"]
 
 
 def test_sources_lists_both_and_flags_official_blocked(client):
@@ -312,3 +314,209 @@ def test_backtest_benchmark_is_reported_alongside(client):
     assert m["benchmark_total_return_pct"] is not None
     # TEST2 declines monotonically, so buy-and-hold must be negative
     assert m["benchmark_total_return_pct"] < 0
+
+
+# ---------------------------------------------------------------- portfolio
+def _tx(symbol="TEST1", side="buy", qty=10, price=50.0, fees=0.0, when="2026-02-01T10:00:00"):
+    return {
+        "symbol": symbol,
+        "side": side,
+        "quantity": qty,
+        "price": price,
+        "fees": fees,
+        "traded_at": when,
+    }
+
+
+def test_portfolio_starts_empty(client):
+    d = client.get("/api/portfolio").json()
+    assert d["positions"] == []
+    assert d["summary"]["open_positions"] == 0
+    assert d["live"] is False
+    assert "not a live quote" in d["note"]
+
+
+def test_portfolio_apis_round_trip(client):
+    assert client.post("/api/portfolio/transactions", json=_tx()).status_code == 200
+    assert (
+        client.post(
+            "/api/portfolio/transactions",
+            json=_tx(side="sell", qty=4, price=60.0, when="2026-03-01T10:00:00"),
+        ).status_code
+        == 200
+    )
+
+    d = client.get("/api/portfolio").json()
+    p = d["positions"][0]
+    assert p["symbol"] == "TEST1"
+    assert p["quantity"] == 6
+    assert p["last_price"] == 219.0  # 100 + 119 bars from the fixture
+    assert p["market_value"] == pytest.approx(6 * 219.0)
+    assert d["summary"]["realized_pnl"] == pytest.approx(4 * 10.0)
+
+    txs = client.get("/api/portfolio/transactions").json()["transactions"]
+    assert len(txs) == 2
+    assert txs[0]["traded_at"] >= txs[1]["traded_at"]  # newest first
+
+
+def test_portfolio_rejects_overselling(client):
+    client.post("/api/portfolio/transactions", json=_tx(qty=5))
+    r = client.post("/api/portfolio/transactions", json=_tx(side="sell", qty=6))
+    assert r.status_code == 400
+    assert "only 5 held" in r.json()["detail"]
+
+
+def test_portfolio_rejects_bad_input(client):
+    r = client.post("/api/portfolio/transactions", json=_tx(side="hold"))
+    assert r.status_code == 400
+    r = client.post("/api/portfolio/transactions", json=_tx(price=-1))
+    assert r.status_code == 400
+    r = client.post("/api/portfolio/transactions", json=_tx(qty=2.5))
+    assert r.status_code == 400
+
+
+def test_portfolio_delete_transaction_404(client):
+    assert client.delete("/api/portfolio/transactions/999").status_code == 404
+
+
+def test_portfolio_manual_position_conflicts_with_ledger(client):
+    client.post("/api/portfolio/transactions", json=_tx())
+    r = client.post(
+        "/api/portfolio/manual", json={"symbol": "TEST1", "quantity": 5, "avg_cost": 10.0}
+    )
+    assert r.status_code == 400
+    assert "single source of truth" in r.json()["detail"]
+
+
+def test_portfolio_manual_position_round_trip(client):
+    assert (
+        client.post(
+            "/api/portfolio/manual",
+            json={"symbol": "HOLDING", "quantity": 100, "avg_cost": 50.0, "notes": "old"},
+        ).status_code
+        == 200
+    )
+    d = client.get("/api/portfolio").json()
+    assert d["positions"][0]["origin"] == "manual"
+    # HOLDING has no stored price, so it must be left unvalued
+    assert d["positions"][0]["market_value"] is None
+    assert client.delete("/api/portfolio/manual/HOLDING").status_code == 200
+    assert client.delete("/api/portfolio/manual/HOLDING").status_code == 404
+
+
+# ------------------------------------------------------------------- journal
+def _entry(**over):
+    base = {
+        "symbol": "TEST1",
+        "strategy": "breakout",
+        "thesis": "base break",
+        "entry_price": 100.0,
+        "planned_target": 120.0,
+        "planned_invalidation": 90.0,
+        "opened_at": "2026-02-01T10:00:00",
+        "followed_plan": 1,
+    }
+    base.update(over)
+    return base
+
+
+def test_journal_crud(client):
+    eid = client.post("/api/journal", json=_entry()).json()["id"]
+    assert client.get(f"/api/journal/{eid}").json()["symbol"] == "TEST1"
+    assert len(client.get("/api/journal").json()["entries"]) == 1
+
+    patched = client.patch(
+        f"/api/journal/{eid}",
+        json={"exit_price": 130.0, "closed_at": "2026-02-20T10:00:00"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["exit_price"] == 130.0
+
+    grade = client.get(f"/api/journal/{eid}/grade")
+    assert grade.status_code == 200
+    assert grade.json()["result"] == "target"
+    assert grade.json()["r_multiple"] == pytest.approx(3.0)
+
+    assert client.delete(f"/api/journal/{eid}").status_code == 200
+    assert client.get(f"/api/journal/{eid}").status_code == 404
+    assert client.delete(f"/api/journal/{eid}").status_code == 404
+
+
+def test_journal_stats_endpoint(client):
+    empty = client.get("/api/journal/stats").json()
+    assert empty["closed"] == 0
+    assert empty["win_rate_pct"] is None
+
+    client.post("/api/journal", json=_entry(exit_price=130.0, closed_at="2026-02-20T10:00:00"))
+    client.post("/api/journal", json=_entry(exit_price=80.0, closed_at="2026-02-20T10:00:00"))
+    s = client.get("/api/journal/stats").json()
+    assert s["closed"] == 2
+    assert s["wins"] == 1
+    assert s["win_rate_pct"] == pytest.approx(50.0)
+    # Exit 130 against a 10-point risk is +3R; exit 80 is -2R, so the mean is 0.5.
+    assert s["avg_r"] == pytest.approx(0.5, abs=1e-3)
+    assert s["graded_r"] == 2
+    assert s["plan_adherence_pct"] == pytest.approx(100.0)
+    assert s["by_strategy"][0]["strategy"] == "breakout"
+
+
+def test_journal_rejects_bad_input(client):
+    assert client.post("/api/journal", json={"symbol": "X"}).status_code == 400
+    assert client.post("/api/journal", json={**_entry(), "confidence": "yolo"}).status_code == 400
+    assert client.post("/api/journal", json={**_entry(), "followed_plan": 7}).status_code == 400
+    assert client.get("/api/journal/999").status_code == 404
+    assert client.patch("/api/journal/999", json={"thesis": "x"}).status_code == 404
+    assert client.get("/api/journal", params={"status": "maybe"}).status_code == 400
+
+
+def test_journal_grade_ungradable_is_400(client):
+    eid = client.post("/api/journal", json=_entry()).json()["id"]
+    r = client.get(f"/api/journal/{eid}/grade")
+    assert r.status_code == 400
+    assert "cannot be graded" in r.json()["detail"]
+
+
+# ------------------------------------------------------------------ planning
+def test_planning_plan_only(client):
+    d = client.post("/api/planning", json={"entry": 100, "stop": 90, "target": 120}).json()
+    assert d["plan"]["risk_reward"] == pytest.approx(2.0)
+    assert "sizing" not in d
+    assert "not a prediction" in d["note"]
+
+
+def test_planning_with_sizing(client):
+    d = client.post(
+        "/api/planning",
+        json={"entry": 100, "stop": 90, "target": 120, "capital": 100000, "risk_pct": 2},
+    ).json()
+    # budget 2,000 / risk 10 per share = 200 units
+    assert d["sizing"]["units"] == 200
+    assert d["sizing"]["actual_risk"] == pytest.approx(2000.0)
+    assert d["sizing"]["cash_used"] == pytest.approx(20000.0)
+
+
+def test_planning_rejects_stop_above_entry(client):
+    r = client.post("/api/planning", json={"entry": 100, "stop": 110, "target": 120})
+    assert r.status_code == 400
+    assert "shorting" in r.json()["detail"]
+
+
+def test_planning_requires_capital_and_risk_together(client):
+    r = client.post(
+        "/api/planning", json={"entry": 100, "stop": 90, "target": 120, "capital": 100000}
+    )
+    assert r.status_code == 400
+    assert "together" in r.json()["detail"]
+
+
+def test_planning_grade_requires_exit_price(client):
+    r = client.post("/api/planning/grade", json={"entry": 100, "stop": 90, "target": 120})
+    assert r.status_code == 400
+    assert "exit_price" in r.json()["detail"]
+
+    ok = client.post(
+        "/api/planning/grade",
+        json={"entry": 100, "stop": 90, "target": 120, "exit_price": 110},
+    ).json()
+    assert ok["r_multiple"] == pytest.approx(1.0)
+    assert ok["result"] == "neither"
