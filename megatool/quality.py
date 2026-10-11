@@ -274,9 +274,8 @@ def validate_series(
         last_date = d
 
         # Day-on-day discontinuity: informational, never auto-deleted.
-        if c is not None and prev_close not in (None, 0):
-            if abs(c / prev_close - 1.0) > PRICE_JUMP_THRESHOLD:
-                flags.append(F_PRICE_JUMP)
+        if c is not None and prev_close not in (None, 0) and abs(c / prev_close - 1.0) > PRICE_JUMP_THRESHOLD:
+            flags.append(F_PRICE_JUMP)
 
         # Unusual volume vs a baseline built only from earlier rows.
         if v is not None:

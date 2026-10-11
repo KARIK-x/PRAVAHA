@@ -13,14 +13,14 @@ Units and types are explicit:
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
-from enum import Enum
+from datetime import UTC, date, datetime
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
 
-class DataSource(str, Enum):
+class DataSource(StrEnum):
     """Provenance label attached to every stored record."""
 
     GITHUB_NEPSE_DATA = "github.com/Aabishkar2/nepse-data"
@@ -29,13 +29,13 @@ class DataSource(str, Enum):
     SYNTHETIC_TEST = "SYNTHETIC-TEST-FIXTURE"
 
 
-class ValidationStatus(str, Enum):
+class ValidationStatus(StrEnum):
     VALID = "valid"
     SUSPECT = "suspect"  # flagged, retained - may be a genuine market event
     INVALID = "invalid"  # rejected by a hard rule
 
 
-class AdjustmentStatus(str, Enum):
+class AdjustmentStatus(StrEnum):
     """Corporate-action adjustment state of a price series."""
 
     UNADJUSTED = "unadjusted"
@@ -116,7 +116,7 @@ class IngestResult(BaseModel):
     source: DataSource
     started_at: datetime
     finished_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="Overwritten with the true completion time at the end of a run.",
     )
     symbols_requested: int = 0

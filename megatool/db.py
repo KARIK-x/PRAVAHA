@@ -12,10 +12,11 @@ memory-constrained machine.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from megatool.config import PATHS, ensure_dirs
 
@@ -184,7 +185,7 @@ def init_app_db(db_path: Path | None = None) -> int:
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def set_setting(key: str, value: str, db_path: Path | None = None) -> None:

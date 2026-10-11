@@ -60,7 +60,6 @@ from megatool.datasources.base import (
     SourceConfig,
     SourceError,
     SourceUnavailable,
-    _RateLimiter,
 )
 from megatool.models import DataSource
 

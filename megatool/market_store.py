@@ -14,9 +14,10 @@ Guarantees:
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 import duckdb
 import pandas as pd
@@ -107,8 +108,9 @@ class MarketStore:
             self._conn.close()
             self._conn = None
 
-    def __enter__(self) -> "MarketStore":
-        self.conn
+    def __enter__(self) -> MarketStore:
+        # Force the connection (and schema creation) before the caller uses it.
+        _ = self.conn
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -270,7 +272,7 @@ class MarketStore:
             """
         ).fetchone()
         cols = ["bars", "symbols", "first_date", "last_date", "last_retrieved"]
-        out = dict(zip(cols, row))
+        out = dict(zip(cols, row, strict=True))
         for k in ("first_date", "last_date"):
             if out.get(k) is not None:
                 out[k] = str(out[k])

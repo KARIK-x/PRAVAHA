@@ -12,15 +12,16 @@ A failure on one symbol must never abort the whole run (Section 5.5:
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Callable, Sequence
 from datetime import date
 from pathlib import Path
-from typing import Callable, Sequence
 
 import pandas as pd
 
-from megatool.db import init_app_db, log_ingestion, now_iso
 from megatool.datasources.base import BaseAdapter, SourceError, utcnow
 from megatool.datasources.local_file import LocalFileAdapter
+from megatool.db import init_app_db, log_ingestion
 from megatool.market_store import MarketStore
 from megatool.models import DataSource, IngestResult
 from megatool.quality import validate_series
@@ -184,7 +185,8 @@ def _persist(result: IngestResult, db_path: Path | None) -> None:
     ok = result.symbols_succeeded > 0
     failed_all = result.symbols_failed > 0 and result.symbols_succeeded == 0
     status = "failed" if failed_all else ("partial" if result.symbols_failed else "success")
-    try:
+    # Losing the log must not lose the data.
+    with contextlib.suppress(Exception):
         log_ingestion(
             {
                 "source": result.source.value,
@@ -208,9 +210,6 @@ def _persist(result: IngestResult, db_path: Path | None) -> None:
             },
             db_path,
         )
-    except Exception:
-        # Losing the log must not lose the data.
-        pass
     _ = ok
 
 
