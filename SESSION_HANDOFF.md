@@ -56,6 +56,7 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | `56f369b` | Portfolio ledger, trading journal, trade planning |
 | `e33680b` | Forecasting Lab and Research Assistant |
 | `e94baa0` | Floor-sheet import and analysis |
+| `f2e644f` | Web UI: Research, Portfolio and Journal tabs; two silent-data-loss fixes |
 
 ## 4. Decisions worth not re-litigating
 
@@ -113,11 +114,15 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 
 ## 7. Verification evidence
 
-- `uv run pytest` — **406 passed, 0 failed** (2026-10-12).
+- `uv run pytest` — **412 passed, 0 failed** (2026-10-12).
 - `ruff check` and `ruff format` — clean.
-- Live endpoints exercised with `curl` against the running server (planning, journal,
-  portfolio, floor sheet) — see `PROJECT_STATUS.md` §5 for the browser evidence.
-- Screenshots in `docs/screenshots/`.
+- All eight web tabs exercised in a real browser (Playwright) with **0 console errors**;
+  the refusal path, the oversell rejection and the empty-journal "—" were each read back
+  from the DOM. Screenshots in `docs/screenshots/`.
+- Floor-sheet analysis verified end-to-end against a **throwaway** `MEGATOOL_DATA_DIR`
+  (second server instance), so the owner's store stayed clean.
+- Live endpoints exercised with `curl` against the running server. Full evidence table in
+  `PROJECT_STATUS.md` §5.
 
 ## 8. What the next session should do, in order
 

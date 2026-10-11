@@ -11,7 +11,7 @@ marked working because the code exists. The labels mean:
 | `NOT-IMPLEMENTED` | Deliberately not built. The reason is stated |
 | `NOT-TESTED` | Code exists but has not been executed/observed |
 
-Test suite: **376 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check` and
+Test suite: **412 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check` and
 `ruff format` clean. Live server verified in a real browser via Playwright.
 
 ---
@@ -33,15 +33,23 @@ Test suite: **376 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check`
 | 11 | **Portfolio Intelligence** | `TESTED-PASS` | Positions **derived from the transaction ledger** (the two can never disagree); manual holdings allowed only where no ledger exists; valuation marks to the latest *stored* close and leaves unpriced symbols unvalued and flagged. 29 unit + 8 API tests, plus a live smoke test |
 | 12 | **Trade Planning / Risk** | `TESTED-PASS` | R multiples, risk:reward, position size for a fixed fractional risk (rounded down, affordability-capped). A stop above the entry is rejected — NEPSE has no retail shorting. 21 unit + 4 API tests |
 | 13 | **Trading Journal** | `TESTED-PASS` | CRUD, win rate, R multiples, plan adherence, per-strategy breakdown; trades without a complete plan are counted in win rate but excluded from R stats **and both are reported**. 27 unit + 5 API tests |
-| 14 | **Floor-sheet Intelligence** | `NOT-IMPLEMENTED` | Design is import-based (no public API is advertised by the aggregator sites, A7/A8). No floor-sheet file has ever been imported, so nothing is analysed |
+| 14 | **Floor-sheet Intelligence** | `PARTIAL` | Import, validation and analysis are **implemented and tested** (25 unit + 5 API tests; import, re-import no-op, concentration HHI, counterparties, filters). Verified end-to-end against an **isolated** database via a second server instance, so the owner's store stayed clean. It has **never been run on a real floor sheet** — only on synthetic CSVs — so real-world header variants remain unproven |
 | 15 | **Bounded Research Agent** | `NOT-IMPLEMENTED` | The web-search tool failed on every attempt this session (register B1–B3). No autonomous agent loop was built; the deterministic Research Assistant (#8) is what exists instead |
 
 ## 2. Web UI
 
+Eight tabs, all exercised in a real browser (Playwright) with **0 console errors**.
+Screenshots in `docs/screenshots/`.
+
 | Tab | Status |
 | --- | --- |
-| Dashboard, Chart, Scanner, Backtest | `TESTED-PASS` — exercised in a real browser, 0 console errors, screenshots in `docs/screenshots/` |
-| Research, Portfolio, Journal | see §6 *Verification log* below — status recorded after browser verification |
+| Overview, Charts, Screener, Backtest, Data | `TESTED-PASS` — earlier browser run; screenshot evidence committed |
+| Research | `TESTED-PASS` — cited report rendered for ADBL (33 findings, every row showing value + window + definition, no `[object Object]`, no `undefined`); a predictive question is refused verbatim and does **not** fall back to the full report; forecast comparison shows `NO DEMONSTRATED SKILL` on every model at or above 1.0 |
+| Portfolio | `TESTED-PASS` — empty state explicit; a buy valued at the latest stored close with that stated on screen; **oversell rejected with the server's plain-English message** ("cannot sell 500 of ADBL: only 10 held in the ledger"); a symbol with no stored price shows as unvalued with a warning rather than being carried at cost |
+| Journal | `TESTED-PASS` — with no closed trades the win rate, avg R and adherence render as **"—", never as 0%**; with real entries, stats/per-strategy/grading work and an ungradable entry shows the server's explanation; the planner returns risk/share, R:R, units, cash used and actual risk |
+
+Test rows created during browser verification were deleted through the UI and the API:
+the owner's journal, ledger and floor-sheet tables are empty.
 
 ## 3. Data sources
 
@@ -67,8 +75,9 @@ Test suite: **376 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check`
 4. **Prices are unadjusted** for bonus and rights issues, so every "return" in the
    Forecasting Lab, Research Assistant and scanner is a *price* change, not a total return.
    NEPSE corporate actions are not available in the imported data.
-5. **Fundamentals and floor-sheet analysis do not exist yet** (rows 6 and 14). They are
-   import-based by design; no real file has ever been imported, so they are untested.
+5. **Fundamentals and News/Events do not exist** (rows 6 and 7), and the **floor sheet
+   has never been run on real data** — it is unit-tested against synthetic CSVs only.
+   Nothing about real published floor-sheet headers has been proven.
 6. **Backtest fills are optimistic at the bar level.** Next-bar-open is honest about
    *when* you could trade, but it assumes the open was available in full size. Liquidity
    and impact are not modelled.
@@ -77,8 +86,23 @@ Test suite: **376 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check`
 
 ## 5. Verification log
 
-*(recorded after the browser verification run — see `SESSION_HANDOFF.md` for the session
-that produced it)*
+Evidence, not assertions. Everything below was executed and observed.
+
+| What | How | Result |
+| --- | --- | --- |
+| Full test suite | `uv run pytest` | **412 passed, 0 failed**, ~17 s |
+| Lint / format | `ruff check .`, `ruff format .` | clean |
+| Real data in the store | `GET /api/status` on the running server | 89,580 bars, 60 symbols, 1995-07-20 → 2026-10-09 |
+| Every browser tab | Playwright, clicking through all 8 tabs | **0 console errors** |
+| Research assistant honesty | Asked "will ADBL go up tomorrow?" | Refused verbatim, listed what it can answer instead, showed no numbers |
+| Research citations | Read the rendered table from the DOM | 33 findings for ADBL, every row carrying value + unit + window + definition; zero `undefined`, zero `[object Object]` |
+| Portfolio oversell | Sold 500 ADBL while holding 10 | Rejected: "cannot sell 500 of ADBL: only 10 held in the ledger" |
+| Journal empty state | Read the stats cells with no closed trades | "—" for win rate, avg R and adherence — not 0% |
+| Planning | entry 300 / stop 285 / target 340, 100,000 at 1% | risk/share 15.00, R:R 2.6667, 66 units, 19,800 cash, 990 actual risk (0.99%) |
+| Backtest on real data | ADBL sma_cross(20,50), 3,659 bars | +223.48% vs buy-and-hold +168.95%, maxDD −54.41%, Sharpe 0.43, 44 trades, 9 assumptions listed |
+| Floor-sheet analysis | Second server instance with `MEGATOOL_DATA_DIR` pointing at a throwaway directory | import 3 rows, re-import adds 0, HHI 5000.0 / 7222.22 **matching the hand calculation**, bad file → 400 naming the missing columns |
+| Database isolation | Inspected the real SQLite after every test run and every browser session | journal, ledger, positions and floor-sheet tables all empty |
+| CLI under a running server | `megatool init` while `serve` holds the DuckDB lock | friendly explanation instead of a traceback, exit code 1 |
 
 ## 6. How to run it
 
