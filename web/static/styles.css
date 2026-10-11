@@ -117,6 +117,18 @@ ul.list { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: var(--txt
 ul.list li { margin-bottom: 7px; line-height: 1.45; }
 ul.list li.warn { color: var(--warn); }
 ul.list li.muted { color: var(--muted); }
+.warn { color: var(--warn); }
+
+/* Research findings: a heading per topic and readable nested values. */
+.topic-head { margin: 16px 0 2px; font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .05em; color: var(--info); }
+.card h3 { margin: 12px 0 2px; font-size: 12px; font-weight: 600; color: var(--txt); }
+.val-list { margin: 4px 0; padding-left: 18px; font-size: 12px; }
+.val-list li { margin-bottom: 3px; }
+.val-dict { margin: 4px 0; font-size: 12px; }
+.val-dict dt { color: var(--muted); text-transform: capitalize; }
+.val-dict dd { margin: 0 0 5px 12px; }
+.controls label.wide input { min-width: 260px; }
 
 @media (max-width: 900px) {
   .grid { grid-template-columns: 1fr; }

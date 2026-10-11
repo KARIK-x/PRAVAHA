@@ -152,18 +152,21 @@ against it without touching any other module — that is the point of the adapte
 
 ---
 
-## 5. Current store (as of 2026-10-11)
+## 5. Current store (as of 2026-10-12)
 
 | Metric | Value |
 | --- | --- |
-| Symbols stored | 12 |
-| Bars stored | 23,102 |
-| First bar | 2009-11-25 |
+| Symbols stored | 60 |
+| Bars stored | 89,580 |
+| First bar | 1995-07-20 |
 | Latest bar | 2026-10-09 |
 | Last retrieved | 2026-10-11 |
 | Symbols available upstream | ~372 |
 | Live feed | **not connected** |
 
-The store currently holds the first 12 symbols alphabetically (ACLBSL … AVYAN). Symbols
-such as NABIL/NICL/NMB are **not** stored, so `/api/bars/NABIL` correctly returns 404 —
-that is a coverage limit, not a bug. Widen it with `megatool fetch --limit 60`.
+Verified against `GET /api/status` on the running server, not by reading the code.
+
+Coverage is **wide in time but narrow across the market**: some names go back to 1995,
+but only 60 of the ~372 available symbols are stored. Symbols such as NABIL/NICL/NMB are
+**not** stored, so `/api/bars/NABIL` correctly returns 404 — that is a coverage limit, not
+a bug. Widen it with `megatool fetch --limit 60` (or higher, bounded by disk and time).

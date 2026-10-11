@@ -66,10 +66,22 @@ def test_naive_scores_against_the_training_window():
     assert [f["value"] for f in r.forecast] == pytest.approx([110.0] * 3)
 
 
+def test_naive_is_labelled_the_baseline_not_a_failure():
+    # Reporting a 1.0 skill ratio for the naive model would be self-referential
+    # (it cannot beat itself), and calling it 'no demonstrated skill' would be
+    # nonsense. It is labelled BASELINE and carries no skill ratio.
+    r = run_forecast([100.0] * 10 + [110.0] * 3, model="naive", horizon=3, holdout=3)
+    assert r.verdict.startswith("BASELINE")
+    assert r.metrics["rmse_skill_ratio"] is None
+    assert "cannot beat itself" in r.verdict
+
+
 def test_naive_skill_ratio_is_undefined_when_the_window_is_flat():
     r = run_forecast([100.0] * 20, model="naive", horizon=3, holdout=3)
+    # It is the baseline regardless of the window...
+    assert r.verdict.startswith("BASELINE")
     assert r.metrics["rmse_skill_ratio"] is None
-    assert r.verdict.startswith("UNDETERMINED")
+    # ...and the flat window is still reported, because nothing could be scored.
     assert any("no variation" in w for w in r.warnings)
 
 

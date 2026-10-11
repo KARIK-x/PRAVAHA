@@ -39,7 +39,11 @@ def _clean(data: dict[str, Any]) -> dict[str, Any]:
     out["symbol"] = str(data["symbol"]).strip().upper() if data.get("symbol") else None
     out["strategy"] = data.get("strategy")
     out["thesis"] = data.get("thesis")
-    out["outcome_notes"] = data.get("outcome_notes")
+    # `notes` is accepted as an alias for `outcome_notes`. Without this, a
+    # client sending `notes` got HTTP 200 and its text was silently discarded -
+    # the worst possible behaviour for a field whose entire purpose is to
+    # remember what the owner was thinking at the time.
+    out["outcome_notes"] = data.get("outcome_notes") or data.get("notes")
 
     for name in ("entry_price", "exit_price", "planned_target", "planned_invalidation", "fees"):
         raw = data.get(name)

@@ -27,6 +27,9 @@
   <button data-view="screener">Screener</button>
   <button data-view="backtest">Backtest</button>
   <button data-view="data">Data &amp; Quality</button>
+  <button data-view="research">Research</button>
+  <button data-view="portfolio">Portfolio</button>
+  <button data-view="journal">Journal</button>
   <span class="nav-spacer"></span>
   <span class="nav-note">Not financial advice · historical data only</span>
 </nav>
@@ -185,6 +188,201 @@
         <h2>Recent ingestion runs</h2>
         <div id="ingest-log" class="tablewrap"></div>
       </div>
+    </div>
+  </section>
+
+  <!-- ----------------------------------------------------------- RESEARCH -->
+  <section id="view-research" class="view">
+    <div class="banner" id="research-banner">
+      A deterministic rules engine over stored bars — not an AI, not a language
+      model, not advice.
+    </div>
+    <div class="controls">
+      <label>Symbol
+        <input id="rs-symbol" list="symbol-list" placeholder="ADBL" />
+      </label>
+      <label class="wide">Question
+        <input id="rs-question" placeholder="how is the trend?" />
+      </label>
+      <button id="rs-report-btn">Full report</button>
+      <button id="rs-ask-btn" class="ghost">Ask</button>
+      <label>Forecast horizon (days)
+        <input id="rs-horizon" type="number" value="5" min="1" max="120" step="1" />
+      </label>
+      <button id="rs-forecast-btn" class="ghost">Compare forecast models</button>
+    </div>
+    <div id="rs-error" class="error"></div>
+
+    <div class="grid">
+      <div class="card wide">
+        <h2 id="rs-report-head">Full report</h2>
+        <div id="rs-report" class="tablewrap">
+          <div class="empty">Pick a symbol and press “Full report”. Every number is
+            shown with the window it came from and the definition used.</div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Limits of this report</h2>
+        <ul id="rs-limits" class="list"></ul>
+      </div>
+      <div class="card">
+        <h2>Warnings</h2>
+        <ul id="rs-warnings" class="list"></ul>
+      </div>
+      <div class="card wide">
+        <h2>Answer to the question</h2>
+        <div id="rs-answer">
+          <div class="empty">Type a question and press “Ask”. Questions asking for a
+            prediction or a buy/sell instruction are refused on purpose, with a reason.</div>
+        </div>
+      </div>
+      <div class="card wide">
+        <h2>Forecast model comparison</h2>
+        <p class="hint">
+          A statistical projection of stored, UNADJUSTED closes — not a prediction
+          of what the market will do, not investment advice. Each model is scored
+          against the naive “last value” forecast on a hold-out window it never saw.
+        </p>
+        <div id="fc-error" class="error"></div>
+        <div id="fc-results" class="tablewrap">
+          <div class="empty">Press “Compare forecast models” to rank every model on one
+            identical, honest split.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------- PORTFOLIO -->
+  <section id="view-portfolio" class="view">
+    <div class="banner" id="pf-banner">Loading portfolio…</div>
+    <div id="pf-unpriced" class="banner warn" style="display:none"></div>
+    <div class="card">
+      <h2>Summary</h2>
+      <div id="pf-summary" class="stat-row"></div>
+    </div>
+    <div class="card">
+      <h2>Positions (valued at the latest stored close)</h2>
+      <div id="pf-positions" class="tablewrap"></div>
+    </div>
+    <div class="controls">
+      <label>Symbol
+        <input id="pf-tx-symbol" list="symbol-list" placeholder="ADBL" />
+      </label>
+      <label>Side
+        <select id="pf-tx-side">
+          <option value="buy">buy</option>
+          <option value="sell">sell</option>
+        </select>
+      </label>
+      <label>Quantity
+        <input id="pf-tx-qty" type="number" min="1" step="1" />
+      </label>
+      <label>Price
+        <input id="pf-tx-price" type="number" min="0" step="any" />
+      </label>
+      <label>Fees
+        <input id="pf-tx-fees" type="number" min="0" step="any" value="0" />
+      </label>
+      <label>Traded at (ISO, optional)
+        <input id="pf-tx-at" placeholder="2026-01-05T11:00:00" />
+      </label>
+      <button id="pf-tx-add">Record transaction</button>
+    </div>
+    <div id="pf-tx-error" class="error"></div>
+    <div class="card">
+      <h2>Transaction ledger</h2>
+      <div id="pf-transactions" class="tablewrap"></div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------- JOURNAL -->
+  <section id="view-journal" class="view">
+    <div class="card">
+      <h2>Journal statistics</h2>
+      <div id="jr-stats" class="stat-row"></div>
+      <ul id="jr-warnings" class="list"></ul>
+    </div>
+    <div class="controls">
+      <label>Symbol
+        <input id="jr-symbol" list="symbol-list" placeholder="ADBL" />
+      </label>
+      <label>Strategy
+        <input id="jr-strategy" placeholder="sma_cross" />
+      </label>
+      <label>Entry price
+        <input id="jr-entry" type="number" min="0" step="any" />
+      </label>
+      <label>Planned target
+        <input id="jr-target" type="number" min="0" step="any" />
+      </label>
+      <label>Planned invalidation
+        <input id="jr-invalidation" type="number" min="0" step="any" />
+      </label>
+      <label>Confidence
+        <select id="jr-confidence">
+          <option value="">—</option>
+          <option value="low">low</option>
+          <option value="medium">medium</option>
+          <option value="high">high</option>
+        </select>
+      </label>
+      <label>Followed plan
+        <select id="jr-followed">
+          <option value="">—</option>
+          <option value="1">yes</option>
+          <option value="0">no</option>
+        </select>
+      </label>
+      <label>Opened at (ISO)
+        <input id="jr-opened" placeholder="2026-01-05T11:00:00" />
+      </label>
+      <label>Exit price
+        <input id="jr-exit" type="number" min="0" step="any" />
+      </label>
+      <label>Closed at (ISO)
+        <input id="jr-closed" placeholder="2026-01-08T12:00:00" />
+      </label>
+      <label class="wide">Thesis
+        <input id="jr-thesis" placeholder="why this trade" />
+      </label>
+      <label class="wide">Notes
+        <input id="jr-notes" placeholder="what actually happened" />
+      </label>
+      <button id="jr-add">Add entry</button>
+    </div>
+    <div id="jr-form-error" class="error"></div>
+
+    <div class="card">
+      <h2>Entries</h2>
+      <div id="jr-entries" class="tablewrap"></div>
+    </div>
+    <div class="card">
+      <h2>Grade of the selected entry</h2>
+      <div id="jr-grade">
+        <div class="empty">Closed entries carry a “Grade” button; it scores the trade
+          against the plan recorded at entry.</div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Trade planner (arithmetic only)</h2>
+      <div class="controls">
+        <label>Entry <input id="plan-entry" type="number" min="0" step="any" /></label>
+        <label>Stop <input id="plan-stop" type="number" min="0" step="any" /></label>
+        <label>Target <input id="plan-target" type="number" min="0" step="any" /></label>
+        <label>Capital (optional) <input id="plan-capital" type="number" min="0" step="any" /></label>
+        <label>Risk % (optional) <input id="plan-risk" type="number" min="0" step="any" /></label>
+        <button id="plan-run">Compute plan</button>
+      </div>
+      <p class="hint">
+        This is arithmetic on your own entry, stop and target — not a prediction.
+        Whether price reaches either level is unknown.
+      </p>
+      <div id="plan-error" class="error"></div>
+      <div id="plan-result"></div>
+    </div>
+    <div class="card">
+      <h2>Per-strategy breakdown (closed entries)</h2>
+      <div id="jr-by-strategy" class="tablewrap"></div>
     </div>
   </section>
 </main>

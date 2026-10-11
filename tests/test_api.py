@@ -701,3 +701,18 @@ def test_floorsheet_summary_without_any_import_is_honest(client):
     assert any("No floor sheet has been imported" in w for w in s["warnings"])
     assert any("investment advice" in x for x in s["limits"])
     assert client.get("/api/floorsheet/sessions").json()["sessions"] == []
+
+
+def test_journal_notes_field_is_not_silently_dropped(client):
+    # An earlier version accepted `notes` with HTTP 200 and threw the text away.
+    eid = client.post("/api/journal", json={**_entry(), "notes": "my thinking"}).json()["id"]
+    assert client.get(f"/api/journal/{eid}").json()["outcome_notes"] == "my thinking"
+
+
+def test_forecast_naive_model_is_labelled_the_baseline(client):
+    # The baseline must not be reported as a model that failed to beat itself.
+    d = client.post(
+        "/api/forecast", json={"symbol": "TEST1", "model": "naive", "horizon": 3, "holdout": 5}
+    ).json()
+    assert d["verdict"].startswith("BASELINE")
+    assert d["metrics"]["rmse_skill_ratio"] is None

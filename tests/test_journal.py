@@ -257,3 +257,21 @@ def test_grade_entry_returns_none_without_a_plan(db):
 def test_grade_entry_returns_none_while_open(db):
     eid = create_entry(BASE, db)
     assert grade_entry(eid, db) is None
+
+
+# ------------------------------------------------------- remembered thinking
+def test_notes_is_accepted_as_an_alias_for_outcome_notes(db):
+    """A field that is accepted and then discarded is worse than a 400."""
+    eid = create_entry({**BASE, "notes": "waited for the base to break"}, db)
+    assert get_entry(eid, db)["outcome_notes"] == "waited for the base to break"
+
+
+def test_outcome_notes_still_wins_over_the_alias(db):
+    eid = create_entry({**BASE, "notes": "short form", "outcome_notes": "the long form"}, db)
+    assert get_entry(eid, db)["outcome_notes"] == "the long form"
+
+
+def test_notes_survives_an_update(db):
+    eid = create_entry(BASE, db)
+    assert update_entry(eid, {"notes": "added later"}, db) is True
+    assert get_entry(eid, db)["outcome_notes"] == "added later"

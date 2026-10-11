@@ -25,8 +25,22 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
     ensure_dirs()
     ver = init_app_db()
-    with MarketStore() as store:
-        store.bar_count()
+    try:
+        with MarketStore() as store:
+            store.bar_count()
+    except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+        # The common case: the server is running and holds the DuckDB lock.
+        print(f"Mega Tool {__version__} initialised (app state only).")
+        print(f"  app state (SQLite) : {PATHS.app_db}")
+        print(f"  schema version      : {ver}")
+        print()
+        print("The market database could not be opened:")
+        print(f"  {exc}")
+        print()
+        print("This is expected while `megatool serve` is running: DuckDB allows")
+        print("one writer. Stop the server, then run `megatool init` again if you")
+        print("want to confirm the market store. The app state above is ready.")
+        return 1
     print(f"Mega Tool {__version__} initialised.")
     print(f"  app state (SQLite) : {PATHS.app_db}")
     print(f"  market data (DuckDB): {PATHS.market_db}")

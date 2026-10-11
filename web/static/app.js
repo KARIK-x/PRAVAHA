@@ -13,6 +13,7 @@ const state = {
   status: null,
   charts: {},
   paneSeries: {},
+  researchMeta: null,
 };
 
 /* ------------------------------------------------------------------ utils */
@@ -59,6 +60,15 @@ function pctPlain(v, dp = 2) {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
   return `${Number(v).toFixed(dp)}%`;
 }
+/** Numbers arrive already rounded to a few decimals; trim trailing zeros but
+    never invent digits a value does not have. Unrenderable values show "—". */
+function fmtSmart(v) {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  if (Number.isInteger(n)) return n.toLocaleString("en-US");
+  return n.toLocaleString("en-US", { maximumFractionDigits: 4 });
+}
 function esc(s) {
   return String(s === null || s === undefined ? "" : s)
     .replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -75,6 +85,24 @@ function showView(name) {
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
   $$("#nav button[data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   if (name === "charts") setTimeout(() => Object.values(state.charts).forEach((c) => c.fitContent?.()), 30);
+}
+
+/* Lazy per-view work: the tabs below load their own data when shown, so a slow
+   panel cannot block the boot of the rest of the terminal. */
+function viewShown(name) {
+  if (name === "research") {
+    if (!state.researchMeta) loadResearchMeta();
+    // Prefill from the chart's symbol only while the field is still empty, so a
+    // symbol typed here is never overwritten.
+    if (!($("#rs-symbol").value || "").trim()) {
+      const current = ($("#symbol-input").value || "").trim();
+      if (current) $("#rs-symbol").value = current.toUpperCase();
+    }
+  } else if (name === "portfolio") {
+    loadPortfolio();
+  } else if (name === "journal") {
+    loadJournal();
+  }
 }
 
 /* --------------------------------------------------------------- freshness */
@@ -604,9 +632,578 @@ function renderBacktest(d) {
   }
 }
 
+/* --------------------------------------------------------------- research */
+/* The assistant is a deterministic rules engine over stored bars, not an AI.
+   Every finding carries a window and a source; both are rendered next to the
+   number so no claim can travel without its provenance. */
+const RESEARCH_TOPICS = ["trend", "momentum", "risk", "volume", "levels", "relative", "data"];
+
+function prettifyKey(k) {
+  return String(k).replace(/_/g, " ");
+}
+
+/** Inline rendering of a value inside a list item or table cell. */
+function renderValueInline(v) {
+  if (v === null || v === undefined) return "—";
+  if (Array.isArray(v)) return v.map(renderValueInline).join(", ") || "—";
+  if (typeof v === "object") {
+    return Object.entries(v)
+      .map(([k, val]) => `${esc(prettifyKey(k))}: ${renderValueInline(val)}`)
+      .join(" · ");
+  }
+  if (typeof v === "number") return esc(fmtSmart(v));
+  if (typeof v === "boolean") return v ? "yes" : "no";
+  return esc(String(v));
+}
+
+/** Block rendering of a finding value: nested dicts/lists become a readable
+    key/value list instead of "[object Object]". Unrenderable → "—". */
+function renderValue(v) {
+  if (v === null || v === undefined) return "—";
+  if (Array.isArray(v)) {
+    if (!v.length) return `<span class="muted">none recorded</span>`;
+    return `<ul class="val-list">${v.map((x) => `<li>${renderValueInline(x)}</li>`).join("")}</ul>`;
+  }
+  if (typeof v === "object") {
+    return `<dl class="val-dict">${Object.entries(v)
+      .map(([k, val]) => `<dt>${esc(prettifyKey(k))}</dt><dd>${renderValueInline(val)}</dd>`)
+      .join("")}</dl>`;
+  }
+  return renderValueInline(v);
+}
+
+function renderFindings(findings, topicHelp) {
+  if (!findings || !findings.length) return `<div class="empty">No findings.</div>`;
+  const groups = new Map();
+  findings.forEach((f) => {
+    if (!groups.has(f.topic)) groups.set(f.topic, []);
+    groups.get(f.topic).push(f);
+  });
+  const order = RESEARCH_TOPICS.concat(
+    Array.from(groups.keys()).filter((t) => !RESEARCH_TOPICS.includes(t))
+  );
+  return order
+    .filter((t) => groups.has(t))
+    .map((t) => {
+      const help = topicHelp && topicHelp[t] ? `<p class="hint">${esc(topicHelp[t])}</p>` : "";
+      const rows = groups.get(t).map((f) => [
+        { html: `<b>${esc(f.name)}</b>` },
+        { html: renderValue(f.value), cls: "wrap" },
+        { html: esc(f.unit || "—"), cls: "wrap muted" },
+        { html: esc(f.window || "—"), cls: "wrap muted" },
+        { html: esc(f.source || "—"), cls: "wrap muted" },
+      ]);
+      return (
+        `<h3 class="topic-head">${esc(t)}</h3>${help}` +
+        table(["Finding", "Value", "Unit", "Window", "Source (citation)"], rows)
+      );
+    })
+    .join("");
+}
+
+function renderLimitsBlock(limits) {
+  if (!limits || !limits.length) return "";
+  return (
+    `<h3 class="topic-head">Limits of this assistant</h3><ul class="list">` +
+    limits.map((x) => `<li>${esc(x)}</li>`).join("") +
+    `</ul>`
+  );
+}
+
+async function loadResearchMeta() {
+  try {
+    const d = await api("/api/research/topics");
+    state.researchMeta = d;
+    $("#research-banner").innerHTML =
+      `<b>What this is:</b> ${esc(d.what_this_is)}<br><b>What it is not:</b> ${esc(d.what_this_is_not)}`;
+  } catch (e) {
+    $("#research-banner").textContent = `Could not load research topics: ${e.message}`;
+  }
+}
+
+async function runResearchReport() {
+  const symbol = ($("#rs-symbol").value || "").trim().toUpperCase();
+  const errEl = $("#rs-error");
+  errEl.textContent = "";
+  if (!symbol) { errEl.textContent = "Enter a symbol."; return; }
+  const btn = $("#rs-report-btn");
+  btn.disabled = true;
+  try {
+    const d = await api(`/api/research/${encodeURIComponent(symbol)}`);
+    $("#rs-report-head").textContent =
+      `Full report — ${d.symbol} as of ${d.as_of} · ${d.bars} bars since ${d.first_date} · not live`;
+    $("#rs-report").innerHTML = renderFindings(d.findings, null);
+    $("#rs-limits").innerHTML =
+      (d.limits || []).map((x) => `<li>${esc(x)}</li>`).join("") ||
+      "<li class='muted'>None reported.</li>";
+    $("#rs-warnings").innerHTML =
+      (d.warnings || []).map((x) => `<li class="warn">${esc(x)}</li>`).join("") ||
+      "<li class='muted'>No warnings.</li>";
+  } catch (e) {
+    errEl.textContent = `Research report failed: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function runResearchAsk() {
+  const symbol = ($("#rs-symbol").value || "").trim().toUpperCase();
+  const errEl = $("#rs-error");
+  errEl.textContent = "";
+  if (!symbol) { errEl.textContent = "Enter a symbol."; return; }
+  const question = $("#rs-question").value || "";
+  const btn = $("#rs-ask-btn");
+  btn.disabled = true;
+  try {
+    const d = await api("/api/research/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol, question }),
+    });
+    renderAskAnswer(d);
+  } catch (e) {
+    errEl.textContent = `Ask failed: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderAskAnswer(d) {
+  const el = $("#rs-answer");
+  if (d.refused) {
+    // A refusal is shown as the answer it is. No silent fall-back to the report.
+    const offers = d.instead_offer
+      ? `<h3 class="topic-head">Instead, it can answer descriptively about</h3>` +
+        `<dl class="val-dict">${Object.entries(d.instead_offer)
+          .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`)
+          .join("")}</dl>`
+      : "";
+    el.innerHTML = `<div class="banner warn"><b>Refused.</b> ${esc(d.refusal_reason)}</div>` + offers +
+      renderLimitsBlock(d.limits);
+    return;
+  }
+  el.innerHTML =
+    `<p class="hint"><b>${esc(d.matched_note)}</b> · ${esc(d.symbol)} as of ${esc(d.as_of)} · ${fmtInt(d.bars)} bars</p>` +
+    renderFindings(d.findings, d.topic_help) +
+    renderLimitsBlock(d.limits) +
+    ((d.warnings || []).length
+      ? `<h3 class="topic-head">Warnings</h3><ul class="list">` +
+        d.warnings.map((w) => `<li class="warn">${esc(w)}</li>`).join("") + `</ul>`
+      : "");
+}
+
+async function runForecastCompare() {
+  const symbol = ($("#rs-symbol").value || "").trim().toUpperCase();
+  const errEl = $("#fc-error");
+  errEl.textContent = "";
+  if (!symbol) { errEl.textContent = "Enter a symbol."; return; }
+  const horizon = parseInt($("#rs-horizon").value, 10);
+  if (!Number.isFinite(horizon) || horizon < 1) { errEl.textContent = "Horizon must be at least 1 day."; return; }
+  const btn = $("#rs-forecast-btn");
+  btn.disabled = true;
+  try {
+    const d = await api("/api/forecast/compare", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol, horizon }),
+    });
+    renderForecastCompare(d);
+  } catch (e) {
+    errEl.textContent = `Forecast comparison failed: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderForecastCompare(d) {
+  const rows = (d.ranking || []).map((r) => {
+    const verdict = r.verdict || "";
+    const pill = verdict.includes("NO DEMONSTRATED SKILL")
+      ? `<span class="pill pill-hard">NO DEMONSTRATED SKILL</span>`
+      : verdict.includes("UNDETERMINED")
+        ? `<span class="pill pill-review">undetermined</span>`
+        : `<span class="pill pill-info">beats naive on this one hold-out</span>`;
+    return [
+      { html: `<b>${esc(r.label || r.model)}</b>` },
+      { html: fmtSmart(r.rmse) },
+      { html: fmtSmart(r.rmse_skill_ratio) },
+      { html: `${pill}<br><span class="muted">${esc(verdict)}</span>`, cls: "wrap" },
+    ];
+  });
+  const errEntries = Object.entries(d.errors || {});
+  $("#fc-results").innerHTML =
+    `<p class="hint"><b>${esc(d.symbol)}</b> · hold-out: ${fmtInt(d.holdout)} day(s) · naive RMSE: ` +
+    `${fmtSmart(d.naive_rmse)} · ${esc(d.note || "")}</p>` +
+    table(["Model", "Hold-out RMSE", "RMSE vs naive (skill ratio)", "Verdict"], rows) +
+    (errEntries.length
+      ? `<p class="error">${errEntries.map(([k, v]) => `${esc(k)}: ${esc(v)}`).join("; ")}</p>`
+      : "");
+}
+
+/* -------------------------------------------------------------- portfolio */
+async function loadPortfolio() {
+  try {
+    const d = await api("/api/portfolio");
+    renderPortfolio(d);
+  } catch (e) {
+    $("#pf-banner").textContent = `Could not load the portfolio: ${e.message}`;
+  }
+  try {
+    const d = await api("/api/portfolio/transactions");
+    renderPortfolioTransactions(d.transactions || []);
+  } catch (e) {
+    $("#pf-transactions").innerHTML = `<div class="error">${esc(e.message)}</div>`;
+  }
+}
+
+function renderPortfolio(d) {
+  const s = d.summary || {};
+  $("#pf-banner").textContent =
+    `Valued as of ${d.data_as_of || "no stored price for any held symbol"} — these are the latest ` +
+    `STORED closes, not live quotes. ${d.note || ""}`;
+
+  // A symbol with no stored close is left unvalued and flagged, never carried
+  // at cost, so it is surfaced here as a warning rather than hidden.
+  const unpriced = (d.positions || []).filter(
+    (p) => p.quantity > 0 && (p.last_price === null || p.last_price === undefined)
+  );
+  const unpricedEl = $("#pf-unpriced");
+  if (unpriced.length) {
+    unpricedEl.style.display = "";
+    unpricedEl.textContent =
+      `${unpriced.length} position(s) have NO stored price and are left unvalued: ` +
+      `${unpriced.map((p) => p.symbol).join(", ")} — unvalued cost NPR ${fmtNum(s.unvalued_cost, 0)}.`;
+  } else {
+    unpricedEl.style.display = "none";
+  }
+
+  $("#pf-summary").innerHTML =
+    [
+      ["Open positions", fmtInt(s.open_positions), ""],
+      ["Market value", `NPR ${fmtNum(s.valued_market_value, 0)}`, ""],
+      ["Cost (valued)", `NPR ${fmtNum(s.valued_cost, 0)}`, ""],
+      ["Unrealised P&L", fmtNum(s.unrealized_pnl, 0), pctClass(s.unrealized_pnl)],
+      ["Realised P&L", fmtNum(s.realized_pnl, 0), pctClass(s.realized_pnl)],
+      ["Largest weight", pctPlain(s.largest_weight_pct, 1), ""],
+    ]
+      .map(([k, v, c]) => `<div class="stat"><div class="k">${k}</div><div class="v ${c}" style="font-size:16px">${v}</div></div>`)
+      .join("") +
+    (s.concentration_warning
+      ? `<p class="hint warn">Concentration warning: one position is 40% or more of the valued portfolio.</p>`
+      : "") +
+    `<p class="hint">${esc(d.note || "")}</p>`;
+
+  const positions = d.positions || [];
+  if (!positions.length) {
+    $("#pf-positions").innerHTML =
+      `<div class="empty">No positions. The transaction ledger is empty — record a transaction below.</div>`;
+    return;
+  }
+  $("#pf-positions").innerHTML = table(
+    ["Symbol", "Quantity", "Avg cost", "Last price", "Market value", "Unrealised P&L", "Weight %", "Origin"],
+    positions.map((p) => [
+      { html: `<b>${esc(p.symbol)}</b>` },
+      { html: fmtInt(p.quantity) },
+      { html: fmtNum(p.avg_cost) },
+      { html: fmtNum(p.last_price) },
+      { html: fmtNum(p.market_value) },
+      { html: fmtNum(p.unrealized_pnl), cls: pctClass(p.unrealized_pnl) },
+      { html: pctPlain(p.weight_pct) },
+      {
+        html:
+          esc(p.origin) +
+          ((p.flags || []).length
+            ? `<br><span class="warn">${esc(p.flags.join("; "))}</span>`
+            : ""),
+        cls: "wrap",
+      },
+    ])
+  );
+}
+
+function renderPortfolioTransactions(txs) {
+  if (!txs.length) {
+    $("#pf-transactions").innerHTML =
+      `<div class="empty">No transactions recorded. Every position above is derived from this ledger.</div>`;
+    return;
+  }
+  $("#pf-transactions").innerHTML = table(
+    ["Id", "Traded at", "Symbol", "Side", "Quantity", "Price", "Fees", "Actions"],
+    txs.map((t) => [
+      { html: fmtInt(t.id) },
+      { html: esc((t.traded_at || "").slice(0, 19)) },
+      { html: `<b>${esc(t.symbol)}</b>` },
+      { html: esc(t.side), cls: t.side === "buy" ? "up" : "down" },
+      { html: fmtInt(t.quantity) },
+      { html: fmtNum(t.price) },
+      { html: fmtNum(t.fees) },
+      { html: `<button class="ghost" data-del-tx="${fmtInt(t.id)}">Delete</button>` },
+    ])
+  );
+  $$("#pf-transactions button[data-del-tx]").forEach((b) =>
+    b.addEventListener("click", () => deleteTransaction(Number(b.dataset.delTx)))
+  );
+}
+
+async function addTransaction() {
+  const errEl = $("#pf-tx-error");
+  errEl.textContent = "";
+  const body = {
+    symbol: ($("#pf-tx-symbol").value || "").trim().toUpperCase(),
+    side: $("#pf-tx-side").value,
+    quantity: $("#pf-tx-qty").value,
+    price: $("#pf-tx-price").value,
+    fees: $("#pf-tx-fees").value === "" ? 0 : $("#pf-tx-fees").value,
+  };
+  const at = ($("#pf-tx-at").value || "").trim();
+  if (at) body.traded_at = at;
+  try {
+    await api("/api/portfolio/transactions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    $("#pf-tx-qty").value = "";
+    $("#pf-tx-price").value = "";
+    loadPortfolio();
+  } catch (e) {
+    // Server rejections are written in plain English ("cannot sell 5 …: only 0
+    // held in the ledger"); they are shown verbatim, not swallowed.
+    errEl.textContent = e.message;
+  }
+}
+
+async function deleteTransaction(id) {
+  try {
+    await api(`/api/portfolio/transactions/${id}`, { method: "DELETE" });
+    $("#pf-tx-error").textContent = "";
+    loadPortfolio();
+  } catch (e) {
+    $("#pf-tx-error").textContent = `Delete failed: ${e.message}`;
+  }
+}
+
+/* ---------------------------------------------------------------- journal */
+async function loadJournal() {
+  try {
+    const s = await api("/api/journal/stats");
+    renderJournalStats(s);
+  } catch (e) {
+    $("#jr-stats").innerHTML = `<span class="down">${esc(e.message)}</span>`;
+  }
+  try {
+    const j = await api("/api/journal");
+    renderJournalEntries(j.entries || []);
+  } catch (e) {
+    $("#jr-entries").innerHTML = `<div class="error">${esc(e.message)}</div>`;
+  }
+}
+
+function renderJournalStats(s) {
+  // With no closed trades the API returns nulls, not zeroes: "—" is shown so a
+  // missing statistic is never presented as a real 0%.
+  $("#jr-stats").innerHTML =
+    [
+      ["Entries", fmtInt(s.entries)],
+      ["Open", fmtInt(s.open)],
+      ["Closed", fmtInt(s.closed)],
+      ["Win rate", s.win_rate_pct === null ? "—" : pctPlain(s.win_rate_pct)],
+      ["Avg R", s.avg_r === null ? "—" : fmtSmart(s.avg_r)],
+      ["Plan adherence", s.plan_adherence_pct === null ? "—" : pctPlain(s.plan_adherence_pct)],
+    ]
+      .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v" style="font-size:16px">${v}</div></div>`)
+      .join("") +
+    `<p class="hint">${esc(s.note || "")}</p>`;
+  $("#jr-warnings").innerHTML =
+    (s.warnings || []).map((w) => `<li class="warn">${esc(w)}</li>`).join("") ||
+    "<li class='muted'>No warnings.</li>";
+
+  const by = s.by_strategy || [];
+  $("#jr-by-strategy").innerHTML = by.length
+    ? table(
+        ["Strategy", "Closed", "Wins", "Win rate", "Avg R", "Graded"],
+        by.map((b) => [
+          { html: `<b>${esc(b.strategy)}</b>`, cls: "wrap" },
+          { html: fmtInt(b.closed) },
+          { html: fmtInt(b.wins) },
+          { html: b.win_rate_pct === null ? "—" : pctPlain(b.win_rate_pct) },
+          { html: b.avg_r === null ? "—" : fmtSmart(b.avg_r) },
+          { html: fmtInt(b.graded_r) },
+        ])
+      )
+    : `<div class="empty">No closed entries yet, so there is nothing to break down by strategy.</div>`;
+}
+
+function renderJournalEntries(entries) {
+  if (!entries.length) {
+    $("#jr-entries").innerHTML =
+      `<div class="empty">No journal entries yet. Record the plan first (thesis, entry, target, ` +
+      `invalidation) and fill in the outcome when the trade is closed.</div>`;
+    return;
+  }
+  $("#jr-entries").innerHTML = table(
+    ["Id", "Symbol", "Strategy", "Entry", "Target", "Invalidation", "Confidence", "Followed plan", "Opened", "Exit", "Closed", "Actions"],
+    entries.map((e) => {
+      const closed = Boolean(e.closed_at);
+      const actions =
+        (closed ? `<button class="ghost" data-grade="${fmtInt(e.id)}">Grade</button> ` : `<span class="muted">open</span> `) +
+        `<button class="ghost" data-del-entry="${fmtInt(e.id)}">Delete</button>`;
+      return [
+        { html: fmtInt(e.id) },
+        { html: `<b>${esc(e.symbol || "—")}</b>` },
+        { html: esc(e.strategy || "—"), cls: "wrap" },
+        { html: fmtNum(e.entry_price) },
+        { html: fmtNum(e.planned_target) },
+        { html: fmtNum(e.planned_invalidation) },
+        { html: esc(e.confidence || "—") },
+        { html: e.followed_plan === null || e.followed_plan === undefined ? "—" : e.followed_plan ? "yes" : "no" },
+        { html: esc((e.opened_at || "").slice(0, 19) || "—") },
+        { html: fmtNum(e.exit_price) },
+        { html: esc((e.closed_at || "").slice(0, 19) || "—") },
+        { html: actions, cls: "wrap" },
+      ];
+    })
+  );
+  $$("#jr-entries button[data-grade]").forEach((b) =>
+    b.addEventListener("click", () => gradeEntry(Number(b.dataset.grade)))
+  );
+  $$("#jr-entries button[data-del-entry]").forEach((b) =>
+    b.addEventListener("click", () => deleteJournalEntry(Number(b.dataset.delEntry)))
+  );
+}
+
+async function addJournalEntry() {
+  const errEl = $("#jr-form-error");
+  errEl.textContent = "";
+  const notes = ($("#jr-notes").value || "").trim();
+  const body = {
+    symbol: ($("#jr-symbol").value || "").trim().toUpperCase(),
+    strategy: ($("#jr-strategy").value || "").trim() || null,
+    thesis: ($("#jr-thesis").value || "").trim() || null,
+    entry_price: ($("#jr-entry").value || "").trim() || null,
+    planned_target: ($("#jr-target").value || "").trim() || null,
+    planned_invalidation: ($("#jr-invalidation").value || "").trim() || null,
+    confidence: $("#jr-confidence").value || null,
+    followed_plan: $("#jr-followed").value === "" ? null : Number($("#jr-followed").value),
+    opened_at: ($("#jr-opened").value || "").trim() || null,
+    exit_price: ($("#jr-exit").value || "").trim() || null,
+    closed_at: ($("#jr-closed").value || "").trim() || null,
+    // The journal persists free text under `outcome_notes`; the API accepts any
+    // key, so `notes` (the human-facing name) is sent alongside it and nothing
+    // typed into the field is silently dropped.
+    outcome_notes: notes || null,
+    notes: notes || null,
+  };
+  try {
+    await api("/api/journal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    ["#jr-thesis", "#jr-notes", "#jr-entry", "#jr-target", "#jr-invalidation",
+     "#jr-opened", "#jr-exit", "#jr-closed"].forEach((sel) => { $(sel).value = ""; });
+    loadJournal();
+  } catch (e) {
+    errEl.textContent = e.message;
+  }
+}
+
+async function deleteJournalEntry(id) {
+  try {
+    await api(`/api/journal/${id}`, { method: "DELETE" });
+    $("#jr-form-error").textContent = "";
+    loadJournal();
+  } catch (e) {
+    $("#jr-form-error").textContent = `Delete failed: ${e.message}`;
+  }
+}
+
+async function gradeEntry(id) {
+  const el = $("#jr-grade");
+  el.innerHTML = `<div class="empty">Grading entry ${id}…</div>`;
+  try {
+    const g = await api(`/api/journal/${id}/grade`);
+    el.innerHTML =
+      `<p class="hint">Entry ${fmtInt(id)} · ${esc(g.result)}</p>` +
+      `<div class="stat-row">` +
+      [
+        ["R multiple", fmtSmart(g.r_multiple)],
+        ["Planned R", fmtSmart(g.planned_r)],
+        ["Actual vs plan %", fmtSmart(g.planned_vs_actual_pct)],
+      ]
+        .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v" style="font-size:16px">${v}</div></div>`)
+        .join("") +
+      `</div><p class="hint">${esc(g.note || "")}</p>`;
+  } catch (e) {
+    // The API explains exactly what is missing ("cannot be graded: …").
+    el.innerHTML = `<div class="error">${esc(e.message)}</div>`;
+  }
+}
+
+async function runPlanner() {
+  const errEl = $("#plan-error");
+  errEl.textContent = "";
+  const body = {
+    entry: parseFloat($("#plan-entry").value),
+    stop: parseFloat($("#plan-stop").value),
+    target: parseFloat($("#plan-target").value),
+  };
+  if ([body.entry, body.stop, body.target].some((v) => Number.isNaN(v))) {
+    errEl.textContent = "Entry, stop and target are all required numbers.";
+    return;
+  }
+  const capital = ($("#plan-capital").value || "").trim();
+  const risk = ($("#plan-risk").value || "").trim();
+  if (capital !== "" || risk !== "") {
+    if (capital === "" || risk === "") {
+      errEl.textContent = "Capital and risk % must be supplied together (or both left empty).";
+      return;
+    }
+    body.capital = parseFloat(capital);
+    body.risk_pct = parseFloat(risk);
+  }
+  try {
+    const d = await api("/api/planning", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    renderPlanner(d);
+  } catch (e) {
+    errEl.textContent = e.message;
+    $("#plan-result").innerHTML = "";
+  }
+}
+
+function renderPlanner(d) {
+  const p = d.plan || {};
+  const cells = [
+    ["Risk per share", fmtNum(p.risk_per_share)],
+    ["Reward per share", fmtNum(p.reward_per_share)],
+    ["Risk : reward", fmtSmart(p.risk_reward)],
+    ["Risk % of entry", pctPlain(p.risk_pct_of_entry)],
+    ["Invalidation %", pctPlain(p.invalidation_pct)],
+    ["Target %", pctPlain(p.target_pct)],
+  ];
+  if (d.sizing) {
+    cells.push(
+      ["Units", fmtInt(d.sizing.units)],
+      ["Cash used", `NPR ${fmtNum(d.sizing.cash_used, 0)}`],
+      ["Actual risk", `NPR ${fmtNum(d.sizing.actual_risk, 0)}`],
+      ["Actual risk %", pctPlain(d.sizing.actual_risk_pct)]
+    );
+  }
+  $("#plan-result").innerHTML =
+    `<div class="stat-row">` +
+    cells.map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v" style="font-size:15px">${v}</div></div>`).join("") +
+    `</div><p class="hint">${esc(d.note || "")}</p>`;
+}
+
 /* -------------------------------------------------------------------- boot */
 function boot() {
-  $$("#nav button[data-view]").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
+  $$("#nav button[data-view]").forEach((b) =>
+    b.addEventListener("click", () => { showView(b.dataset.view); viewShown(b.dataset.view); })
+  );
   $("#load-chart").addEventListener("click", loadChart);
   $("#symbol-input").addEventListener("keydown", (e) => { if (e.key === "Enter") loadChart(); });
   $("#run-screen").addEventListener("click", () => updatePresetDesc());
@@ -620,12 +1217,26 @@ function boot() {
   $("#run-backtest").addEventListener("click", runBacktest);
   $("#bt-symbol").addEventListener("keydown", (e) => { if (e.key === "Enter") runBacktest(); });
 
+  $("#rs-report-btn").addEventListener("click", runResearchReport);
+  $("#rs-ask-btn").addEventListener("click", runResearchAsk);
+  $("#rs-forecast-btn").addEventListener("click", runForecastCompare);
+  $("#rs-symbol").addEventListener("keydown", (e) => { if (e.key === "Enter") runResearchReport(); });
+  $("#rs-question").addEventListener("keydown", (e) => { if (e.key === "Enter") runResearchAsk(); });
+
+  $("#pf-tx-add").addEventListener("click", addTransaction);
+  $("#pf-tx-qty").addEventListener("keydown", (e) => { if (e.key === "Enter") addTransaction(); });
+  $("#pf-tx-price").addEventListener("keydown", (e) => { if (e.key === "Enter") addTransaction(); });
+
+  $("#jr-add").addEventListener("click", addJournalEntry);
+  $("#plan-run").addEventListener("click", runPlanner);
+
   loadFreshness();
   loadSymbols();
   loadOverview();
   loadPresets();
   loadData();
   loadStrategies();
+  loadResearchMeta();
 }
 
 document.addEventListener("DOMContentLoaded", boot);

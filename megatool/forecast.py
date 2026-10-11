@@ -240,7 +240,9 @@ def run_forecast(
     baseline = _naive_forecast(train, holdout_n)
     naive_err = rmse(test, baseline)
     model_err = rmse(test, predicted)
-    skill = None if naive_err == 0 else model_err / naive_err
+    # The naive model IS the baseline, so reporting a skill ratio of exactly
+    # 1.0 for it would be self-referential: there is nothing for it to beat.
+    skill = None if (naive_err == 0 or model == "naive") else model_err / naive_err
 
     warnings: list[str] = []
     if naive_err == 0:
@@ -252,7 +254,13 @@ def run_forecast(
         warnings.append(
             f"only {holdout_n} hold-out point(s): these error figures are noise, not evidence"
         )
-    if skill is None:
+    if model == "naive":
+        verdict = (
+            "BASELINE: this is the naive last-value forecast. Every other model's "
+            "skill ratio is measured against it, so it has no skill ratio of its "
+            "own and cannot beat itself."
+        )
+    elif skill is None:
         verdict = (
             "UNDETERMINED: the naive baseline is perfect on this window, so no skill ratio exists."
         )
