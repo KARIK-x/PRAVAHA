@@ -20,7 +20,16 @@ async function api(path, opts) {
   const res = await fetch(path, opts);
   if (!res.ok) {
     let detail = res.statusText;
-    try { detail = (await res.json()).detail || detail; } catch (e) { /* body not json */ }
+    try {
+      const body = await res.json();
+      detail = body.detail ?? body.error ?? detail;
+      // FastAPI validation failures come back as an array of {loc, msg}.
+      if (Array.isArray(detail)) {
+        detail = detail
+          .map((e) => (typeof e === "string" ? e : `${(e.loc || []).slice(1).join(".")} ${e.msg}`))
+          .join("; ");
+      }
+    } catch (e) { /* body not json */ }
     throw new Error(`${res.status}: ${detail}`);
   }
   return res.json();
@@ -44,6 +53,11 @@ function fmtPct(v, dp = 2) {
 function pctClass(v) {
   if (v === null || v === undefined || Number.isNaN(v)) return "muted";
   return v > 0 ? "up" : v < 0 ? "down" : "muted";
+}
+/** Plain percentage (no +/- sign): for rates such as win rate or exposure. */
+function pctPlain(v, dp = 2) {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  return `${Number(v).toFixed(dp)}%`;
 }
 function esc(s) {
   return String(s === null || s === undefined ? "" : s)
@@ -446,6 +460,150 @@ async function loadData() {
   }
 }
 
+/* --------------------------------------------------------------- backtest */
+let btStrategies = [];
+
+function currentStrategy() {
+  return btStrategies.find((s) => s.key === $("#bt-strategy").value);
+}
+
+async function loadStrategies() {
+  try {
+    const d = await api("/api/strategies");
+    btStrategies = d.strategies;
+    $("#bt-strategy").innerHTML = d.strategies
+      .map((s) => `<option value="${esc(s.key)}">${esc(s.label)}</option>`)
+      .join("");
+    renderBtParams();
+    updateBtDesc();
+  } catch (e) {
+    $("#bt-error").textContent = `Could not load strategies: ${e.message}`;
+  }
+}
+
+function renderBtParams() {
+  const s = currentStrategy();
+  if (!s) { $("#bt-params").innerHTML = ""; return; }
+  $("#bt-params").innerHTML = Object.entries(s.params)
+    .map(([k, v]) =>
+      `<label class="inline">${esc(k)} <input data-param="${esc(k)}" type="number" step="any" value="${esc(String(v))}" /></label>`)
+    .join("");
+}
+
+function updateBtDesc() {
+  const s = currentStrategy();
+  $("#bt-desc").textContent = s ? s.description : "";
+}
+
+function collectBtParams() {
+  const out = {};
+  document.querySelectorAll("#bt-params input[data-param]").forEach((i) => {
+    const v = parseFloat(i.value);
+    if (!Number.isNaN(v)) out[i.dataset.param] = v;
+  });
+  return out;
+}
+
+async function runBacktest() {
+  const symbol = ($("#bt-symbol").value || "").trim().toUpperCase();
+  const errEl = $("#bt-error");
+  errEl.textContent = "";
+  if (!symbol) { errEl.textContent = "Enter a symbol."; return; }
+
+  const btn = $("#run-backtest");
+  btn.disabled = true;
+  // Clear the previous run up front: a later failure must not erase results
+  // that have already been rendered.
+  $("#bt-metrics").innerHTML = "";
+  $("#bt-equity").innerHTML = "";
+  $("#bt-assumptions").innerHTML = "";
+  $("#bt-warnings").innerHTML = "";
+  $("#bt-trades").innerHTML = "";
+  try {
+    const body = {
+      symbol,
+      strategy: $("#bt-strategy").value,
+      params: collectBtParams(),
+      execution: $("#bt-execution").value,
+      initial_cash: parseFloat($("#bt-cash").value) || 100000,
+      // UI asks for a percentage; the API takes a fraction.
+      fee_rate: (parseFloat($("#bt-fee").value) || 0) / 100,
+    };
+    const d = await api("/api/backtest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    renderBacktest(d);
+  } catch (e) {
+    errEl.textContent = `Backtest failed: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderBacktest(d) {
+  const m = d.metrics;
+  const cells = [
+    ["Data as of", esc(d.data_as_of)],
+    ["Period", `${esc(d.start)} → ${esc(d.end)}`],
+    ["Final equity", fmtNum(m.final_equity)],
+    ["Total return", fmtPct(m.total_return_pct)],
+    ["Buy &amp; hold", fmtPct(m.benchmark_total_return_pct)],
+    ["CAGR", fmtPct(m.cagr_pct)],
+    ["Max drawdown", fmtPct(m.max_drawdown_pct)],
+    ["Sharpe", m.sharpe === null || m.sharpe === undefined ? "—" : String(m.sharpe)],
+    ["Trades", fmtInt(m.trades)],
+    ["Win rate", pctPlain(m.win_rate_pct)],
+    ["In market", pctPlain(m.exposure_pct)],
+    ["Fees paid", fmtNum(m.fees_paid)],
+  ];
+  $("#bt-metrics").innerHTML = cells
+    .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v" style="font-size:15px">${v}</div></div>`)
+    .join("");
+
+  $("#bt-assumptions").innerHTML = (d.assumptions || [])
+    .map((a) => `<li>${esc(a)}</li>`).join("") || "<li>None reported</li>";
+  $("#bt-warnings").innerHTML = (d.warnings || [])
+    .map((w) => `<li class="warn">${esc(w)}</li>`).join("") ||
+    "<li class='muted'>No warnings.</li>";
+
+  $("#bt-trades").innerHTML = table(
+    ["Entry", "Exit", "Units", "Entry px", "Exit px", "P&L", "Return", "Bars"],
+    (d.trades || []).map((t) => [
+      { html: esc(t.entry_date) },
+      { html: t.exit_date ? esc(t.exit_date) : "<span class='muted'>open</span>" },
+      { html: fmtNum(t.units) },
+      { html: fmtNum(t.entry_price) },
+      { html: t.exit_price === null || t.exit_price === undefined ? "—" : fmtNum(t.exit_price) },
+      { html: t.pnl === null || t.pnl === undefined ? "—" : fmtNum(t.pnl), cls: (t.pnl || 0) >= 0 ? "up" : "down" },
+      { html: fmtPct(t.return_pct), cls: (t.pnl || 0) >= 0 ? "up" : "down" },
+      { html: String(t.bars_held) },
+    ])
+  );
+
+  const el = $("#bt-equity");
+  el.innerHTML = "";
+  if (!d.equity || d.equity.length < 2) {
+    el.innerHTML = "<p class='hint'>Not enough points to plot an equity curve.</p>";
+    return;
+  }
+  // Charting is best-effort: a rendering problem must not discard the numbers.
+  try {
+    const chart = makeChart(el, 220);
+    const line = chart.addLineSeries({
+      color: "#3ddc97",
+      lineWidth: 2,
+      priceLineVisible: false,
+      title: "Equity",
+    });
+    line.setData(d.equity.map((p) => ({ time: p.date, value: p.equity })));
+    chart.timeScale().fitContent();
+  } catch (e) {
+    el.innerHTML = `<p class="hint">Could not plot the equity curve: ${esc(e.message)}</p>`;
+  }
+}
+
 /* -------------------------------------------------------------------- boot */
 function boot() {
   $$("#nav button[data-view]").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
@@ -458,12 +616,16 @@ function boot() {
     const url = `/api/screen/export.csv?tree=${encodeURIComponent(JSON.stringify(currentScreenTree))}`;
     window.location.href = url;
   });
+  $("#bt-strategy").addEventListener("change", () => { renderBtParams(); updateBtDesc(); });
+  $("#run-backtest").addEventListener("click", runBacktest);
+  $("#bt-symbol").addEventListener("keydown", (e) => { if (e.key === "Enter") runBacktest(); });
 
   loadFreshness();
   loadSymbols();
   loadOverview();
   loadPresets();
   loadData();
+  loadStrategies();
 }
 
 document.addEventListener("DOMContentLoaded", boot);

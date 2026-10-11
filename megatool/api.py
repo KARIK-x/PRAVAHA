@@ -22,6 +22,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from megatool import DISCLAIMER, __version__
+from megatool.backtest import (
+    STRATEGIES,
+    BacktestConfig,
+    build_strategy,
+    run_backtest,
+)
 from megatool.config import HOST, PATHS, PORT, ensure_dirs
 from megatool.db import get_conn, init_app_db
 from megatool.market_store import MarketStore
@@ -53,6 +59,21 @@ class PydanticScreenRequest(BaseModel):
     symbols: list[str] | None = None
     as_of: date | None = None
     min_bars: int = 30
+
+
+class PydanticBacktestRequest(BaseModel):
+    """Backtest request body (module scope for the same reason as above)."""
+
+    symbol: str
+    strategy: str = "sma_cross"
+    params: dict[str, Any] = Field(default_factory=dict)
+    start: date | None = None
+    end: date | None = None
+    initial_cash: float = Field(100_000.0, gt=0)
+    fee_rate: float = Field(0.004, ge=0)
+    slippage: float = Field(0.0, ge=0)
+    execution: str = "next_open"
+    whole_units: bool = True
 
 
 def create_app(store: MarketStore | None = None) -> FastAPI:
@@ -341,6 +362,72 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
         )
 
     # ------------------------------------------------------------- dashboard
+    # ------------------------------------------------------------- backtest
+    @app.get("/api/strategies")
+    def strategies() -> dict[str, Any]:
+        """The strategies the engine can run, with their default parameters."""
+        return {
+            "strategies": [
+                {
+                    "key": key,
+                    "label": spec["label"],
+                    "description": spec["description"],
+                    "params": spec["params"],
+                }
+                for key, spec in STRATEGIES.items()
+            ],
+            "config_defaults": {
+                "initial_cash": 100_000.0,
+                "fee_rate": 0.004,
+                "slippage": 0.0,
+                "execution": "next_open",
+                "whole_units": True,
+            },
+            "note": "Backtests are historical calculations with the assumptions "
+            "listed in the response. They are not predictions or advice.",
+        }
+
+    @app.post("/api/backtest")
+    def backtest(req: PydanticBacktestRequest) -> dict[str, Any]:
+        store = get_store()
+        df = store.get_bars(req.symbol.upper(), start=req.start, end=req.end)
+        if df.empty:
+            raise HTTPException(404, f"no stored history for {req.symbol.upper()}")
+        if len(df) < 2:
+            raise HTTPException(
+                400, f"only {len(df)} bar(s) stored for {req.symbol.upper()}; need at least 2"
+            )
+        try:
+            signal_fn, label, params = build_strategy(req.strategy, **req.params)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        try:
+            cfg = BacktestConfig(
+                initial_cash=req.initial_cash,
+                fee_rate=req.fee_rate,
+                slippage=req.slippage,
+                execution=req.execution,  # type: ignore[arg-type]
+                whole_units=req.whole_units,
+            )
+            result = run_backtest(
+                df,
+                signal_fn,
+                cfg,
+                symbol=req.symbol.upper(),
+                strategy=label,
+                params=params,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        payload = result.to_dict()
+        payload["data_as_of"] = str(df["trading_date"].max().date())
+        payload["live"] = False
+        payload["note"] = (
+            "Historical calculation only. The assumptions are listed in "
+            "`assumptions`; past performance does not indicate future results."
+        )
+        return payload
+
     @app.get("/api/dashboard")
     def dashboard(top: int = Query(10, le=50)) -> dict[str, Any]:
         """Market snapshot from the most recent stored bar per symbol.

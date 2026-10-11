@@ -234,3 +234,81 @@ def test_ui_is_served(client):
     assert r.status_code == 200
     assert "Mega Tool" in r.text
     assert "Lightweight Charts" in r.text  # attribution present
+
+
+# ---------------------------------------------------------------- backtest
+def test_strategies_catalog_states_defaults_and_disclaimer(client):
+    d = client.get("/api/strategies").json()
+    keys = {s["key"] for s in d["strategies"]}
+    assert {"sma_cross", "rsi_threshold", "always_in"} <= keys
+    for s in d["strategies"]:
+        assert s["label"] and s["description"] and isinstance(s["params"], dict)
+    assert "not predictions" in d["note"]
+
+
+def test_backtest_returns_metrics_curve_and_assumptions(client):
+    d = client.post(
+        "/api/backtest",
+        json={"symbol": "TEST1", "strategy": "sma_cross", "params": {"fast": 5, "slow": 20}},
+    ).json()
+    assert d["symbol"] == "TEST1"
+    assert d["live"] is False
+    assert d["data_as_of"] == "2026-06-17"
+    assert len(d["equity"]) == 120
+    assert d["equity"][0]["date"] <= d["equity"][-1]["date"]
+    for key in ("total_return_pct", "max_drawdown_pct", "final_equity", "exposure_pct"):
+        assert key in d["metrics"], key
+    joined = " ".join(d["assumptions"])
+    assert "PLACEHOLDER" in joined
+    assert "UNADJUSTED" in joined
+    assert "Past performance" in joined
+    assert d["note"]
+
+
+def test_backtest_never_reports_live_data(client):
+    d = client.post("/api/backtest", json={"symbol": "TEST1", "strategy": "always_in"}).json()
+    assert d["live"] is False
+    assert d["start"] and d["end"]
+
+
+def test_backtest_unknown_symbol_is_404(client):
+    r = client.post("/api/backtest", json={"symbol": "NOSUCH", "strategy": "always_in"})
+    assert r.status_code == 404
+
+
+def test_backtest_unknown_strategy_is_400(client):
+    r = client.post("/api/backtest", json={"symbol": "TEST1", "strategy": "moon_phases"})
+    assert r.status_code == 400
+    assert "unknown strategy" in r.json()["detail"]
+
+
+def test_backtest_rejects_shorting_request(client):
+    # shorting is deliberately unsupported; the model exposes no field for it
+    d = client.post("/api/backtest", json={"symbol": "TEST1", "strategy": "always_in"}).json()
+    assert d["config"]["allow_short"] is False
+
+
+def test_backtest_rejects_bad_execution_mode(client):
+    r = client.post(
+        "/api/backtest",
+        json={"symbol": "TEST1", "strategy": "always_in", "execution": "whenever"},
+    )
+    assert r.status_code == 400
+    assert "execution" in r.json()["detail"]
+
+
+def test_backtest_rejects_unknown_param(client):
+    r = client.post(
+        "/api/backtest",
+        json={"symbol": "TEST1", "strategy": "sma_cross", "params": {"fast": 5, "banana": 1}},
+    )
+    assert r.status_code == 400
+    assert "unknown parameter" in r.json()["detail"]
+
+
+def test_backtest_benchmark_is_reported_alongside(client):
+    d = client.post("/api/backtest", json={"symbol": "TEST2", "strategy": "always_in"}).json()
+    m = d["metrics"]
+    assert m["benchmark_total_return_pct"] is not None
+    # TEST2 declines monotonically, so buy-and-hold must be negative
+    assert m["benchmark_total_return_pct"] < 0

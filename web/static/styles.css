@@ -108,6 +108,16 @@ footer { padding: 16px 20px 30px; border-top: 1px solid var(--line);
 
 .empty { color: var(--muted); font-style: italic; padding: 10px 0; }
 
+/* Backtest controls: inline parameter inputs for the chosen strategy. */
+.param-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.controls label.inline { flex-direction: row; align-items: center; gap: 6px; }
+.controls label.inline input { width: 92px; }
+
+ul.list { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: var(--txt); }
+ul.list li { margin-bottom: 7px; line-height: 1.45; }
+ul.list li.warn { color: var(--warn); }
+ul.list li.muted { color: var(--muted); }
+
 @media (max-width: 900px) {
   .grid { grid-template-columns: 1fr; }
   .card.wide { grid-column: span 1; }
