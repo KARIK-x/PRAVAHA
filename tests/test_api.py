@@ -520,3 +520,121 @@ def test_planning_grade_requires_exit_price(client):
     ).json()
     assert ok["r_multiple"] == pytest.approx(1.0)
     assert ok["result"] == "neither"
+
+
+# -------------------------------------------------------------- forecasting
+def test_forecast_models_endpoint(client):
+    d = client.get("/api/forecast/models").json()
+    keys = [m["key"] for m in d["models"]]
+    assert "naive" in keys and "holt" in keys and "linear_trend" in keys
+    assert all(m["description"] and "label" in m for m in d["models"])
+    assert all("params" in m for m in d["models"])
+    assert "not evidence" in d["note"]
+
+
+def test_forecast_endpoint_scores_against_naive(client):
+    d = client.post(
+        "/api/forecast",
+        json={"symbol": "TEST1", "model": "linear_trend", "horizon": 5, "holdout": 10},
+    ).json()
+    assert d["symbol"] == "TEST1"
+    assert d["live"] is False
+    assert len(d["forecast"]) == 5
+    assert len(d["holdout"]) == 10
+    assert d["train_points"] == 110
+    # A straight line fitted to a straight line: it beats naive here.
+    assert d["metrics"]["rmse_skill_ratio"] < 1.0
+    assert d["random_walk"]["available"] is True
+    assert "UNADJUSTED" in d["note"]
+    assert d["data_as_of"]
+    assert any("hold-out" in a for a in d["assumptions"])
+
+
+def test_forecast_endpoint_reports_no_skill_on_a_flat_then_falling_series(client):
+    # TEST2 declines monotonically; a drift model should track it well.
+    d = client.post(
+        "/api/forecast", json={"symbol": "TEST2", "model": "drift", "horizon": 3, "holdout": 5}
+    ).json()
+    assert d["metrics"]["rmse_skill_ratio"] == pytest.approx(0.0, abs=1e-6)
+    assert d["verdict"].startswith("BEATS NAIVE")
+
+
+def test_forecast_endpoint_errors(client):
+    assert client.post("/api/forecast", json={"symbol": "NOPE"}).status_code == 404
+    assert (
+        client.post("/api/forecast", json={"symbol": "TEST1", "model": "crystal_ball"}).status_code
+        == 400
+    )
+    assert client.post("/api/forecast", json={"symbol": "TEST1", "horizon": 0}).status_code == 422
+    # Not enough history for a 120-step hold-out (TEST2 has 120 bars).
+    r = client.post("/api/forecast", json={"symbol": "TEST2", "horizon": 120})
+    assert r.status_code == 400
+    assert "need at least" in r.json()["detail"]
+
+
+def test_forecast_compare_endpoint(client):
+    d = client.post(
+        "/api/forecast/compare", json={"symbol": "TEST1", "horizon": 3, "holdout": 5}
+    ).json()
+    rmses = [row["rmse"] for row in d["ranking"]]
+    assert rmses == sorted(rmses)
+    assert d["naive_rmse"] is not None
+    assert "single sample" in d["note"]
+    assert d["symbol"] == "TEST1"
+
+
+# ------------------------------------------------------- research assistant
+def test_research_topics_endpoint(client):
+    d = client.get("/api/research/topics").json()
+    assert [t["key"] for t in d["topics"]] == [
+        "trend",
+        "momentum",
+        "risk",
+        "volume",
+        "levels",
+        "relative",
+        "data",
+    ]
+    assert all(t["help"] for t in d["topics"])
+    assert "no language model" in d["what_this_is"]
+    assert "not a prediction" in d["what_this_is_not"]
+
+
+def test_research_topics_route_is_not_read_as_a_symbol(client):
+    # /api/research/{symbol} would otherwise swallow the literal "topics".
+    assert client.get("/api/research/topics").status_code == 200
+
+
+def test_research_report_endpoint_cites_every_finding(client):
+    d = client.get("/api/research/TEST1").json()
+    assert d["symbol"] == "TEST1"
+    assert d["live"] is False
+    assert d["findings"] and d["limits"]
+    assert all(f["source"] and f["window"] for f in d["findings"])
+    assert d["as_of"]
+
+
+def test_research_unknown_symbol_is_404(client):
+    assert client.get("/api/research/NOPE").status_code == 404
+    assert (
+        client.post("/api/research/ask", json={"symbol": "NOPE", "question": "trend"}).status_code
+        == 404
+    )
+
+
+def test_research_ask_routes_by_topic(client):
+    out = client.post(
+        "/api/research/ask", json={"symbol": "TEST1", "question": "what is the risk?"}
+    ).json()
+    assert out["refused"] is False
+    assert out["topics"] == ["risk"]
+    assert out["findings"] and all(f["topic"] == "risk" for f in out["findings"])
+
+
+def test_research_ask_refuses_to_recommend(client):
+    out = client.post(
+        "/api/research/ask", json={"symbol": "TEST1", "question": "should I buy now?"}
+    ).json()
+    assert out["refused"] is True
+    assert out["findings"] == []
+    assert "will not produce one" in out["refusal_reason"]

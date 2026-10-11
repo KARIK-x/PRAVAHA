@@ -30,6 +30,15 @@ from megatool.backtest import (
 )
 from megatool.config import HOST, PATHS, PORT, ensure_dirs
 from megatool.db import get_conn, init_app_db
+from megatool.forecast import (
+    MODELS as FORECAST_MODELS,
+)
+from megatool.forecast import (
+    ForecastError,
+    compare_models,
+    naive_drift_check,
+    run_forecast,
+)
 from megatool.journal import (
     JournalError,
     journal_stats,
@@ -62,6 +71,16 @@ from megatool.portfolio import (
     list_transactions,
     remove_manual_position,
     value_portfolio,
+)
+from megatool.research import (
+    TOPIC_HELP,
+    TOPICS,
+)
+from megatool.research import (
+    answer as research_answer,
+)
+from megatool.research import (
+    build_report as research_report,
 )
 from megatool.scanner import (
     METRIC_HELP,
@@ -141,6 +160,35 @@ class PydanticPlanRequest(BaseModel):
     exit_price: float | None = None
     capital: float | None = None
     risk_pct: float | None = None
+
+
+class PydanticForecastRequest(BaseModel):
+    """Forecast one symbol's stored closes."""
+
+    symbol: str
+    model: str = "naive"
+    horizon: int = Field(5, ge=1, le=120)
+    holdout: int | None = Field(None, ge=1, le=1000)
+    params: dict[str, Any] = Field(default_factory=dict)
+    start: date | None = None
+    end: date | None = None
+
+
+class PydanticForecastCompareRequest(BaseModel):
+    """Score every registered model on the identical split."""
+
+    symbol: str
+    horizon: int = Field(5, ge=1, le=120)
+    holdout: int | None = Field(None, ge=1, le=1000)
+    start: date | None = None
+    end: date | None = None
+
+
+class PydanticAskRequest(BaseModel):
+    """A plain-language question for the research assistant."""
+
+    symbol: str
+    question: str = Field("", max_length=500)
 
 
 def create_app(store: MarketStore | None = None) -> FastAPI:
@@ -493,6 +541,114 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
             "Historical calculation only. The assumptions are listed in "
             "`assumptions`; past performance does not indicate future results."
         )
+        return payload
+
+    # ----------------------------------------------------------- forecasting
+    @app.get("/api/forecast/models")
+    def forecast_models() -> dict[str, Any]:
+        """The models on offer, with their default parameters."""
+        return {
+            "models": [{"key": key, **spec} for key, spec in FORECAST_MODELS.items()],
+            "note": (
+                "Every model is scored against the naive 'last value' forecast on "
+                "a hold-out window it never saw. Beating that baseline once is "
+                "not evidence of a tradeable edge."
+            ),
+        }
+
+    @app.post("/api/forecast")
+    def forecast(req: PydanticForecastRequest) -> dict[str, Any]:
+        """Fit on the past, score on an unseen window, then project forward."""
+        store = get_store()
+        symbol = req.symbol.upper()
+        df = store.get_bars(symbol, start=req.start, end=req.end)
+        if df.empty:
+            raise HTTPException(404, f"no stored history for {symbol}")
+        try:
+            result = run_forecast(
+                df["close"].to_numpy(),
+                model=req.model,
+                horizon=req.horizon,
+                holdout=req.holdout,
+                params=req.params,
+                dates=[str(d.date()) for d in df["trading_date"]],
+            )
+        except ForecastError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        payload = result.to_dict()
+        payload["symbol"] = symbol
+        payload["data_as_of"] = str(df["trading_date"].max().date())
+        payload["live"] = False
+        payload["random_walk"] = naive_drift_check(df["close"].to_numpy())
+        payload["note"] = (
+            "Statistical projection of stored, UNADJUSTED closes. This is not a "
+            "prediction of what the market will do and not investment advice."
+        )
+        return payload
+
+    @app.post("/api/forecast/compare")
+    def forecast_compare(req: PydanticForecastCompareRequest) -> dict[str, Any]:
+        """Rank every model on one identical, honest split."""
+        store = get_store()
+        symbol = req.symbol.upper()
+        df = store.get_bars(symbol, start=req.start, end=req.end)
+        if df.empty:
+            raise HTTPException(404, f"no stored history for {symbol}")
+        out = compare_models(
+            df["close"].to_numpy(),
+            horizon=req.horizon,
+            holdout=req.holdout,
+            dates=[str(d.date()) for d in df["trading_date"]],
+        )
+        out["symbol"] = symbol
+        out["data_as_of"] = str(df["trading_date"].max().date())
+        out["live"] = False
+        return out
+
+    # -------------------------------------------------- research assistant
+    @app.get("/api/research/topics")
+    def research_topics() -> dict[str, Any]:
+        """What the assistant can answer - and what it refuses to."""
+        return {
+            "topics": [{"key": k, "help": TOPIC_HELP[k]} for k in TOPICS],
+            "what_this_is": (
+                "A deterministic rules engine over stored bars. It returns a "
+                "number, the window it came from, and the definition used, so "
+                "every claim can be checked. There is no language model behind "
+                "it: no LLM key exists in this project and no local model fits "
+                "this machine."
+            ),
+            "what_this_is_not": (
+                "Not an opinion, not a recommendation, not a prediction. It "
+                "cannot read news or filings, and it will not tell you to buy "
+                "or sell anything."
+            ),
+        }
+
+    @app.get("/api/research/{symbol}")
+    def research_symbol(symbol: str) -> dict[str, Any]:
+        """Full descriptive report for one symbol, every figure cited."""
+        store = get_store()
+        sym = symbol.upper()
+        df = store.get_bars(sym)
+        if df.empty:
+            raise HTTPException(404, f"no stored history for {sym}")
+        universe = store.all_closes() if len(store.symbols()) > 1 else None
+        payload = research_report(df, sym, universe=universe).to_dict()
+        payload["live"] = False
+        return payload
+
+    @app.post("/api/research/ask")
+    def research_ask(req: PydanticAskRequest) -> dict[str, Any]:
+        """Ask a plain question. Predictive questions are refused on purpose."""
+        store = get_store()
+        sym = req.symbol.upper()
+        df = store.get_bars(sym)
+        if df.empty:
+            raise HTTPException(404, f"no stored history for {sym}")
+        universe = store.all_closes() if len(store.symbols()) > 1 else None
+        payload = research_answer(df, sym, req.question, universe=universe)
+        payload["live"] = False
         return payload
 
     # ------------------------------------------------------------- portfolio
