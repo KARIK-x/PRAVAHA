@@ -278,11 +278,128 @@ VISUALLY_READ_PAGE_23: list[dict[str, Any]] = [
     },
 ]
 
+#: Page 30, read directly off ``raw_pages/page_30.png`` on 2026-10-12.
+#:
+#: Three blocks — 12D, 12E, 12F. Before this read the page's 3 candidate blocks
+#: and 20 unplaced figures had no human reading behind them at all; the parser
+#: produced them from OCR and nobody had looked.
+#:
+#: The red Received/Paid annotations sit in small cursive clouds. 12E's was
+#: legible and matches its net to the paisa. 12D's and 12F's were not, so
+#: ``settled`` and ``settled_on`` are ``None`` — deliberately not transcribed
+#: rather than guessed. A ``None`` here means "not read", never "zero".
+VISUALLY_READ_PAGE_30: list[dict[str, Any]] = [
+    {
+        "label": "12D",
+        "page": 30,
+        "dates": "16/18/19/22 Dec buy, 16/18/19 Dec sell",
+        "buy_components": [98_889.26, 95_841.88, 75_943.63, 12_782.66],
+        "buy_total": 283_457.42,
+        "buy_total_is_written": True,
+        "sell_components": [105_891.72, 124_982.81, 196_245.12],
+        "sell_total": 427_119.65,
+        "net": 143_662.23,
+        "direction": "receivable",
+        "settled": None,
+        "settled_label": "Received",
+        "settled_on": None,
+        "components_ok": {"buy": False, "sell": True},
+        "net_matches_written_totals": True,
+        "source_discrepancies": [
+            "buy components sum to 283457.43 but the written total is 283457.42 (0.01)",
+        ],
+        "superseded_readings": [],
+        "ocr_notes": [
+            "The 0.01 buy gap sits at the limit of what this scan resolves — a "
+            "5 versus a 6 in the last digit of one component would produce it — "
+            "so it may be a misread component rather than an error in the "
+            "notebook. Both readings are kept as read; neither was changed to "
+            "close the gap.",
+            "The red Received cloud (amount and date) could not be resolved at "
+            "this magnification. settled and settled_on are None by choice: "
+            "nothing was guessed. Re-read the cloud before using this block.",
+        ],
+        "verification_status": VerificationStatus.VERIFIED.value,
+        "evidence": (
+            "visual read of raw_pages/page_30.png on 2026-10-12; sell "
+            "components sum to 427119.65 exactly and 427119.65 - 283457.42 = "
+            "143662.23 exactly. The Received annotation was NOT read — "
+            "settled is None"
+        ),
+    },
+    {
+        "label": "12E",
+        "page": 30,
+        "dates": "24/26 Dec buy, 24 Dec sell",
+        "buy_components": [63_953.84, 63_180.95],
+        "buy_total": 127_134.79,
+        "buy_total_is_written": True,
+        "sell_components": [98_933.23],
+        "sell_total": 98_933.23,
+        "net": 28_201.56,
+        "direction": "payable",
+        "settled": 28_201.56,
+        "settled_label": "Paid",
+        "settled_on": "29 Dec",
+        "components_ok": {"buy": True, "sell": True},
+        "net_matches_written_totals": True,
+        "source_discrepancies": [],
+        "superseded_readings": [],
+        "ocr_notes": [],
+        "verification_status": VerificationStatus.VERIFIED.value,
+        "evidence": (
+            "visual read of raw_pages/page_30.png on 2026-10-12; 63953.84 + "
+            "63180.95 = 127134.79 and 127134.79 - 98933.23 = 28201.56 "
+            "exactly, matching the boxed Net Payable and the red Paid note"
+        ),
+    },
+    {
+        "label": "12F",
+        "page": 30,
+        "dates": "29/31 Dec buy, 29/31 Dec sell",
+        "buy_components": [24_958.15, 131_261.64],
+        "buy_total": 156_219.79,
+        "buy_total_is_written": True,
+        "sell_components": [],
+        "sell_total": 142_725.91,
+        "net": 13_493.88,
+        "direction": "payable",
+        "settled": None,
+        "settled_label": "Paid",
+        "settled_on": None,
+        "components_ok": {"buy": True, "sell": False},
+        "net_matches_written_totals": True,
+        "source_discrepancies": [],
+        "superseded_readings": [],
+        "ocr_notes": [
+            "The two sell line items were not resolved to reliable figures, so "
+            "sell_components is empty rather than filled with a guess. The "
+            "written sell total 142725.91 appears twice on the page — under "
+            "the Sell column and inside the Net Payable calculation — and is "
+            "what was read. components_ok.sell is False because there is "
+            "nothing to check, not because a sum disagreed.",
+            "The red Paid cloud (amount and date) could not be resolved at "
+            "this magnification. settled and settled_on are None by choice. "
+            "A figure reading 12557.57 appears elsewhere on the page but "
+            "could not be tied to this annotation, so it is not recorded as "
+            "the payment.",
+        ],
+        "verification_status": VerificationStatus.VERIFIED.value,
+        "evidence": (
+            "visual read of raw_pages/page_30.png on 2026-10-12; 24958.15 + "
+            "131261.64 = 156219.79 exactly and 156219.79 - 142725.91 = "
+            "13493.88 exactly. The sell components and the Paid annotation "
+            "were NOT read — one list is empty, the other fields are None"
+        ),
+    },
+]
+
 #: Every settlement read off a page image so far, across pages.
 ALL_VISUALLY_READ: list[dict[str, Any]] = [
     *VERIFIED_SETTLEMENT_DETAILS,
     *VISUALLY_READ_PAGE_19,
     *VISUALLY_READ_PAGE_23,
+    *VISUALLY_READ_PAGE_30,
 ]
 
 #: Pages from which at least one settlement has been read by eye.
@@ -301,7 +418,7 @@ VISUALLY_READ_PAGES: frozenset[int] = frozenset(d["page"] for d in ALL_VISUALLY_
 #:
 #: Inspecting a page is not transcribing it. It stays out of
 #: :data:`VISUALLY_READ_PAGES` because no record came off it.
-VISUALLY_INSPECTED_PAGES: frozenset[int] = frozenset({19, 20, 21, 23})
+VISUALLY_INSPECTED_PAGES: frozenset[int] = frozenset({19, 20, 21, 23, 30})
 
 # Separators OCR commonly substitutes for a decimal point in this document:
 # the notebook is handwritten, and Vision returns •, ·, - and , as readily as .

@@ -227,7 +227,19 @@ def write_csvs(manifest: list[dict[str, Any]]) -> dict[str, int]:
         for k in d:
             if k not in keys:
                 keys.append(k)
-    settlements = [{k: d.get(k, "") for k in keys} for d in ALL_VISUALLY_READ]
+
+    # CSV is a deliverable other tools read, so structured values are written
+    # as JSON rather than Python repr — ``{'buy': True}`` is not parseable
+    # outside Python, and ``None`` means "not read" so it becomes an empty
+    # cell rather than the text "None".
+    def _csv_value(v: Any) -> Any:
+        if v is None:
+            return ""
+        if isinstance(v, (list, dict)):
+            return json.dumps(v, ensure_ascii=False)
+        return v
+
+    settlements = [{k: _csv_value(d.get(k, "")) for k in keys} for d in ALL_VISUALLY_READ]
     with (OUT_DIR / "settlements.csv").open("w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=keys)
         w.writeheader()

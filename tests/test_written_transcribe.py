@@ -33,6 +33,7 @@ from megatool.written_transcribe import (
     VISUALLY_INSPECTED_PAGES,
     VISUALLY_READ_PAGE_19,
     VISUALLY_READ_PAGE_23,
+    VISUALLY_READ_PAGE_30,
     VISUALLY_READ_PAGES,
     detect_settlement_label,
     extract_settlements,
@@ -403,8 +404,9 @@ def test_the_visually_read_set_grows_without_losing_page_membership():
     assert len(VERIFIED_SETTLEMENT_DETAILS) == 4
     assert len(VISUALLY_READ_PAGE_19) == 3
     assert len(VISUALLY_READ_PAGE_23) == 2
-    assert len(ALL_VISUALLY_READ) == 9
-    assert sorted(VISUALLY_READ_PAGES) == [19, 21, 23]
+    assert len(VISUALLY_READ_PAGE_30) == 3
+    assert len(ALL_VISUALLY_READ) == 12
+    assert sorted(VISUALLY_READ_PAGES) == [19, 21, 23, 30]
     assert all(d["verification_status"] == "verified" for d in ALL_VISUALLY_READ)
     # Every record still names the page it came from.
     assert all("page" in d for d in ALL_VISUALLY_READ)
@@ -460,7 +462,7 @@ def test_inspecting_a_page_is_not_the_same_as_transcribing_it():
     transcribed" rather than silently counting page 20 among the pages whose
     settlements were read.
     """
-    assert sorted(VISUALLY_INSPECTED_PAGES) == [19, 20, 21, 23]
+    assert sorted(VISUALLY_INSPECTED_PAGES) == [19, 20, 21, 23, 30]
     # Anything read must also have been looked at.
     assert VISUALLY_READ_PAGES <= VISUALLY_INSPECTED_PAGES
     # Page 20 is the gap between the two sets.
@@ -490,6 +492,54 @@ def test_page23_closes_exactly_and_explains_the_refused_ocr_token():
     assert parse_money("55,642.28") == 55_642.28
     assert f["sell_total"] == 55_642.28
     assert any("refused" in n for n in f["ocr_notes"])
+
+
+def test_page30_records_say_what_they_did_not_read_instead_of_guessing():
+    """An un-resolvable annotation becomes ``None``, never a plausible number.
+
+    The red Received/Paid clouds on 12D and 12F are small cursive. Choosing a
+    figure because it would fit the net is exactly the failure mode that
+    produced the withdrawn 186,129.76, so the fields stay ``None`` and the
+    reason goes in ``ocr_notes``.
+    """
+    by_label = {d["label"]: d for d in VISUALLY_READ_PAGE_30}
+    assert set(by_label) == {"12D", "12E", "12F"}
+
+    d, e, f = by_label["12D"], by_label["12E"], by_label["12F"]
+
+    # 12E's Paid note is legible and equals its net to the paisa.
+    assert e["settled"] == e["net"] == 28_201.56
+    assert e["settled_on"] == "29 Dec"
+    assert e["ocr_notes"] == []
+
+    # The other two were not read, and say so rather than offering a number.
+    for block in (d, f):
+        assert block["settled"] is None
+        assert block["settled_on"] is None
+        assert any("not" in n.lower() and "gu" in n.lower() for n in block["ocr_notes"])
+        assert "NOT read" in block["evidence"]
+
+    # A None is "not read", never zero: it must not look like a settled 0.
+    assert all(block["settled"] != 0 for block in (d, e, f))
+
+    # 12F's sell line items were not resolved, so the list is empty and
+    # components_ok says False — with a note that no sum disagreed.
+    assert f["sell_components"] == []
+    assert f["components_ok"] == {"buy": True, "sell": False}
+    assert any("nothing to check" in n for n in f["ocr_notes"])
+
+    # What was read closes on the written totals for all three. 12D is a
+    # receivable, so its net is sell − buy while the two payables are
+    # buy − sell — |buy − sell| is the check that fits both.
+    for block in (d, e, f):
+        assert block["net_matches_written_totals"] is True
+        assert round(abs(block["buy_total"] - block["sell_total"]), 2) == block["net"]
+
+    # 12D's 0.01 buy gap is recorded, not closed by editing a component.
+    assert d["components_ok"] == {"buy": False, "sell": True}
+    assert len(d["source_discrepancies"]) == 1
+    assert "0.01" in d["source_discrepancies"][0]
+    assert d["buy_total"] == 283_457.42
 
 
 # ================================================================ provenance
