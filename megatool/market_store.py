@@ -25,6 +25,21 @@ import pandas as pd
 
 from megatool.config import PATHS, ensure_dirs
 
+#: Predicate matching rows that are safe to use in arithmetic.
+#:
+#: ``invalid`` is the ``hard`` severity from :mod:`megatool.quality` — rows
+#: that are physically impossible (``high < low``, negative or zero price,
+#: missing OHLC). Every read path that feeds indicator, screening, ranking,
+#: backtest or forecast arithmetic applies this.
+#:
+#: ``COALESCE`` rather than a bare ``<> 'invalid'``: in SQL ``NULL <> 'invalid'``
+#: is ``NULL``, which is not true, so a stray ``NULL`` status would silently
+#: drop *every* bar for a symbol and look like "this symbol has no data". The
+#: schema says ``NOT NULL DEFAULT 'valid'``, but the cost of being defensive
+#: here is nothing and the cost of being wrong is a whole universe vanishing.
+#: The same COALESCE is already used on the insert path.
+_NOT_INVALID = "COALESCE(validation_status, 'valid') <> 'invalid'"
+
 _BARS_DDL = """
 CREATE SEQUENCE IF NOT EXISTS seq_price_bars START 1;
 CREATE TABLE IF NOT EXISTS price_bars (
@@ -305,15 +320,34 @@ class MarketStore:
         start: date | None = None,
         end: date | None = None,
         limit: int | None = None,
+        include_invalid: bool = False,
     ) -> pd.DataFrame:
         """Return one symbol's bars ascending by date, as a DataFrame.
 
         ``limit`` keeps the **most recent** N bars (the charting-terminal
         meaning of "last 6 months"), not the oldest N. The ordering is applied
         inside a subquery so the returned frame is still chronological.
+        ``limit`` is applied *after* the invalid-row filter, so a caller asking
+        for "the last 200 bars" gets 200 usable ones rather than 200 rows of
+        which some are unusable.
+
+        **Invalid rows are excluded by default** (B-17). ``invalid`` is the
+        ``hard`` severity in :mod:`megatool.quality` — physically impossible
+        rows such as ``high < low``, a negative or zero price, or missing OHLC.
+        Feeding those into ATR, range, return or drawdown arithmetic produces
+        numbers that are not merely noisy but meaningless. ``suspect`` rows
+        stay: they are uncertain, not impossible, and dropping ~2.5% of the
+        series because a volume spike looked odd would silently smooth away
+        the very history being researched.
+
+        Pass ``include_invalid=True`` to inspect flagged rows — the API's raw
+        bars endpoint exposes that switch, because a row still carries its
+        ``validation_status`` and ``flags`` and should remain diagnosable.
         """
         inner = "SELECT * FROM price_bars WHERE symbol = ?"
         params: list[Any] = [symbol.upper()]
+        if not include_invalid:
+            inner += f" AND {_NOT_INVALID}"
         if start is not None:
             inner += " AND trading_date >= ?"
             params.append(start)
@@ -327,36 +361,57 @@ class MarketStore:
             sql = f"{inner} ORDER BY trading_date ASC"
         return self.execute(sql, params).df()
 
-    def latest_bars(self, symbols: Sequence[str] | None = None) -> pd.DataFrame:
-        """Most recent bar per symbol - the dashboard's snapshot view."""
+    def latest_bars(
+        self, symbols: Sequence[str] | None = None, include_invalid: bool = False
+    ) -> pd.DataFrame:
+        """Most recent bar per symbol - the dashboard's snapshot view.
+
+        With the filter on, this is the most recent **valid** bar, which means
+        a symbol whose newest bar is impossible reports the previous usable one
+        rather than a fabricated price. Measured on the real store: no symbol's
+        newest bar is currently `invalid`, so no snapshot is stale as a result
+        today. `/api/quality` reports `stale_days` for any future case where
+        this fallback would start to matter (B-17).
+        """
         if symbols:
             ph = ",".join("?" for _ in symbols)
+            where = f"symbol IN ({ph})"
+            if not include_invalid:
+                where += f" AND {_NOT_INVALID}"
             return self.execute(
                 f"""
                 SELECT * EXCLUDE (rn) FROM (
                     SELECT *, ROW_NUMBER() OVER (
                         PARTITION BY symbol ORDER BY trading_date DESC) AS rn
-                    FROM price_bars WHERE symbol IN ({ph})
+                    FROM price_bars WHERE {where}
                 ) WHERE rn = 1 ORDER BY symbol
                 """,
                 [s.upper() for s in symbols],
             ).df()
+        where = "1=1" if include_invalid else _NOT_INVALID
         return self.execute(
-            """
+            f"""
             SELECT * EXCLUDE (rn) FROM (
                 SELECT *, ROW_NUMBER() OVER (
                     PARTITION BY symbol ORDER BY trading_date DESC) AS rn
-                FROM price_bars
+                FROM price_bars WHERE {where}
             ) WHERE rn = 1 ORDER BY symbol
             """
         ).df()
 
-    def all_closes(self) -> pd.DataFrame:
-        """Wide close-price matrix (dates x symbols) for cross-sectional work."""
+    def all_closes(self, include_invalid: bool = False) -> pd.DataFrame:
+        """Wide close-price matrix (dates x symbols) for cross-sectional work.
+
+        Invalid rows are excluded: an impossible close would enter every
+        percentile and cross-sectional rank built from this matrix (B-17).
+        """
+        where = "close IS NOT NULL"
+        if not include_invalid:
+            where = f"{_NOT_INVALID} AND {where}"
         return self.execute(
-            """
+            f"""
             PIVOT (
-                SELECT trading_date, symbol, close FROM price_bars WHERE close IS NOT NULL
+                SELECT trading_date, symbol, close FROM price_bars WHERE {where}
                 GROUP BY trading_date, symbol, close
             )
             ON symbol USING MAX(close)

@@ -26,6 +26,17 @@ fact or a human decision), **NEXT**, **BACKLOG**.
 B-02 were reversed by visual reads of pages 19/21/23** — the "bugs" were in the
 earlier audit's readings, not the notebook.
 
+### Autonomous engineering session (2026-10-12, continuation)
+
+| ID | Task | Evidence |
+|---|---|---|
+| T-A10 | Reconcile the reported terminal state | Commits `6065623` / `6088232` present, tree clean, `main`. **729 passed** reproduced before touching anything. PDF SHA `d7ea6fe4…` and mtime `Oct 12 08:33:12` unchanged. App DB 16 tables (only `ingestion_log` 5, `schema_meta` 1 non-empty). DuckDB **514,018 bars / 372 symbols** but locked by the still-running prior-session server (PID 54377) — stopped it, confirmed the lock released, restarted with the changed code (PID 10082). |
+| T-22 | Decide on B-17 (`invalid` bars in the read path) | **FIXED — invalid rows filtered from all three read paths.** `_NOT_INVALID` applied to `get_bars`, `latest_bars`, `all_closes`, each with an `include_invalid` opt-in, plus `include_flagged` on `GET /api/bars/{symbol}`. `suspect` deliberately kept. Measured: 124 rows excluded, **45/45** symbols' full-history ATR changed, **8** all-time lows corrected from `0.0`, **0** symbols lost a latest price, **0** removed. Tests 729 → **731**. |
+| T-A11 | Live end-to-end route verification | New `scripts/smoke_live.py` builds its probe list from the server's own `/openapi.json` so it cannot drift: **35 of 45 routes probed (27/27 GET, 8/8 read-only POST), 35 expected, 0 unexpected, exit 0**; 10 mutating routes skipped by design. First run found **3 probe defects, 0 product defects** — the script was wrong (bad entry_id placeholder, missing `exit_price`), not the API. |
+
+**Test count: 729 → 731.** No product defect was found by the live probe; the
+only defect found and fixed this session was B-17.
+
 ---
 
 ## NEXT — highest value first
@@ -189,7 +200,6 @@ credentials.
 | T-19 | Transcribe PDF pages 18–33 | Settlement arithmetic self-checks make these the highest-yield pages (T-09). |
 | T-20 | `TASK_QUEUE.md` / `KNOWN_BUGS.md` upkeep | Update with every fix. |
 | T-21 | Decide on L-05 (median substitution) | Computing percentiles over **observed values only** is methodologically cleaner but changes every score. Owner's call. |
-| T-22 | Decide on B-17 (`invalid` bars in the read path) | Options: filter `invalid` out of `get_bars`; or expose a `include_flagged` switch defaulting to off; or leave and document. 124 invalid + 13,093 suspect rows are currently consumed by indicator maths. |
 | T-23 | Decide on B-18 (renamed-PDF re-import duplication) | Dedupe on `content_hash` alone, or filter `query_records` to the newest `import_id`. |
 | T-24 | Store `extraction_method` and an append-only correction history | Both missing from `pdf_records` (manifest, field-provenance table). |
 | T-25 | Populate the Fundamentals Lab | Import path is complete and tested; waiting on a permitted source. |

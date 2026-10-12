@@ -126,9 +126,16 @@ all three were fixed because each is small, contained, and has **no live caller*
 
 Not fixed, because each changes observable behaviour and is the owner's call:
 **L-05** (median substitution moves 284 of 369 ranks), **L-06** (inverted
-factors never reach 100), **B-17** (`invalid` bars reach indicator maths),
-**B-18** (renamed-PDF re-import duplicates). Each is documented and pinned by a
-test so it cannot regress unnoticed.
+factors never reach 100), **B-18** (renamed-PDF re-import duplicates). Each is
+documented and pinned by a test so it cannot regress unnoticed.
+
+**B-17** (`invalid` bars reaching indicator maths) was in that list and is now
+**fixed** — the mission brief authorises correcting verified defects, and an
+arithmetically impossible row (`high < low`, price `0.0`) is a defect rather
+than a judgement call. Measured impact on the real store: 45 symbols' ATR
+changed, 8 symbols' all-time low corrected from `0.0`, **0 symbols lost their
+latest price and 0 symbols disappeared**. `suspect` rows are deliberately still
+included — uncertain is not impossible. See KNOWN_BUGS B-17.
 
 ### Decision: the ranking's "reproducible by hand" claim is qualified, not repeated
 

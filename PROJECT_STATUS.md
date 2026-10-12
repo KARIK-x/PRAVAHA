@@ -11,9 +11,15 @@ marked working because the code exists. The labels mean:
 | `NOT-IMPLEMENTED` | Deliberately not built. The reason is stated |
 | `NOT-TESTED` | Code exists but has not been executed/observed |
 
-Test suite: **729 passed, 0 failed** (18 files, `.venv/bin/python -m pytest -p no:warnings`, 2026-10-12).
-`ruff check` and `ruff format` clean. Live server verified in a real browser
-via Playwright.
+Test suite: **731 passed, 0 failed** (18 files, `.venv/bin/python -m pytest -p no:warnings`, 2026-10-12).
+`ruff check` and `ruff format` clean. Live app verified this session against the
+running server with the real 514,018-row store: `scripts/smoke_live.py` derives
+its probe list from the server's own OpenAPI spec and exercised **35 of 45
+routes — 27/27 GET and 8/8 read-only POST — all returning an expected status
+(35/35, exit 0)**; the remaining 10 routes mutate state and were skipped by
+design. Slowest: `/api/rank` 20.1 s, `/api/screen/export.csv` 3.8 s,
+`/api/quality` 7.5 s. Browser UI was verified via Playwright in an earlier
+session.
 
 ---
 
@@ -141,9 +147,11 @@ Evidence, not assertions. Everything below was executed and observed.
 
 | What | How | Result |
 | --- | --- | --- |
-| Full test suite | `.venv/bin/python -m pytest -p no:warnings` | **729 passed, 0 failed**, 36.90 s (was 709) |
+| Full test suite | `.venv/bin/python -m pytest -p no:warnings` | **731 passed, 0 failed**, 41.36 s (was 709, then 729) |
 | Lint / format | `ruff check megatool/ tests/ scripts/`, `ruff format --check` | clean (55 files) |
 | Front end | `node --check web/static/app.js` | clean |
+| Live route coverage | `.venv/bin/python scripts/smoke_live.py` (server restarted on the changed code) | **35/45 routes probed, 35 expected, 0 unexpected, exit 0**; 10 mutating routes skipped by design |
+| B-17 fix impact | DuckDB aggregates over `price_bars` before/after | 124 `invalid` rows excluded; **45/45** affected symbols' full-history ATR changed; **8** all-time lows corrected from `0.0`; **0** symbols lost a latest price, **0** removed |
 | Real data in the store | `GET /api/status` on the running server | **514,018 bars, 372 symbols**, 1995-07-20 → 2026-10-09 (was 89,580 / 60 before the 2026-10-12 fetch) |
 | Every browser tab | Playwright, clicking through all **11** tabs | **0 console errors** |
 | Ranking on real data | `POST /api/rank` against the 372-symbol universe | 369 ranked / 3 excluded with reasons; **0 of 369 had contributions that did not sum to the score**; 8 flagged as incomplete |

@@ -673,38 +673,169 @@ def test_backtest_labels_its_assumptions():
 # ===========================================================================
 
 
-def test_invalid_bars_are_still_returned_by_the_read_path(tmp_path):
-    """PARTIAL: the read path does not filter on validation_status.
+def test_invalid_bars_are_filtered_from_the_read_path(tmp_path):
+    """B-17 FIXED: physically impossible rows no longer reach indicator maths.
 
-    The store marks bad rows ('invalid'/'suspect') and surfaces them through
-    the API, but get_bars returns them, so indicator maths sees them too. The
-    real store holds 124 invalid and 13,093 suspect rows of 514,018. This test
-    pins the CURRENT behaviour so the limitation cannot be forgotten; it does
-    not endorse it. See KNOWN_BUGS.
+    ``invalid`` is the ``hard`` severity in quality.py — ``high < low``,
+    negative or zero price, missing OHLC. A row with ``high=9, low=11`` makes
+    ATR, range, drawdown and volatility meaningless, so ``get_bars`` now
+    excludes it by default.
+
+    ``suspect`` rows are deliberately NOT filtered: they are uncertain, not
+    impossible, and silently dropping ~2.5% of history because a volume spike
+    looked odd would smooth away the very events being researched.
+
+    ``include_invalid=True`` is the diagnostic escape hatch and must still
+    return the rows with their flags intact, so nothing becomes undiagnosable.
     """
     store = MarketStore(tmp_path / "market.duckdb")
     n = 5
     store.upsert_bars(
         pd.DataFrame(
             {
-                "symbol": ["BAD"] * n,
-                "trading_date": pd.bdate_range("2026-01-01", periods=n),
-                "open": [10.0] * n,
-                "high": [9.0] * n,  # high < low: physically impossible
-                "low": [11.0] * n,
-                "close": [10.0] * n,
-                "volume": [100] * n,
-                "source": ["TEST"] * n,
-                "retrieved_at": [RETRIEVED] * n,
-                "validation_status": ["invalid"] * n,
-                "flags": ["high_low_inverted"] * n,
+                "symbol": ["BAD"] * n + ["OK"] * n + ["SUS"] * n + ["NON"] * n,
+                "trading_date": list(pd.bdate_range("2026-01-01", periods=n)) * 4,
+                "open": [10.0] * (4 * n),
+                "high": [9.0] * n + [12.0] * (3 * n),  # high < low on BAD only
+                "low": [11.0] * n + [9.0] * (3 * n),
+                "close": [10.0] * (4 * n),
+                "volume": [100] * (4 * n),
+                "source": ["TEST"] * (4 * n),
+                "retrieved_at": [RETRIEVED] * (4 * n),
+                "validation_status": ["invalid"] * n + ["valid"] * n + ["suspect"] * n + [None] * n,
+                "flags": ["high_low_inverted"] * n + [None] * (3 * n),
             }
         )
     )
+
+    # Default: the impossible rows are gone, everything else survives.
     bars = store.get_bars("BAD")
+    assert len(bars) == 0, "physically impossible rows must not reach calculations"
+    assert len(store.get_bars("OK")) == n, "clean rows must never be dropped"
+    assert len(store.get_bars("SUS")) == n, "suspect rows are uncertain, not impossible"
+    # A NULL status must not be treated as invalid: NULL <> 'invalid' is NULL,
+    # and COALESCE is what stops a stray NULL hiding an entire symbol.
+    assert len(store.get_bars("NON")) == n, "an unset status means 'valid', not 'missing'"
+
+    # The diagnostic path still sees them, flags intact.
+    flagged = store.get_bars("BAD", include_invalid=True)
+    assert len(flagged) == n
+    assert set(flagged["validation_status"]) == {"invalid"}
+    assert set(flagged["flags"]) == {"high_low_inverted"}
+
+    # limit applies AFTER the filter: "last 5 bars" means 5 usable bars.
+    store.upsert_bars(
+        pd.DataFrame(
+            {
+                "symbol": ["MIX"] * (n + 3),
+                "trading_date": list(pd.bdate_range("2026-02-01", periods=n + 3)),
+                "open": [10.0] * (n + 3),
+                "high": [12.0] * (n + 3),
+                "low": [9.0] * (n + 3),
+                "close": [10.0] * (n + 3),
+                "volume": [100] * (n + 3),
+                "source": ["TEST"] * (n + 3),
+                "retrieved_at": [RETRIEVED] * (n + 3),
+                "validation_status": ["invalid"] * 3 + ["valid"] * n,
+                "flags": [None] * (n + 3),
+            }
+        )
+    )
+    assert len(store.get_bars("MIX", limit=5)) == 5
     store.close()
-    assert len(bars) == n, "invalid rows are returned today, not filtered out"
-    assert set(bars["validation_status"]) == {"invalid"}
+
+
+def test_a_zero_price_row_cannot_set_a_symbols_all_time_low(tmp_path):
+    """The real-world shape of B-17: ``low = 0.0`` dragging a 52-week low to zero.
+
+    Measured against the real store before this fix: 8 symbols reported an
+    all-time lowest low of ``0.0`` because one ``zero_price`` row sat in their
+    history (CMB 0.0 -> 22.0, SMATA 0.0 -> 411.0, STC 0.0 -> 200.0, ...). Any
+    support/resistance, distance-from-low or drawdown metric built on that was
+    measuring the corruption, not the market.
+
+    ``0.0`` is classified ``hard``/``invalid`` by quality.py, so the read path
+    must drop it while leaving the surrounding real bars untouched.
+    """
+    store = MarketStore(tmp_path / "market.duckdb")
+    store.upsert_bars(
+        pd.DataFrame(
+            {
+                "symbol": ["ZP"] * 4,
+                "trading_date": list(pd.bdate_range("2026-01-01", periods=4)),
+                "open": [100.0, 100.0, 100.0, 100.0],
+                "high": [105.0, 105.0, 105.0, 105.0],
+                "low": [95.0, 0.0, 95.0, 95.0],  # bar 2 is a zero-price corruption
+                "close": [100.0, 100.0, 100.0, 100.0],
+                "volume": [1000, 1000, 1000, 1000],
+                "source": ["TEST"] * 4,
+                "retrieved_at": [RETRIEVED] * 4,
+                "validation_status": ["valid", "invalid", "valid", "valid"],
+                "flags": [None, "zero_price", None, None],
+            }
+        )
+    )
+    bars = store.get_bars("ZP")
+    assert len(bars) == 3, "the corrupted bar must be gone, the real ones kept"
+    assert float(bars["low"].min()) == 95.0, "a 0.0 low must never be a support level"
+    assert list(bars["open"]) == [100.0] * 3, "neighbouring bars are untouched"
+    assert float(store.get_bars("ZP", include_invalid=True)["low"].min()) == 0.0
+    store.close()
+
+
+def test_snapshot_and_cross_sectional_reads_also_exclude_invalid(tmp_path):
+    """B-17 covers every read path, not just get_bars.
+
+    ``latest_bars`` feeds the dashboard's "current price" and portfolio
+    valuation; ``all_closes`` feeds every cross-sectional percentile. An
+    impossible row in either would be presented as fact.
+    """
+    store = MarketStore(tmp_path / "market.duckdb")
+    store.upsert_bars(
+        pd.DataFrame(
+            {
+                "symbol": ["AAA"] * 3 + ["BBB"] * 3,
+                "trading_date": list(pd.bdate_range("2026-01-01", periods=3)) * 2,
+                "open": [10.0] * 6,
+                "high": [12.0] * 6,
+                "low": [9.0] * 6,
+                "close": [10.0] * 6,
+                "volume": [100] * 6,
+                "source": ["TEST"] * 6,
+                "retrieved_at": [RETRIEVED] * 6,
+                # AAA's most recent bar is impossible: BBB must still appear,
+                # AAA must not be reported with a garbage latest price.
+                "validation_status": ["valid", "valid", "invalid", "valid", "valid", "valid"],
+                "flags": [None, None, "high_low_inverted", None, None, None],
+            }
+        )
+    )
+
+    latest = store.latest_bars()
+    assert set(latest["symbol"]) == {"AAA", "BBB"}
+    aaa = latest[latest["symbol"] == "AAA"].iloc[0]
+    assert str(aaa["trading_date"])[:10] == "2026-01-02", "latest must skip the invalid newest bar"
+    assert aaa["validation_status"] != "invalid"
+
+    # Opting in still works for diagnostics.
+    latest_all = store.latest_bars(include_invalid=True)
+    aaa_all = latest_all[latest_all["symbol"] == "AAA"].iloc[0]
+    assert aaa_all["validation_status"] == "invalid"
+
+    # Cross-sectional matrix: the invalid row contributes no close for AAA on
+    # its date, so AAA is NaN there rather than a fabricated price. The date
+    # axis still exists because BBB traded that day.
+    closes = store.all_closes()
+    assert len(closes) == 3, "all three trading dates are present"
+    row = closes[closes["trading_date"].astype(str).str[:10] == "2026-01-05"].iloc[0]
+    assert pd.isna(row["AAA"]), "an invalid close must not appear as a cross-sectional price"
+    assert row["BBB"] == 10.0
+
+    # Opting in restores it for diagnostics.
+    closes_all = store.all_closes(include_invalid=True)
+    row_all = closes_all[closes_all["trading_date"].astype(str).str[:10] == "2026-01-05"].iloc[0]
+    assert row_all["AAA"] == 10.0
+    store.close()
 
 
 def test_bar_rows_carry_per_row_provenance(tmp_path):

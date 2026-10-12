@@ -1,6 +1,6 @@
 # Test results
 
-**Last run:** 2026-10-12 · **729 passed, 0 failed, 0 skipped** · 36.90 s · exit 0
+**Last run:** 2026-10-12 · **731 passed, 0 failed, 0 skipped** · 41.36 s · exit 0
 **Lint:** `ruff check` clean · `ruff format --check` clean (55 files)
 **Front end:** `node --check web/static/app.js` clean
 
@@ -29,7 +29,7 @@ node --check web/static/app.js
 | `test_written_transcribe.py` | 57 **(new)** |
 | `test_audit_a_fixes.py` | 45 |
 | `test_written_pdf.py` | 39 |
-| `test_financial_integrity.py` | 35 |
+| `test_financial_integrity.py` | 37 |
 | `test_research.py` | 32 |
 | `test_backtest.py` | 32 |
 | `test_journal.py` | 30 |
@@ -41,9 +41,9 @@ node --check web/static/app.js
 | `test_planning.py` | 21 |
 | `test_written_reference.py` | 20 **(new)** |
 | `test_cli_floor.py` | 9 |
-| **Total (18 files)** | **729** |
+| **Total (18 files)** | **731** |
 
-Progression: 511 (13 files) → 602 → 650 → 707 → 709 → **729** (18 files).
+Progression: 511 (13 files) → 602 → 650 → 707 → 709 → 729 → **731** (18 files).
 
 ---
 
@@ -71,7 +71,7 @@ only that it is read, refused, or kept as the page and the rules say.
 | Inspection ≠ transcription | page 20 is in `VISUALLY_INSPECTED_PAGES` but in no read page — a page that was opened but yielded no record must not be counted as transcribed |
 | Uniform record shape | all **15** visually read settlements share one key set (page 21's `net` column was briefly empty when two shapes collided) |
 
-### `test_financial_integrity.py` (35) — Phase 2 of the completion audit
+### `test_financial_integrity.py` (37, +2 for the B-17 fix) — Phase 2 of the completion audit
 
 Every expected value in this file is worked out by hand, in comments, from a
 fixture written by hand. Nothing asks the module under test for its own
@@ -89,7 +89,7 @@ expected value.
 | Backtest costs | Round trip hand-computed → fees **398.40**, final equity **99,601.60**, and `initial − final == fees` exactly |
 | Backtest timing | `next_open` fills at the bar *after* the signal (entry 40.0, not the signal bar's close of 10.0); `same_close` buys at the signal bar and must be labelled |
 | Duplicate trades | Rapid signal toggling → distinct `(entry, exit)` pairs, none duplicated, none ending before they start |
-| Market data | Per-row provenance present; `(symbol, date)` unique; and B-17's unfiltered `invalid` rows pinned as current behaviour |
+| Market data | Per-row provenance present; `(symbol, date)` unique; **B-17 fixed** — `invalid` rows excluded from `get_bars`/`latest_bars`/`all_closes`, `suspect` kept, `include_invalid` opt-in, and a `low = 0.0` row proven unable to set a symbol's all-time low |
 
 ### `test_fundamentals.py` (56, +12) — guard hardening from the audit
 

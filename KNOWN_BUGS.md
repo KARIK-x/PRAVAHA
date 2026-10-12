@@ -232,21 +232,47 @@ was itself fabricated — see B-02. Closed by re-reading page 21 directly from
 and all four settlements on the page reconcile exactly. The report now carries
 the verified table plus the correction history.
 
-### B-17 — Bars marked `invalid` are not filtered from the read path — **OPEN**
+### B-17 — Bars marked `invalid` are not filtered from the read path — **FIXED (2026-10-12)**
 
-`get_bars` has no `validation_status` predicate, so flagged rows flow into
-every indicator, scan, backtest and forecast. The real store holds:
+**Was:** `get_bars` had no `validation_status` predicate, so flagged rows flowed
+into every indicator, scan, backtest and forecast.
 
-| status | rows |
+**Fix:** `get_bars`, `latest_bars` and `all_closes` now exclude
+`validation_status = 'invalid'` by default (`_NOT_INVALID` in `market_store.py`).
+Each accepts `include_invalid=True`, and `GET /api/bars/{symbol}` exposes it as
+`include_flagged` so flagged rows stay diagnosable rather than vanishing.
+
+The predicate uses `COALESCE(validation_status,'valid') <> 'invalid'` because
+`NULL <> 'invalid'` is `NULL`, not true — a stray `NULL` would silently drop an
+entire symbol and read as "no data".
+
+**Why `invalid` and not `suspect`:** `invalid` is the `hard` severity in
+`quality.py` — physically impossible rows (`high < low`, negative or zero price,
+missing OHLC). `suspect` is `review` severity — uncertain, not impossible.
+Dropping ~2.5% of history because a volume spike looked odd would smooth away
+the very events being researched, so `suspect` still flows through.
+
+**Measured impact on the real store** (514,018 rows; `valid` 500,801,
+`suspect` 13,093, `invalid` 124 — of which 115 `high_low_inverted` and 9
+`zero_price`):
+
+| check | result |
 |---|---|
-| `valid` | 500,801 |
-| `suspect` | 13,093 |
-| `invalid` | 124 |
+| symbols losing their latest (dashboard/portfolio) price | **0** |
+| symbols removed entirely | **0** |
+| symbols containing invalid rows | 45 |
+| full-history ATR changed | **45 / 45** (CMB −15.09%, SMATA −1.49%, BBC −1.20%) |
+| all-time lowest low corrected | **8 / 45** — `0.0` → real value |
+| recent (14-bar) windows affected | 0 — every invalid row is historical |
 
-including **115 `high_low_inverted`** rows and 555 rows whose close is outside
-`[low, high]`. The status is stored per row and surfaced by the API, but it is
-informational only. Pinned by `test_invalid_bars_are_still_returned_by_the_read_path`
-so the limitation cannot be forgotten.
+The lowest-low corrections are the clearest harm removed: CMB `0.0 → 22.0`,
+SMATA `0.0 → 411.0`, STC `0.0 → 200.0`, NICL `0.0 → 190.0`, RLFL `0.0 → 106.0`,
+GMFIL `0.0 → 110.0`, PFL `0.0 → 91.0`, MPFL `0.0 → 53.0`. Support/resistance and
+distance-from-low metrics on those symbols were measuring the corruption.
+
+**Pinned by** `test_invalid_bars_are_filtered_from_the_read_path`,
+`test_a_zero_price_row_cannot_set_a_symbols_all_time_low`,
+`test_snapshot_and_cross_sectional_reads_also_exclude_invalid`.
 
 ### B-18 — Re-importing the PDF under a different filename duplicates records — **OPEN**
 

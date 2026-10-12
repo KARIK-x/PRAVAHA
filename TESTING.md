@@ -7,7 +7,7 @@ Every claim in this file was verified by executing the named command on the proj
 
 | Command | Result |
 | --- | --- |
-| `uv run pytest` | **729 passed**, ~37 s |
+| `uv run pytest` | **731 passed**, ~41 s |
 | `ruff check .` | clean |
 | `ruff format .` | clean |
 
@@ -22,7 +22,7 @@ Per-file test counts:
 | `tests/test_written_reference.py` | 20 | Secondary-digitization labelling, settlement-block regressions, totals and component cross-checks, CSV encoding |
 | `tests/test_audit_a_fixes.py` | 45 | Regression tests for defects found by Audit A and Audit B |
 | `tests/test_written_pdf.py` | 39 | PDF extraction, validation, idempotent import, confidence filter, review workflow, settlement reconciliation |
-| `tests/test_financial_integrity.py` | 35 | Hand-computed fixtures for money, P&L and ratio arithmetic |
+| `tests/test_financial_integrity.py` | 37 | Hand-computed fixtures for money, P&L and ratio arithmetic; B-17 invalid-bar filtering |
 | `tests/test_research.py` | 32 | Cited findings, question routing, refusal of predictions, journal-only answer |
 | `tests/test_backtest.py` | 32 | Long/flat engine, fills, fees, assumptions |
 | `tests/test_journal.py` | 30 | CRUD, win rate, R multiples, plan adherence, unknown fields |
@@ -33,7 +33,7 @@ Per-file test counts:
 | `tests/test_scanner.py` | 21 | Metrics, presets, filter-tree validation |
 | `tests/test_planning.py` | 21 | Position sizing, R multiples, warnings |
 | `tests/test_cli_floor.py` | 9 | `megatool floor import` / `floor summary` |
-| **Total (18 files)** | **729** | |
+| **Total (18 files)** | **731** | |
 
 A separate, non-pytest benchmark measures handwriting extraction on five
 ground-truthed PDF pages — see `TEST_RESULTS.md` for the numbers and

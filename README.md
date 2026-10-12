@@ -25,7 +25,7 @@ uv run megatool serve        # start the web terminal at http://127.0.0.1:8710
 Run the test suite:
 
 ```bash
-uv run pytest                # 729 tests, ~37s
+uv run pytest                # 731 tests, ~37s
 ```
 
 Stop the server with `Ctrl-C`.
@@ -34,7 +34,7 @@ Stop the server with `Ctrl-C`.
 
 | Area | What you get |
 | --- | --- |
-| **Data** | 514,018 real daily bars across 372 symbols (1995 → 2026-10-09), every row carrying its source and retrieval time |
+| **Data** | 514,018 real daily bars across 372 symbols (1995 → 2026-10-09), every row carrying its source and retrieval time. Physically impossible rows (high below low, zero or negative price) are excluded from every calculation while `suspect` rows are kept and disclosed |
 | **Charting** | Candles, volume and 28 indicators, aligned to price by trading date |
 | **Scanner** | 19 metrics, 4 presets, composable AND/OR filter trees |
 | **Backtesting** | Own long/flat engine: next-bar-open fills, fees and slippage, a buy-and-hold benchmark, and every assumption printed with the result |

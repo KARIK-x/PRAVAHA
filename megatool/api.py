@@ -401,9 +401,20 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
         start: date | None = None,
         end: date | None = None,
         limit: int | None = Query(None, ge=1, le=5000),
+        include_flagged: bool = Query(
+            False,
+            description=(
+                "include rows marked validation_status=invalid (physically "
+                "impossible: high<low, negative/zero price, missing OHLC). "
+                "Off by default so charting and indicators never see them; "
+                "on for diagnosing what the quality report found."
+            ),
+        ),
     ) -> dict[str, Any]:
         store = get_store()
-        df = store.get_bars(symbol.upper(), start=start, end=end, limit=limit)
+        df = store.get_bars(
+            symbol.upper(), start=start, end=end, limit=limit, include_invalid=include_flagged
+        )
         if df.empty:
             raise HTTPException(404, f"no stored history for {symbol.upper()}")
         src = sorted(set(df["source"].dropna()))
