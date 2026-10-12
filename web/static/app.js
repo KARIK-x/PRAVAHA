@@ -105,6 +105,9 @@ function viewShown(name) {
   } else if (name === "pdf") {
     loadPdfSummary();
     loadPdfRecords();
+  } else if (name === "floorsheet") {
+    loadFsSessions();
+    loadFloorSheet();
   }
 }
 
@@ -1121,6 +1124,193 @@ async function reviewPdfRecords(ids, status) {
   }
 }
 
+/* ------------------------------------------------------------ floor sheet */
+async function loadFsSessions() {
+  try {
+    const d = await api("/api/floorsheet/sessions");
+    const sel = $("#fs-session");
+    const keep = sel.value;
+    sel.innerHTML =
+      `<option value="">All sessions</option>` +
+      (d.sessions || [])
+        .map(
+          (s) =>
+            `<option value="${esc(s.traded_at)}">${esc(s.traded_at)} · ${fmtInt(s.prints)} prints</option>`
+        )
+        .join("");
+    if (keep) sel.value = keep;
+  } catch (e) {
+    /* an empty session list is a normal state, not an error to surface */
+  }
+}
+
+async function loadFloorSheet() {
+  const params = new URLSearchParams();
+  const session = $("#fs-session").value;
+  const symbol = ($("#fs-symbol").value || "").trim();
+  if (session) params.set("traded_at", session);
+  if (symbol) params.set("symbol", symbol.toUpperCase());
+  params.set("top", $("#fs-top").value || "10");
+  try {
+    const d = await api(`/api/floorsheet/summary?${params}`);
+    renderFloorSheet(d);
+  } catch (e) {
+    $("#fs-totals").innerHTML = `<div class="error">${esc(e.message)}</div>`;
+  }
+}
+
+function renderFloorSheet(d) {
+  const t = d.totals || {};
+  const f = d.filter || {};
+  $("#fs-totals").innerHTML =
+    [
+      ["Prints", fmtInt(t.trades)],
+      ["Symbols", fmtInt(t.symbols)],
+      ["Sessions", fmtInt(t.sessions)],
+      ["Quantity", fmtSmart(t.quantity)],
+      ["Amount", fmtSmart(t.amount)],
+    ]
+      .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v" style="font-size:16px">${v}</div></div>`)
+      .join("") +
+    `<p class="hint">Scope: ${esc(f.traded_at || "all sessions")} · ${esc(f.symbol || "all symbols")}</p>`;
+
+  $("#fs-warnings").innerHTML =
+    (d.warnings || []).map((w) => `<li class="warn">${esc(w)}</li>`).join("") ||
+    "<li class='muted'>No warnings.</li>";
+
+  const money = (v) => (v === null || v === undefined ? "—" : fmtSmart(v));
+  const pct = (v) => (v === null || v === undefined ? "—" : `${Number(v).toFixed(2)}%`);
+  const empty = `<div class="empty">Nothing imported yet. Paste a session's floor sheet above.</div>`;
+
+  const counterparty = (rows, key) =>
+    rows && rows.length
+      ? table(
+          ["Broker", "Quantity", "Amount", "% of session qty", "% of session amount"],
+          rows.map((r) => [
+            { html: `<b>${esc(r[key])}</b>` },
+            { html: fmtInt(r.quantity) },
+            { html: money(r.amount) },
+            { html: pct(r.share_of_quantity_pct) },
+            { html: pct(r.share_of_amount_pct) },
+          ])
+        )
+      : empty;
+
+  $("#fs-buyers").innerHTML = counterparty(d.top_buyers, "buyer");
+  $("#fs-sellers").innerHTML = counterparty(d.top_sellers, "seller");
+
+  $("#fs-symbols").innerHTML =
+    d.top_symbols && d.top_symbols.length
+      ? table(
+          ["Symbol", "Quantity", "Amount", "Prints", "Distinct buyers", "Distinct sellers"],
+          d.top_symbols.map((r) => [
+            { html: `<b>${esc(r.symbol)}</b>` },
+            { html: fmtInt(r.quantity) },
+            { html: money(r.amount) },
+            { html: fmtInt(r.prints) },
+            { html: fmtInt(r.distinct_buyers) },
+            { html: fmtInt(r.distinct_sellers) },
+          ])
+        )
+      : empty;
+
+  $("#fs-pairs").innerHTML =
+    d.top_counterparties && d.top_counterparties.length
+      ? table(
+          ["Buyer", "Seller", "Prints", "Quantity", "Amount"],
+          d.top_counterparties.map((r) => [
+            { html: esc(r.buyer) },
+            { html: esc(r.seller) },
+            { html: fmtInt(r.prints) },
+            { html: fmtInt(r.quantity) },
+            { html: money(r.amount) },
+          ])
+        )
+      : empty;
+
+  const c = d.concentration || {};
+  const hhi = (v) => (v === null || v === undefined ? "—" : Number(v).toFixed(0));
+  $("#fs-concentration").innerHTML =
+    table(
+      ["Side", "Unique broker codes", "HHI", "Reading"],
+      [
+        [
+          { html: "<b>Buyers</b>" },
+          { html: fmtInt(c.unique_buyers) },
+          { html: hhi(c.buyer_hhi) },
+          { html: hhiReading(c.buyer_hhi), cls: "wrap" },
+        ],
+        [
+          { html: "<b>Sellers</b>" },
+          { html: fmtInt(c.unique_sellers) },
+          { html: hhi(c.seller_hhi) },
+          { html: hhiReading(c.seller_hhi), cls: "wrap" },
+        ],
+      ]
+    ) + `<p class="hint">${esc(c.interpretation || "")}</p>`;
+
+  $("#fs-sessions").innerHTML =
+    d.sessions && d.sessions.length
+      ? table(
+          ["Session", "Prints", "Amount"],
+          d.sessions.map((r) => [
+            { html: `<b>${esc(r.traded_at)}</b>` },
+            { html: fmtInt(r.prints) },
+            { html: money(r.amount) },
+          ])
+        )
+      : `<div class="empty">No sessions imported.</div>`;
+
+  $("#fs-imports").innerHTML =
+    d.recent_imports && d.recent_imports.length
+      ? table(
+          ["Source", "Session", "Rows imported", "When"],
+          d.recent_imports.map((r) => [
+            { html: esc(r.source || "—") },
+            { html: esc(r.traded_at) },
+            {
+              html: `${fmtInt(r.rows_imported)} / ${fmtInt(r.rows_total)} (skipped ${fmtInt(r.rows_skipped)})`,
+            },
+            { html: esc(r.imported_at || "—"), cls: "wrap muted" },
+          ])
+        )
+      : `<div class="empty">No imports recorded.</div>`;
+}
+
+function hhiReading(hhi) {
+  if (hhi === null || hhi === undefined) return "—";
+  const v = Number(hhi);
+  if (v >= 2500) return `<span class="bad">concentrated</span>`;
+  if (v >= 1500) return `moderate`;
+  return `dispersed`;
+}
+
+async function importFloorSheet() {
+  const text = $("#fs-import-text").value;
+  const traded_at = $("#fs-import-date").value;
+  const msg = $("#fs-import-msg");
+  msg.textContent = "";
+  if (!text.trim()) { msg.textContent = "Paste the CSV text first."; return; }
+  if (!traded_at) { msg.textContent = "Pick the trading date this sheet belongs to."; return; }
+  try {
+    const d = await api("/api/floorsheet/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        traded_at,
+        source: ($("#fs-import-source").value || "").trim() || "manual import",
+      }),
+    });
+    msg.textContent = `Imported ${d.rows_imported} of ${d.rows_total} rows (${d.rows_skipped} skipped).`;
+    $("#fs-import-text").value = "";
+    loadFsSessions();
+    loadFloorSheet();
+  } catch (e) {
+    msg.textContent = e.message;
+  }
+}
+
 function renderJournalStats(s) {
   // With no closed trades the API returns nulls, not zeroes: "—" is shown so a
   // missing statistic is never presented as a real 0%.
@@ -1357,6 +1547,11 @@ function boot() {
   $("#pdf-page").addEventListener("keydown", (e) => { if (e.key === "Enter") loadPdfRecords(); });
   $("#pdf-reviewed").addEventListener("change", loadPdfRecords);
   $("#pdf-type").addEventListener("change", loadPdfRecords);
+  $("#fs-load").addEventListener("click", loadFloorSheet);
+  $("#fs-session").addEventListener("change", loadFloorSheet);
+  $("#fs-top").addEventListener("change", loadFloorSheet);
+  $("#fs-symbol").addEventListener("keydown", (e) => { if (e.key === "Enter") loadFloorSheet(); });
+  $("#fs-import").addEventListener("click", importFloorSheet);
 
   loadFreshness();
   loadSymbols();

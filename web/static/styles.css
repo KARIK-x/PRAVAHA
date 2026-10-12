@@ -119,6 +119,16 @@ ul.list li.warn { color: var(--warn); }
 ul.list li.muted { color: var(--muted); }
 .warn { color: var(--warn); }
 
+/* Cell-level verdicts used by the tables (confidence, review status, HHI). */
+.good { color: var(--up); }
+.bad { color: var(--down); }
+
+/* Free-text import boxes (floor sheet CSV). */
+textarea { width: 100%; background: var(--bg3); color: var(--txt);
+  border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px;
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
+textarea:focus { outline: none; border-color: var(--accent); }
+
 /* Research findings: a heading per topic and readable nested values. */
 .topic-head { margin: 16px 0 2px; font-size: 12px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .05em; color: var(--info); }

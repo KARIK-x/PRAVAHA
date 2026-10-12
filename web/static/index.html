@@ -27,6 +27,7 @@
   <button data-view="screener">Screener</button>
   <button data-view="backtest">Backtest</button>
   <button data-view="data">Data &amp; Quality</button>
+  <button data-view="floorsheet">Floor Sheet</button>
   <button data-view="research">Research</button>
   <button data-view="portfolio">Portfolio</button>
   <button data-view="journal">Journal</button>
@@ -384,6 +385,86 @@
     <div class="card">
       <h2>Per-strategy breakdown (closed entries)</h2>
       <div id="jr-by-strategy" class="tablewrap"></div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------- FLOOR SHEET -->
+  <section id="view-floorsheet" class="view">
+    <div class="card">
+      <h2>Floor sheet — concentration &amp; counterparty analysis</h2>
+      <p class="note">
+        Import-based: there is no floor-sheet API, so a session's CSV is pasted
+        in below. Everything here is <b>descriptive, never a signal</b>. Broker
+        codes are not beneficial owners, and a printed trade does not say why
+        it happened.
+      </p>
+      <div id="fs-totals" class="stat-row"></div>
+      <ul id="fs-warnings" class="list"></ul>
+    </div>
+
+    <div class="controls">
+      <label>Session
+        <select id="fs-session"><option value="">All sessions</option></select>
+      </label>
+      <label>Symbol
+        <input id="fs-symbol" placeholder="ADBL" />
+      </label>
+      <label>Top N
+        <select id="fs-top">
+          <option value="10">10</option>
+          <option value="25">25</option>
+          <option value="50">50</option>
+        </select>
+      </label>
+      <button id="fs-load" class="primary">Analyse</button>
+    </div>
+
+    <div class="card">
+      <h2>Import a session's floor sheet</h2>
+      <p class="hint">
+        Paste the CSV text and the trading date it belongs to. Re-importing the
+        same file for the same session adds nothing.
+      </p>
+      <div class="controls">
+        <label>Trading date
+          <input id="fs-import-date" type="date" />
+        </label>
+        <label>Source
+          <input id="fs-import-source" placeholder="manual import" />
+        </label>
+      </div>
+      <textarea id="fs-import-text" rows="6" placeholder="CSV text: symbol,buyer,seller,quantity,rate,amount,..."></textarea>
+      <div class="controls">
+        <button id="fs-import" class="primary">Import floor sheet</button>
+        <span id="fs-import-msg" class="hint"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Top buyers</h2>
+      <div id="fs-buyers" class="tablewrap"></div>
+    </div>
+    <div class="card">
+      <h2>Top sellers</h2>
+      <div id="fs-sellers" class="tablewrap"></div>
+    </div>
+    <div class="card">
+      <h2>Most traded symbols</h2>
+      <div id="fs-symbols" class="tablewrap"></div>
+    </div>
+    <div class="card">
+      <h2>Top buyer → seller pairs</h2>
+      <p class="hint">A repeated pair can be a house trading with itself or a cross. It is not evidence of anything.</p>
+      <div id="fs-pairs" class="tablewrap"></div>
+    </div>
+    <div class="card">
+      <h2>Concentration &amp; sessions</h2>
+      <div id="fs-concentration" class="tablewrap"></div>
+      <div id="fs-sessions" class="tablewrap"></div>
+    </div>
+    <div class="card">
+      <h2>Recent imports</h2>
+      <div id="fs-imports" class="tablewrap"></div>
     </div>
   </section>
 
