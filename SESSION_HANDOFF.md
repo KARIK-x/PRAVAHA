@@ -15,7 +15,7 @@ uv sync                     # dependencies into ./.venv (Python 3.12.3)
 uv run megatool init        # create/upgrade the local databases
 uv run megatool fetch       # download real NEPSE history (network)
 uv run megatool serve       # web terminal at http://127.0.0.1:8710
-uv run pytest               # 650 tests, ~34 s
+uv run pytest               # 707 tests, ~68 s
 ```
 
 The server binds `127.0.0.1` only. Nothing listens on the network interface.
@@ -29,7 +29,7 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | Analysis | `scanner.py`, `backtest.py`, `forecast.py`, `research.py`, `floorsheet.py` |
 | Personal state | `portfolio.py` (ledger-derived), `journal.py`, `planning.py` |
 | Interface | `api.py` (FastAPI, 45 routes), `cli.py` (incl. `megatool floor import|summary`), `web/static/` (11 tabs) |
-| Tests | `tests/` — 650 tests across 16 files |
+| Tests | `tests/` — 707 tests across 17 files |
 | Docs | `docs/ARCHITECTURE.md`, `DATA_SOURCES.md`, `TECH_STACK_DECISIONS.md`, `RESEARCH_REGISTER.md`, `PROJECT_STATUS.md`, `TESTING.md`, `SOURCES.md`, `DECISIONS.md`, `KNOWN_BUGS.md`, `TEST_RESULTS.md`, `TASK_QUEUE.md`, this file |
 
 ### Data actually in the store
@@ -261,23 +261,28 @@ problem.
    quotes 0.24–0.36% commission, 0.015% SEBON, Rs 25 DP charge, 7.5%/10% capital gains
    tax and T+2 — **none verified**, and web search is unavailable here, so none was
    hard-coded. Needs an authoritative source (`TASK_QUEUE.md` T-12).
-10. **A transcription error was found in the PDF work.** Page 21 settlement 9A's buy
-    figure was recorded as `177,609.76`; the correct value is `186,129.76`, off by
-    8,520 NPR — only the arithmetic caught it (`186,129.76 − 120,579.43 = 65,550.33`,
-    the exact recorded net). Corrected in the benchmark ground truth; **the audit
-    document still carries the old number**, and no other page has been re-checked the
-    same way (`KNOWN_BUGS.md` B-02).
-11. **Extracted values are not safe for accounting.** The benchmark measured Apple Vision
-    at 90.2% numeric recall (vs Tesseract's 4.3%) — a big win, but it still drops digits
-    from large totals: page 21's largest settlement was read as `77609.76` for a true
-    `186129.76`. Arithmetic self-checks are the mitigation, and they are what caught gap 10.
+10. **A fabricated correction was found and reversed in the PDF work.** An earlier
+    audit recorded page 21 settlement 9A as buy `177,609.76` / sell `120,579.43`,
+    found they did not balance to the recorded net of `65,550.33`, and "corrected" the
+    buy to `186,129.76` *because that value balanced*. Re-reading the page image on
+    2026-10-12 gives **77,609.76 / 12,059.43 / 65,550.33**, which balance exactly.
+    The 8,520 NPR discrepancy never existed. `186,129.76` is withdrawn everywhere
+    (`KNOWN_BUGS.md` B-02, closed B-16).
+11. **Extracted values are not safe for accounting.** Against the corrected ground
+    truth Apple Vision scores **94.6% numeric / 75.0% exact** over the 5 benchmark
+    pages (Tesseract: 4.3% / 3.3%). It still drops digits on dense pages — page 18 is
+    84% numeric. Arithmetic self-checks are the mitigation, and item 10 is the reason
+    they must flag a row and never edit it (`KNOWN_BUGS.md` L-07).
 12. **Local vision-language models remain untested.** Ollama 0.5.7 refuses every vision
     model with `412: requires a newer version` (latest v0.40.3). Updating an installed
     application is a machine change I left to the owner.
 13. **The third-party dataset licence is unresolved.**
 14. **PDF transcription is the open work** — the extraction infrastructure is
-    complete and tested (render → transcribe → validate → import → review), but
-    handwriting defeats automated OCR on 42 of 52 pages, so each page must be
+    complete and tested (render → transcribe → validate → import → review), and
+    Apple Vision now reads all 52 pages as a first pass. What remains is human
+    verification: 46 of 52 pages have never been transcribed and every one of the
+    64 sample records is still `unreviewed`. Only page 21's four settlements are
+    visually verified.
     transcribed visually. 64 sample records are imported as unreviewed. See
     `docs/WRITTEN_DATA_PDF_AUDIT.md`. The benchmark now gives a practical route:
     Apple Vision as a first pass, arithmetic checks to flag disagreements, human
@@ -285,7 +290,7 @@ problem.
 
 ## 7. Verification evidence
 
-- `uv run pytest` — **650 passed, 0 failed** (2026-10-12), 16 test files.
+- `uv run pytest` — **707 passed, 0 failed** (2026-10-12), 17 test files.
 - `ruff check` and `ruff format` — clean.
 - All **ten** web tabs exercised in a real browser (Playwright) with **0 console errors**;
   the refusal path, the oversell rejection, the empty-journal "—" and the PDF tab's
@@ -306,13 +311,14 @@ problem.
 
 Mirrors `TASK_QUEUE.md`, which carries the same list with acceptance criteria.
 
-1. **Re-verify the PDF transcription page by page (T-09).** A real 8,520 NPR
-   transcription error was found this session (gap 10) and was only caught by
-   arithmetic. Practical route now measured: run Apple Vision as a first pass
-   (`scripts/vision_ocr.swift`), let the settlement/total arithmetic self-checks
-   flag disagreements, and visually review only the flagged rows. Pages 18–33
-   (the trading records) are the highest yield because their arithmetic
-   self-checks. The audit document still carries the wrong 9A figure.
+1. **Continue the page-by-page PDF transcription (T-09).** Page 21 is done — its
+   four settlements are visually verified, and the re-read overturned a fabricated
+   correction (gap 10). The measured route now works end to end: run Apple Vision
+   across all 52 pages (`scripts/run_vision_ocr.py`, orientation-aware, resumable),
+   let the settlement/total arithmetic self-checks flag disagreements, and visually
+   review only the flagged rows. Pages 18–33 (the trading records) are the highest
+   yield because their arithmetic self-checks; pages 19 and 23 are already parsed
+   and queued for review, and 20, 22, 24–33 are not yet extracted.
 2. **Ask the owner about an Ollama upgrade (T-10)** — the one part of the
    handwriting benchmark left undone. Ollama 0.5.7 refuses every vision model
    with `412`; latest is v0.40.3. Updating an installed application is a machine

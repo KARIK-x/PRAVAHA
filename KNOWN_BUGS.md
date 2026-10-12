@@ -16,7 +16,7 @@ the recorded net. Page 21 of `WRITTENdata.pdf` labels its figure
 fact correct:
 
 ```
-9A: RAISED -> sell 120579.43 - buy 186129.76 = -65550.33, but net recorded as 65550.33
+9A: RAISED -> sell 12059.43 - buy 77609.76 = -65550.33, but net recorded as 65550.33
 9B: RAISED -> sell 88169.68 - buy 106186.34 = -18016.66, but net recorded as 18016.66
 9C: RAISED -> ... 9D: RAISED -> ...
 ```
@@ -28,19 +28,45 @@ fact correct:
 `..._still_rejects_wrong_net_when_buy_exceeds_sell`.
 *Impact if unfixed:* every valid settlement would be flagged, so the
 arithmetic self-check would have been unusable.
+*Evidence note (2026-10-12):* the 9A figures above were re-read directly from
+`raw_pages/page_21.png` and are correct. An earlier revision of this entry
+showed `186129.76` / `120579.43` for 9A; both were wrong — see B-02.
 
 ---
 
-### B-02 — Transcription error in the source record — **FIXED (data)**
+### B-02 — A fabricated "correction" was applied to settlement 9A — **REVERSED**
 
-*Where:* `docs/WRITTEN_DATA_VALIDATION_REPORT.md` (earlier audit)
-*Symptom:* page 21 settlement 9A's buy figure was previously recorded as
-`177,609.76`. The correct value is **`186,129.76`** — only arithmetic confirms
-it: `186,129.76 − 120,579.43 = 65,550.33`, exactly the recorded net. The old
-figure was off by 8,520 and reconciled to nothing.
-*Status:* corrected in this session's benchmark ground truth; the original
-audit text still carries the old number and should be re-checked page by page.
-*Impact:* an 8,520 NPR error in a settlement total.
+*Where:* `docs/WRITTEN_DATA_VALIDATION_REPORT.md`, `KNOWN_BUGS.md`,
+`PROJECT_STATUS.md`, `SESSION_HANDOFF.md`, `TASK_QUEUE.md`,
+`tests/test_financial_integrity.py`,
+`data/written_pdf/benchmark/ground_truth.json`
+*What actually happened:* an earlier audit recorded 9A's buy as `177,609.76`
+and its sell as `120,579.43`, noticed those did not produce the recorded net
+of `65,550.33`, and "corrected" the buy to **`186,129.76`** because that value
+happened to balance. That is exactly the forbidden move — re-reading a figure
+so an equation closes.
+
+*What the page actually says* (direct visual read of `raw_pages/page_21.png`,
+2026-10-12):
+
+| Settlement | Date | Buy | Sell | Net Payable | Paid |
+|---|---|---|---|---|---|
+| 9A | 11 sep / 1 sep | **77,609.76** | **12,059.43** | 65,550.33 | 65,550.33 on 12th Sep |
+| 9B | 16 sep / 16 sep | 106,186.34 | 88,169.68 | 18,016.66 | 18,016.66 on 22nd Sep |
+| 9C | 18 sep / 18 sep | 189,763.58 | 157,168.39 | 32,595.19 | 32,595.19 on 24th Sep |
+| 9D | 22 sep / 22 sep | 54,157.24 | 45,035.39 | 9,121.85 | 9,121.85 on 25th Sep |
+
+`77,609.76 − 12,059.43 = 65,550.33` — exact to the paisa, as do 9B, 9C and 9D.
+**There was never an 8,520 NPR discrepancy on this page.** It was an artefact
+of the misread sell figure (`120,579.43` for `120,59.43`/`12,059.43`).
+
+*Consequences:* the `186,129.76` figure is withdrawn everywhere it appeared and
+must never be imported. Apple Vision's page-21 numeric recall, measured
+against the corrected ground truth, is **100%** (12/12) rather than the 83%
+previously reported — the OCR had read 9A correctly all along, and the
+benchmark target was wrong, not the engine.
+*Impact if left:* a fabricated number would have entered the notebook's
+digital record as "arithmetic-verified".
 
 ---
 
@@ -198,11 +224,13 @@ keyword argument on `ratio_pe`, `ratio_pb` and `ratio_dividend_yield`; omitting
 it is a `TypeError`, not a silent pass-through. Dividend yield gained the
 staleness and unknown-period checks it never had.
 
-### B-16 — `docs/WRITTEN_DATA_VALIDATION_REPORT.md` still shows the wrong 9A figure — **OPEN (T-09)**
+### B-16 — `docs/WRITTEN_DATA_VALIDATION_REPORT.md` still showed the wrong 9A figure — **CLOSED (2026-10-12)**
 
-Line 30 still reads `177,609.76`. The correct value is `186,129.76`. Every
-other document was corrected; this one was not, because correcting it requires
-re-reading page 21 (T-09) rather than trusting arithmetic.
+Line 30 read `177,609.76`, and the "correction" applied to it (`186,129.76`)
+was itself fabricated — see B-02. Closed by re-reading page 21 directly from
+`raw_pages/page_21.png`: the figures are **77,609.76 / 12,059.43 / 65,550.33**
+and all four settlements on the page reconcile exactly. The report now carries
+the verified table plus the correction history.
 
 ### B-17 — Bars marked `invalid` are not filtered from the read path — **OPEN**
 
@@ -230,17 +258,87 @@ across 2 imports).
 
 ---
 
+## Findings in the source document (not code defects)
+
+These are things the notebook itself does. They are recorded, never repaired:
+the transcription keeps what is written and reports the disagreement.
+
+### S-01 — Page 19, 8C: sell components exceed the written total by 1.00
+
+`154,824.76 + 71,535.52 = 226,360.28`, but the page's sell total reads
+**226,359.28**. Both numbers are what the page says, so both are stored —
+`sell_total` stays `226_359.28` and the 1.00 gap sits in
+`source_discrepancies`. **No figure was changed to close it.** The written net
+(58,211.45) equals `buy − written sell`, so the page is internally consistent
+with its own total.
+
+### S-02 — Page 19, 8C: received amount is 8.03 below the net receivable
+
+Net receivable **58,211.45**; the page records receipt of **58,203.42**.
+Recorded as a discrepancy with no cause assigned — a fee, a rounding, a
+partial receipt and a misreading all fit the evidence equally, so none of them
+is asserted.
+
+### S-03 — Page 19, 8E: the author corrected the page themselves
+
+The notebook strikes `148,503.38` and writes **148,478.38** for the sell
+total, and strikes `73,872.10` for a component where **23,847.10** now appears.
+The earlier readings are kept in `superseded_readings` with both values, so the
+author's own correction history survives alongside ours. `148,503.38` is
+superseded, not wrong to have been read.
+
+### S-04 — The working copy's Index misdescribes page 20
+
+Index says *"Settlement calculations and payable amounts"*. The page is a
+transaction detail table: `symbol → quantity × price` per date, with the day's
+total in a cloud and a circled settlement label. The observed description is
+kept in `content_type_observed`; the Index text stays in `content_type`. Pages
+22, 24, 27, 29 and 31 carry the same Index label and have **not** been checked.
+
+### S-05 — Page 21 has content outside the settlement blocks
+
+An edge column of boxed figures (27, 28, 29, 15, 11.5, 16) sits beside the four
+blocks and is **not transcribed**. This is why `page_fully_transcribed` is false
+for page 21 despite all four settlements being read and verified.
+
+---
+
 ## Limitations (inherent, not defects)
 
 ### L-01 — Apple Vision drops digits on large figures
 
-Benchmark evidence: page 18 numeric recall 74%, page 21 83%, both below the
-90% headline because totals such as `140,966.07` lose characters. Page 21's
-largest settlement was read as `77609.76` against a true `186129.76`.
+Benchmark evidence (5 pages with hand-built ground truth), with the rotation
+pass and the corrected page-21 targets:
+
+| page | numbers exact | numbers numeric | symbols |
+|---|---|---|---|
+| 18 (transactions) | 7/19 (37%) | 16/19 (84%) | 9/11 |
+| 21 (settlements) | 9/12 (75%) | 12/12 (100%) | 0/0 |
+| **all 5** | **69/92 (75.0%)** | **87/92 (94.6%)** | **33/46 (71.7%)** |
+
+Page 18 remains the weakest because dense transaction lines lose characters in
+totals such as `140,966.07`; page 21 is now perfect after the ground truth was
+corrected (B-02).
 
 **Consequence:** extracted values must never enter accounting without review.
 Arithmetic self-checks (`buy − sell = net`, totals vs. line items) are the
-practical mitigation, and they caught B-02.
+practical mitigation, and they are what flagged page 19's sell column.
+
+---
+
+### L-07 — Arithmetic can falsify a reading but cannot supply one
+
+A balancing equation is *evidence about* a transcription, never a licence to
+change it. B-02 is the worked example: with a misread sell figure, the only
+"correction" that balanced was a fabricated buy figure, and adopting it would
+have put an invented number into the ledger labelled as verified.
+
+**Consequence:** `megatool/written_transcribe.py` never rewrites a figure to
+close an equation. A block that fails a check is marked `discrepancy` and
+keeps its raw lines; a figure that cannot be parsed is returned as `None`
+rather than guessed; and a correction can only be recorded through
+`append_correction`, which requires a stated reason and preserves the original
+reading and every earlier entry.
 
 ### L-02 — Local vision-language models not tested
 

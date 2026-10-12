@@ -1,20 +1,38 @@
 """Written Data.pdf extraction and integration.
 
 The PDF is a 52-page handwritten trading journal with **no text layer** — it is fully
-scanned. Automated OCR (tesseract 5.5.0) was attempted on all 52 pages and **failed on
-42 of them** (empty or gibberish output). Tesseract is designed for printed text, not
-handwriting.
+scanned. Two OCR methods have actually been run over it and measured against the
+hand-built ground truth in ``data/written_pdf/benchmark/ground_truth.json``:
+
+===========================  ===========  ===========  ===========
+method                       numbers      numbers      symbols
+                               exact       numeric
+===========================  ===========  ===========  ===========
+tesseract 5.5.0                3/92          4/92        0/46
+apple_vision (as-is)          66/92         83/92       33/46
+apple_vision (best of 4       68/92         85/92       33/46
+  rotations)
+===========================  ===========  ===========  ===========
+
+Tesseract is designed for printed text and is unusable here. Apple Vision
+(``scripts/vision_ocr_batch.swift``, driven by ``scripts/run_vision_ocr.py``)
+reads all 52 pages and is the first pass for transcription. **Its output is
+machine text, not a verified reading**: every OCR file is stamped
+``status: OCR_ONLY`` and every record it produces keeps ``verification_status``
+below ``verified`` until a human checks it against the page image.
 
 This module therefore provides:
 
 1. **Page rendering** via PyMuPDF at configurable DPI.
 2. **A structured extraction interface** for manual or AI-assisted transcription.
-3. **Validation** of extracted financial values.
+3. **Validation** of extracted financial values, including settlement arithmetic.
 4. **An import pipeline** that writes reviewed records into the database with full
-   provenance (page number, extraction confidence, review status).
+   provenance (page number, extraction method, verification status, correction
+   history, page hash).
 
 No extracted value is treated as verified until it has been reviewed. The module
-enforces this with a `review_status` field on every record.
+enforces this with both a `review_status` and a `verification_status` field on
+every record, and refuses to let OCR-only records count as usable.
 
 The original PDF is never modified. Nothing is committed to git (see .gitignore).
 """
@@ -24,7 +42,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
@@ -61,6 +79,50 @@ class ReviewStatus(StrEnum):
     REVIEWED = "reviewed"
     CORRECTED = "corrected"
     REJECTED = "rejected"
+
+
+class VerificationStatus(StrEnum):
+    """Finer-grained provenance state than :class:`ReviewStatus`.
+
+    The two are related but not redundant:
+
+    * ``review_status`` answers "has a human looked at this?" and drives the
+      existing API/UI, so it is kept as-is.
+    * ``verification_status`` answers "what kind of evidence backs this
+      value?", which is what a financial record actually needs before use.
+
+    A record is only safe for accounting or fundamentals once it is
+    ``VERIFIED`` or ``CORRECTED_VERIFIED``; ``OCR_ONLY`` machine text must
+    never reach portfolio or fundamentals logic.
+    """
+
+    OCR_ONLY = "ocr_only"
+    TRANSCRIBED_UNVERIFIED = "transcribed_unverified"
+    NEEDS_REVIEW = "needs_review"
+    VERIFIED = "verified"
+    CORRECTED_VERIFIED = "corrected_verified"
+    UNRESOLVABLE = "unresolvable"
+
+
+#: Statuses that carry enough evidence to be used in financial output.
+USABLE_VERIFICATION_STATUSES = frozenset(
+    {VerificationStatus.VERIFIED, VerificationStatus.CORRECTED_VERIFIED}
+)
+
+
+class ReconciliationStatus(StrEnum):
+    """Outcome of an arithmetic self-check on a handwritten figure.
+
+    RECONCILED:      the recorded arithmetic balances within tolerance.
+    DISCREPANCY:     it does not balance; the original reading is kept.
+    UNRECONCILABLE:  no arithmetic is available to check it (e.g. a lone figure).
+    NOT_APPLICABLE:  the check has not been run.
+    """
+
+    RECONCILED = "reconciled"
+    DISCREPANCY = "discrepancy"
+    UNRECONCILABLE = "unreconcilable"
+    NOT_APPLICABLE = "not_applicable"
 
 
 class RecordType(StrEnum):
@@ -102,6 +164,23 @@ class ExtractedRecord:
     review_status: ReviewStatus = ReviewStatus.UNREVIEWED
     # Free-text note
     note: str = ""
+    # --- provenance (schema v5) ------------------------------------------------
+    # How the value was obtained. Never blank for a machine-produced record.
+    extraction_method: str = ""
+    # What kind of evidence backs the value.
+    verification_status: VerificationStatus = VerificationStatus.OCR_ONLY
+    # The untouched machine reading, kept even after a correction.
+    original_reading: str = ""
+    # The corrected normalized value, separate from ``value``.
+    corrected_value: Any = None
+    # Append-only JSON list of {at, from, to, reason}.
+    correction_history: list[dict[str, Any]] = field(default_factory=list)
+    # Outcome of the arithmetic self-check, if one applies.
+    reconciliation: ReconciliationStatus = ReconciliationStatus.NOT_APPLICABLE
+    # SHA-256 of the rendered source page, for provenance and dedupe.
+    page_sha256: str = ""
+    # Why this verification status was chosen.
+    verification_note: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -117,6 +196,14 @@ class ExtractedRecord:
             "confidence": self.confidence.value,
             "review_status": self.review_status.value,
             "note": self.note,
+            "extraction_method": self.extraction_method,
+            "verification_status": self.verification_status.value,
+            "original_reading": self.original_reading,
+            "corrected_value": self.corrected_value,
+            "correction_history": self.correction_history,
+            "reconciliation": self.reconciliation.value,
+            "page_sha256": self.page_sha256,
+            "verification_note": self.verification_note,
         }
 
 
@@ -228,6 +315,16 @@ class WrittenPdfExtractor:
                     confidence=ExtractionConfidence(d.get("confidence", "uncertain")),
                     review_status=ReviewStatus(d.get("review_status", "unreviewed")),
                     note=d.get("note", ""),
+                    extraction_method=d.get("extraction_method", ""),
+                    verification_status=VerificationStatus(
+                        d.get("verification_status", "ocr_only")
+                    ),
+                    original_reading=d.get("original_reading", ""),
+                    corrected_value=d.get("corrected_value"),
+                    correction_history=d.get("correction_history", []) or [],
+                    reconciliation=ReconciliationStatus(d.get("reconciliation", "not_applicable")),
+                    page_sha256=d.get("page_sha256", ""),
+                    verification_note=d.get("verification_note", ""),
                 )
             )
 
@@ -467,23 +564,60 @@ def import_records(
         before = conn.execute(
             "SELECT COUNT(*) c FROM pdf_records WHERE import_id=?", (import_id,)
         ).fetchone()["c"]
+        # Existing correction history, keyed the same way as the unique
+        # constraint. Re-importing must never discard an earlier correction,
+        # so histories are merged rather than overwritten.
+        prior_history: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+        for row in conn.execute(
+            "SELECT page, source_ref, field_name, symbol, correction_history "
+            "FROM pdf_records WHERE import_id=?",
+            (import_id,),
+        ):
+            try:
+                hist = json.loads(row["correction_history"] or "[]")
+            except json.JSONDecodeError:
+                hist = []
+            key = (row["page"], row["source_ref"], row["field_name"], row["symbol"] or "")
+            prior_history[key] = hist
+
         for r in records:
             value_json = (
                 json.dumps(r.value, ensure_ascii=False, default=str)
                 if r.value is not None
                 else None
             )
+            corrected_json = (
+                json.dumps(r.corrected_value, ensure_ascii=False, default=str)
+                if r.corrected_value is not None
+                else None
+            )
+            key = (r.page, r.source_ref, r.field_name, r.symbol or "")
+            merged = list(prior_history.get(key, []))
+            for entry in r.correction_history:
+                if entry not in merged:
+                    merged.append(entry)
             conn.execute(
                 "INSERT INTO pdf_records "
-                "(import_id, record_type, page, source_ref, raw_text, value, field_name, "
-                " symbol, record_date, unit, confidence, review_status, note) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "(import_id, record_type, page, source_ref, raw_text, value, field_name,"
+                " symbol, record_date, unit, confidence, review_status, note,"
+                " extraction_method, verification_status, original_reading,"
+                " corrected_value, correction_history, reconciliation, page_sha256,"
+                " verification_note) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(import_id, page, source_ref, field_name, symbol) "
                 "DO UPDATE SET "
                 "  raw_text=excluded.raw_text, value=excluded.value, "
                 "  record_date=excluded.record_date, unit=excluded.unit, "
                 "  confidence=excluded.confidence, review_status=excluded.review_status, "
-                "  note=excluded.note",
+                "  note=excluded.note, "
+                "  extraction_method=excluded.extraction_method, "
+                "  verification_status=excluded.verification_status, "
+                "  original_reading=excluded.original_reading, "
+                "  corrected_value=excluded.corrected_value, "
+                "  correction_history=excluded.correction_history, "
+                "  reconciliation=excluded.reconciliation, "
+                "  page_sha256=excluded.page_sha256, "
+                "  verification_note=excluded.verification_note",
                 (
                     import_id,
                     r.record_type.value,
@@ -498,6 +632,14 @@ def import_records(
                     r.confidence.value,
                     r.review_status.value,
                     r.note,
+                    r.extraction_method,
+                    r.verification_status.value,
+                    r.original_reading,
+                    corrected_json,
+                    json.dumps(merged, ensure_ascii=False),
+                    r.reconciliation.value,
+                    r.page_sha256,
+                    r.verification_note,
                 ),
             )
         after = conn.execute(
@@ -603,3 +745,172 @@ def set_review_status(
         "not_found": missing,
         "status": status.value,
     }
+
+
+# ----------------------------------------------------------------- OCR first pass
+DEFAULT_OCR_DIR = Path("data") / "written_pdf" / "vision_ocr"
+
+
+def read_vision_page(page: int, ocr_dir: str | Path | None = None) -> dict[str, Any]:
+    """Read one page's Apple Vision OCR output with its provenance header.
+
+    Returns ``{"exists", "meta", "text"}``. ``meta`` carries the engine,
+    chosen orientation, per-line confidence and the ``OCR_ONLY`` status stamp
+    written by ``scripts/run_vision_ocr.py``. Raises ``FileNotFoundError``
+    only via ``exists=False`` — a missing page is a normal, reportable state
+    for this document, not an error.
+    """
+    ocr_dir = Path(ocr_dir) if ocr_dir else DEFAULT_OCR_DIR
+    path = ocr_dir / f"page_{page:02d}.txt"
+    if not path.exists():
+        return {"exists": False, "meta": {}, "text": ""}
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    head, sep, body = raw.partition("\n---\n")
+    if not sep:
+        body = ""
+    meta: dict[str, str] = {}
+    for line in head.splitlines():
+        if not line.startswith("# "):
+            continue
+        key, _, val = line[2:].partition(": ")
+        meta[key.strip()] = val.strip()
+    return {"exists": True, "meta": meta, "text": body.strip("\n")}
+
+
+def set_verification_status(
+    record_ids: list[int],
+    status: VerificationStatus,
+    note: str,
+    db_path: Any = None,
+) -> dict[str, Any]:
+    """Record *why* a set of records reached a verification status.
+
+    ``note`` is mandatory: a record cannot become ``verified`` (or any other
+    status) without a stated reason, so the audit trail cannot be blank.
+    """
+    if not record_ids:
+        raise PdfValidationError("no record ids given")
+    if (
+        status in (VerificationStatus.VERIFIED, VerificationStatus.CORRECTED_VERIFIED)
+        and not note.strip()
+    ):
+        raise PdfValidationError(
+            "a note stating the supporting evidence is required to mark a record verified"
+        )
+
+    from megatool.db import get_conn, now_iso
+
+    placeholders = ", ".join("?" for _ in record_ids)
+    stamped = f"{now_iso()} {note.strip()}"
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            f"UPDATE pdf_records SET verification_status=?, verification_note=? "
+            f"WHERE id IN ({placeholders})",
+            [status.value, stamped, *record_ids],
+        )
+        changed = cur.rowcount or 0
+        missing = len(record_ids) - changed
+    return {
+        "requested": len(record_ids),
+        "updated": changed,
+        "not_found": missing,
+        "status": status.value,
+        "note": stamped,
+    }
+
+
+def append_correction(
+    record_id: int,
+    corrected_value: Any,
+    reason: str,
+    db_path: Any = None,
+) -> dict[str, Any]:
+    """Correct a record without losing the reading it replaces.
+
+    The original ``raw_text``/``original_reading`` are never touched; the new
+    value goes to ``corrected_value`` and a dated entry is appended to
+    ``correction_history``. A correction without a stated reason is rejected,
+    because "it did not balance" is not a reason to change a handwritten
+    figure — only the page image is.
+    """
+    if not reason.strip():
+        raise PdfValidationError("a correction must state its reason")
+
+    import json as _json
+
+    from megatool.db import get_conn, now_iso
+
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT id, value, corrected_value, correction_history, raw_text "
+            "FROM pdf_records WHERE id=?",
+            (record_id,),
+        ).fetchone()
+        if row is None:
+            raise PdfValidationError(f"no record with id {record_id}")
+        try:
+            history = _json.loads(row["correction_history"] or "[]")
+        except _json.JSONDecodeError:
+            history = []
+
+        def _decode(raw: Any) -> Any:
+            """``value``/``corrected_value`` are stored JSON-encoded."""
+            if raw is None:
+                return None
+            with contextlib.suppress(_json.JSONDecodeError, TypeError):
+                return _json.loads(raw)
+            return raw
+
+        entry = {
+            "at": now_iso(),
+            "from": _decode(row["corrected_value"])
+            if row["corrected_value"]
+            else _decode(row["value"]),
+            "to": corrected_value,
+            "reason": reason.strip(),
+            "original_reading": row["raw_text"],
+        }
+        history.append(entry)
+        conn.execute(
+            "UPDATE pdf_records SET corrected_value=?, correction_history=?, "
+            "verification_status=?, review_status=? WHERE id=?",
+            (
+                _json.dumps(corrected_value, ensure_ascii=False, default=str),
+                _json.dumps(history, ensure_ascii=False),
+                VerificationStatus.CORRECTED_VERIFIED.value,
+                ReviewStatus.CORRECTED.value,
+                record_id,
+            ),
+        )
+    return {"record_id": record_id, "entries": len(history), "entry": entry}
+
+
+def usable_records(db_path: Any = None) -> list[dict[str, Any]]:
+    """Records with enough evidence to be used in financial output.
+
+    OCR-only and unverified readings are deliberately excluded: they are
+    searchable and reviewable, but must never reach portfolio accounting or
+    current fundamentals.
+    """
+    import json as _json
+
+    from megatool.db import get_conn
+
+    allowed = sorted(s.value for s in USABLE_VERIFICATION_STATUSES)
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT * FROM pdf_records WHERE verification_status IN "
+            f"({', '.join('?' for _ in allowed)}) ORDER BY page, source_ref",
+            allowed,
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        for key in ("value", "corrected_value"):
+            if d.get(key):
+                with contextlib.suppress(_json.JSONDecodeError, TypeError):
+                    d[key] = _json.loads(d[key])
+        with contextlib.suppress(_json.JSONDecodeError, TypeError):
+            d["correction_history"] = _json.loads(d.get("correction_history") or "[]")
+        out.append(d)
+    return out

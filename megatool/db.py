@@ -20,7 +20,7 @@ from typing import Any
 
 from megatool.config import PATHS, ensure_dirs
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -207,6 +207,19 @@ CREATE TABLE IF NOT EXISTS pdf_records (
     confidence    TEXT NOT NULL DEFAULT 'uncertain',  -- high | medium | low | uncertain
     review_status TEXT NOT NULL DEFAULT 'unreviewed', -- unreviewed | reviewed | corrected | rejected
     note          TEXT NOT NULL DEFAULT '',
+    -- --- provenance (schema v5) -------------------------------------------------
+    extraction_method   TEXT NOT NULL DEFAULT '',   -- apple_vision_ocr | manual_visual | ...
+    verification_status TEXT NOT NULL DEFAULT 'ocr_only',
+                                                    -- ocr_only | transcribed_unverified |
+                                                    -- needs_review | verified |
+                                                    -- corrected_verified | unresolvable
+    original_reading    TEXT NOT NULL DEFAULT '',   -- machine reading BEFORE any correction
+    corrected_value     TEXT,                       -- JSON-encoded, only set when corrected
+    correction_history  TEXT NOT NULL DEFAULT '[]', -- append-only JSON list
+    reconciliation      TEXT NOT NULL DEFAULT 'not_applicable',
+                                                    -- reconciled | discrepancy | unreconcilable | not_applicable
+    page_sha256         TEXT NOT NULL DEFAULT '',   -- hash of the rendered source page
+    verification_note   TEXT NOT NULL DEFAULT '',
     UNIQUE (import_id, page, source_ref, field_name, symbol)
 );
 
@@ -263,11 +276,40 @@ def get_conn(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+# Columns added to ``pdf_records`` in schema v5. Kept as data so the CREATE
+# TABLE statement and the migration for older databases cannot drift apart.
+_PDF_RECORDS_V5_COLUMNS: dict[str, str] = {
+    "extraction_method": "TEXT NOT NULL DEFAULT ''",
+    "verification_status": "TEXT NOT NULL DEFAULT 'ocr_only'",
+    "original_reading": "TEXT NOT NULL DEFAULT ''",
+    "corrected_value": "TEXT",
+    "correction_history": "TEXT NOT NULL DEFAULT '[]'",
+    "reconciliation": "TEXT NOT NULL DEFAULT 'not_applicable'",
+    "page_sha256": "TEXT NOT NULL DEFAULT ''",
+    "verification_note": "TEXT NOT NULL DEFAULT ''",
+}
+
+
+def _migrate_pdf_records(conn: Any) -> None:
+    """Add the schema-v5 provenance columns to a database created at v4.
+
+    ``CREATE TABLE IF NOT EXISTS`` never alters an existing table, so an
+    already-created ``pdf_records`` would otherwise silently lack the
+    provenance columns and every import would fail. The migration is
+    idempotent: each column is added only if it is not already present.
+    """
+    existing = {r["name"] for r in conn.execute("PRAGMA table_info(pdf_records)")}
+    for name, decl in _PDF_RECORDS_V5_COLUMNS.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE pdf_records ADD COLUMN {name} {decl}")
+
+
 def init_app_db(db_path: Path | None = None) -> int:
     """Create/upgrade the application database. Returns the schema version."""
     ensure_dirs()
     with get_conn(db_path) as conn:
         conn.executescript(_SCHEMA)
+        _migrate_pdf_records(conn)
         row = conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()
         current = int(row["value"]) if row else 0
         if current < SCHEMA_VERSION:

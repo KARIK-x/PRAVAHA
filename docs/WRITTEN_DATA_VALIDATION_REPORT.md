@@ -23,33 +23,61 @@ differences are expected and noted rather than treated as errors.
 These are internal reconciliations: buy totals, sell totals, and net payable/receivable.
 They can be validated **arithmetically** without any external source.
 
-| Settlement | Page | Buy total | Sell total | Net (recorded) | Net (computed) | Status |
-| --- | --- | --- | --- | --- | --- | --- |
-| 8C | 19 | 168,147.83 | 226,359.28 | 58,211.45 | 58,211.45 | **ARITHMETIC-VERIFIED** |
-| 8D | 19 | 111,993.22 | 111,175.43 | 817.79 | 817.79 | **ARITHMETIC-VERIFIED** |
-| 9A | 21 | ~~177,609.76~~ → **186,129.76** | 120,579.43 | 65,550.33 | 65,550.33 | **ARITHMETIC-VERIFIED** (corrected, see below) |
-| 9C | 21 | 189,763.58 | 157,168.39 | 32,595.19 | 32,595.19 | **ARITHMETIC-VERIFIED** |
-| 9D | 21 | 54,157.24 | 45,035.39 | 9,121.85 | 9,121.85 | **ARITHMETIC-VERIFIED** |
+### Visually confirmed — page 21
 
-> **Correction history — settlement 9A (2026-10-12).** The buy total was first
-> transcribed as `177,609.76`. Against the recorded net that gives
-> `177,609.76 − 120,579.43 = 57,030.33`, which does **not** equal the recorded
-> `65,550.33` — a discrepancy of `8,520.00`. The value `186,129.76` reconciles
-> exactly: `186,129.76 − 120,579.43 = 65,550.33`. The corrected figure was found
-> **by arithmetic alone** (defect B-02) and is pinned by
-> `test_settlement_catches_the_transcription_error_that_was_actually_found`.
+Page 21 was re-read directly from `data/written_pdf/raw_pages/page_21.png` on
+2026-10-12. All four settlements reconcile exactly, and the notebook's own
+"Paid" annotation agrees with each net:
+
+| Settlement | Date | Buy total | Sell total | Net (recorded) | Buy − sell | Paid | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 9A | 11 sep / 1 sep | 77,609.76 | 12,059.43 | 65,550.33 | 65,550.33 ✓ | 65,550.33 on 12th Sep | **VISUALLY VERIFIED** |
+| 9B | 16 sep / 16 sep | 106,186.34 | 88,169.68 | 18,016.66 | 18,016.66 ✓ | 18,016.66 on 22nd Sep | **VISUALLY VERIFIED** |
+| 9C | 18 sep / 18 sep | 189,763.58 | 157,168.39 | 32,595.19 | 32,595.19 ✓ | 32,595.19 on 24th Sep | **VISUALLY VERIFIED** |
+| 9D | 22 sep / 22 sep | 54,157.24 | 45,035.39 | 9,121.85 | 9,121.85 ✓ | 9,121.85 on 25th Sep | **VISUALLY VERIFIED** |
+
+These four are the only settlements in this document that carry both a direct
+visual reading and a passing arithmetic check. They are the reference point for
+every row below.
+
+> **Correction history — settlement 9A (2026-10-12, evidence-based reversal).**
+> Earlier revisions of this table recorded 9A's buy as `177,609.76` and its
+> sell as `120,579.43`, found they did not produce the recorded net of
+> `65,550.33`, and "corrected" the buy to `186,129.76` because that value
+> balanced. **That correction was fabricated** and is withdrawn.
 >
-> **What this does and does not prove.** It proves the three figures on that row
-> are mutually consistent. It is **not** independent verification of the digits
-> against page 21 — no one has re-read the page since the correction. That
-> re-read is **T-09**, and until it is done this row is *arithmetic-reconciled,
-> visually unconfirmed*. The distinction matters: a transcription error of
-> 8,520 that only arithmetic caught is also the reason to re-read rather than
-> trust the reconciliation.
+> The page actually reads buy `77,609.76` and sell `12059.43`, and
+> `77,609.76 − 12,059.43 = 65,550.33` exactly. **The reported 8,520 NPR
+> discrepancy never existed on this page**; it was an artefact of the misread
+> sell figure. Apple Vision had read both figures correctly from the start —
+> measured against the corrected ground truth its page-21 numeric recall is
+> 12/12 (100%), not the 83% previously reported.
+>
+> The value `186,129.76` must never be imported. Tracked as B-02 (reversed)
+> and B-16 (closed) in `KNOWN_BUGS.md`.
+
+### OCR-only — pages 19 and 23, NOT yet confirmed
+
+These rows come from Apple Vision OCR alone. They are recorded here so the
+review queue is visible, **not** as verified data. Page 19's sell column fails
+its own component check, which is exactly the kind of thing the arithmetic
+pass is meant to surface:
+
+| Settlement | Page | Buy total | Sell total | Net (recorded) | Computed | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 8C | 19 | 168,147.83 | 226,359.28 | (illegible) | 58,211.45 | **NEEDS REVIEW** — sell components 154,824.76 + 71,535.52 = 226,360.28, which is 1.00 more than the written total |
+| 8D | 19 | 111,993.22 | 111,175.43 | 817.79 | 817.79 ✓ | **NEEDS REVIEW** — OCR only; components 84,240.63 + 27,752.59 and 82,466.14 + 28,709.29 both reconcile, but the page has not been read directly |
+| 9E | 23 | 48,380.66 + 73,513.46 | 81,793.82 | 40,100.30 | 40,100.30 ✓ | **NEEDS REVIEW** — OCR only |
+| 9F | 23 | 146,549.32 | 55,642.285 (ambiguous) | 90,907.04 | 90,907.04 ✓ | **NEEDS REVIEW** — OCR only, sell total unreadable to two decimals |
+
+Nothing on this page is usable for portfolio accounting until a human reads
+the page image. Pages 20, 22, 24–33 have not been extracted at all.
 
 The settlement arithmetic is internally consistent where both sides are legible. This
 is a **strong positive signal** about the reliability of the handwritten records:
-the author's own reconciliation arithmetic is correct.
+the author's own reconciliation arithmetic is correct — which is also why a
+figure that fails to balance is worth looking at, and why a figure must never be
+re-read merely to make it balance.
 
 ## Dated prices vs. stored closes (page 11, 2025-07-04)
 
@@ -139,20 +167,39 @@ Regenerate the OCR column with `uv run megatool pdf list`.
 
 ### Coverage
 
+Counts below are produced by `scripts/build_transcription.py` from the files on
+disk at build time — not transcribed by hand into this document.
+
 | Measure | Count | Notes |
 | --- | ---: | --- |
 | Pages in `WRITTENdata.pdf` | **52** | derived from the document itself, never a hard-coded constant |
 | Pages rendered to PNG | 52 | `data/written_pdf/raw_pages/` |
-| Pages OCR was **attempted** on | 52 | `data/written_pdf/raw_ocr/` |
-| …produced empty output | 28 | handwriting has no glyph boundaries |
-| …produced readable text | 17 | page furniture, not the tabular content |
-| …produced gibberish | 7 | non-empty but unusable |
-| Pages with **transcribed records** | **6 of 52** | pages 1, 2, 6, 11, 17, 52 |
-| **Pages never transcribed** | **46 of 52** | — |
-| Records in the sample file | 64 | `data/written_pdf/extracted_sample.json` |
-| Records in the **real store** | **0** | `pdf_records`, verified on `:8710` |
+| Pages Apple Vision OCR **attempted** on | 52 | `data/written_pdf/raw_ocr/` |
+| …succeeded | **52** | 0 failed; resumable and idempotent |
+| Pages with machine text | **51 of 52** | page 10 came back 60 chars of gibberish |
+| Pages **opened and inspected by eye** | **4 of 52** | pages 19, 20, 21, 23 |
+| Pages with a **settlement read by eye** | **3 of 52** | pages 19, 21, 23 |
+| Settlement records **read by eye** | **9** | the only `verified` figures in the corpus |
+| Pages **fully transcribed** | **0 of 52** | every page carries untranscribed content |
+| Pages still needing review | **52 of 52** | — |
+| Settlement blocks detected (candidate) | 19 | parser output, never a data source |
+| …reconciled / flagged / unreconcilable | 2 / 4 / 13 | flags are review queue, not errors to fix |
+| Figures the parser could not place | 47 | kept in `unplaced`, never dropped or assigned |
+| Labels assigned by position | 14 | marked `position`, not read off the page |
+| Records in the **real store** | **0** | `pdf_records` — nothing has been imported |
 
-### Per-page detail (the six transcribed pages)
+> **Superseded numbers.** The figures that used to appear here — 28 empty pages,
+> 17 readable, 7 gibberish, "6 pages transcribed", "46 never transcribed",
+> "64 records" — came from the **Tesseract** pass and from
+> `data/written_pdf/extracted_sample.json`, a preliminary extraction. Tesseract
+> scored **4.3% numeric recall** on this handwriting. Those numbers are retained
+> in the benchmark table in `TEST_RESULTS.md` as history and must not be quoted
+> as current coverage.
+
+### Per-page detail (the six pages in the superseded sample)
+
+From `extracted_sample.json`, kept only to show what the preliminary pass
+produced. None of these records are in the real store and none are verified.
 
 | Page | Records | OCR bytes | OCR usable? | Review state |
 | ---: | ---: | ---: | --- | --- |

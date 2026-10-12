@@ -47,7 +47,10 @@ experiments/runs/
 # nor anything extracted from it is committed.
 WRITTENdata.pdf
 Written Data.pdf
+Written_Data_All_52_Pages_Digitized.xlsx
+Written_Data_Full_Transcription.xlsx
 data/written_pdf/
+data/transcription/
 docs/written_pdf_raw/
 extraction/
 *.ocr.txt

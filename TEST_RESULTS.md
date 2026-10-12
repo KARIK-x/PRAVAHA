@@ -1,7 +1,7 @@
 # Test results
 
-**Last run:** 2026-10-12 · **650 passed, 0 failed, 0 skipped** · 33.93 s · exit 0
-**Lint:** `ruff check` clean · `ruff format --check` clean (48 files)
+**Last run:** 2026-10-12 · **707 passed, 0 failed, 0 skipped** · 67.84 s · exit 0
+**Lint:** `ruff check` clean · `ruff format --check` clean (53 files)
 **Front end:** `node --check web/static/app.js` clean
 
 Reproduce:
@@ -25,10 +25,11 @@ node --check web/static/app.js
 |---|---:|
 | `test_indicators.py` | 132 |
 | `test_api.py` | 90 |
+| `test_fundamentals.py` | 56 |
+| `test_written_transcribe.py` | 55 **(new)** |
 | `test_audit_a_fixes.py` | 45 |
-| `test_fundamentals.py` | 56 **(+12)** |
-| `test_written_pdf.py` | 39 **(+3)** |
-| `test_financial_integrity.py` | 33 **(new)** |
+| `test_written_pdf.py` | 39 |
+| `test_financial_integrity.py` | 35 |
 | `test_research.py` | 32 |
 | `test_backtest.py` | 32 |
 | `test_journal.py` | 30 |
@@ -39,15 +40,34 @@ node --check web/static/app.js
 | `test_scanner.py` | 21 |
 | `test_planning.py` | 21 |
 | `test_cli_floor.py` | 9 |
-| **Total** | **650** |
+| **Total (17 files)** | **707** |
 
-Progression: 511 (13 files) → 602 → **650** (16 files).
+Progression: 511 (13 files) → 602 → 650 → **707** (17 files).
 
 ---
 
 ## What the new tests cover
 
-### `test_financial_integrity.py` (33, new) — Phase 2 of the completion audit
+### `test_written_transcribe.py` (55, new) — handwriting reader
+
+Four of these assert against text quoted **verbatim** from the Apple Vision
+output of real pages, so they pin the reader's behaviour on the page's own words
+rather than on a fixture. No assertion claims an unverified figure is *true* —
+only that it is read, refused, or kept as the page and the rules say.
+
+| Area | What is asserted |
+|---|---|
+| Money parsing | 25 forms Vision actually emits (`38855,07`, `881•06`, `71535-52`, `226359. 28`, `(76,847.01)`); and the forms it must **refuse** — `642.285`, `55,642.285`, `12,34.5678` |
+| Thousands split | `88 169.68` is 88169.68, not two tokens (the magnitude floor would otherwise keep the 169.68 fragment) |
+| Day pattern | `11 sep - 77609.76 By` keeps its `.76` — lookarounds stop the day pattern eating an amount's tail |
+| Net extraction | the figure after the **last** `=`, never the first number on the line; a colon-split `32595: 19` refused rather than joined into 3259519 |
+| Labels | an OCR letter is trusted only when spelled A–H; `9Đ` and `91` come back unread instead of being mapped to 9D and 9I; unread labels are assigned by position, measured from the page's first *readable* letter, and marked `position` |
+| Provenance | `label_raw` keeps the verbatim reading even when wrong; `unplaced` keeps figures whose column marker OCR could not read |
+| Page 21, by eye | all four blocks read, `65550.337` refused, `Paid` note used instead, day numbers excluded, block reconciles |
+| Pages 19 & 23, by eye | 8C's 1.00 sell shortfall and 8.03 receipt gap recorded as source facts, 8E's superseded readings kept, 9E/9F close exactly |
+| Uniform record shape | all 9 visually read settlements share one key set (page 21's `net` column was briefly empty when two shapes collided) |
+
+### `test_financial_integrity.py` (35) — Phase 2 of the completion audit
 
 Every expected value in this file is worked out by hand, in comments, from a
 fixture written by hand. Nothing asks the module under test for its own
@@ -55,7 +75,7 @@ expected value.
 
 | Area | What is asserted |
 |---|---|
-| Settlement arithmetic | The four page-21 nets verified by ordinary subtraction *before* calling the validator; both sign conventions; an exactly-representable tolerance boundary; and the real B-02 transcription error (177,609.76) proven to be caught |
+| Settlement arithmetic | The four page-21 nets verified by ordinary subtraction *before* calling the validator; both sign conventions; an exactly-representable tolerance boundary; and a misread sell figure proven to be caught **without** the buy being "corrected" to balance (B-02) |
 | Percentile math | Distinct values → 33.33/66.67/100; ties → average rank; n fully tied → `(n+1)/(2n)×100` (62.5 at n=4, 50.135 at n=369) |
 | Ranking scores | A 4-symbol fixture whose scores are computed by hand in the source comment: **71.875 / 63.125 / 54.375 / 45.625**, all reproduced exactly |
 | Directionality | Volatility inverted so the calmest symbol ranks best; and the L-06 asymmetry pinned (best scores `100 − 100/n`, never 100) |
@@ -115,10 +135,21 @@ uv run python scripts/score_benchmark.py
 | Method | Numbers (exact) | Numbers (numeric) | Symbols | Time / page |
 |---|---:|---:|---:|---:|
 | Tesseract 5.5.0 | 3.3% (3/92) | 4.3% (4/92) | 0/46 | 0.57–1.99 s |
-| **Apple Vision** | **71.7% (66/92)** | **90.2% (83/92)** | **33/46** | 0.79–1.73 s |
+| Apple Vision, fixed orientation | 71.7% (66/92) | 90.2% (83/92) | 33/46 | 0.79–1.73 s |
+| **Apple Vision + orientation detection** | **75.0% (69/92)** | **94.6% (87/92)** | **33/46** | 3–8 s |
 
-Per page (Apple Vision): p02 88%/97%, p09 81%/100%, p11 92%/92%,
-p18 32%/74%, p21 58%/83%.
+Orientation detection is what runs in production (`scripts/run_vision_ocr.py`):
+each page is scored at 0°/90°/180°/270° and the best is kept. It is the first
+pass for all 52 pages — 52/52 succeeded, 0 failed.
+
+Numbers are read far better than exact ones because Vision often misplaces a
+separator inside an otherwise correct figure (`12059,43` for 12059.43). That is
+why `parse_money` refuses ambiguous shapes instead of guessing: a wrong reading
+multiplies a figure by 1000, a refused one costs a review.
+
+Per page (Apple Vision, fixed orientation): p02 88%/97%, p09 81%/100%,
+p11 92%/92%, p18 32%/74%, p21 58%/83% → 100% numeric after the page-21 ground
+truth was corrected from a visual read (B-02).
 
 `data/written_pdf/benchmark/` holds the ground truth and raw outputs. That
 directory is **git-ignored** because the ground truth transcribes the owner's

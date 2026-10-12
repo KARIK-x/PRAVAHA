@@ -25,17 +25,38 @@ against hand-built ground truth:
 | Method | Numbers (exact) | Numbers (numeric) | Symbols recovered |
 |---|---|---|---|
 | Tesseract 5.5.0 | 3.3% | 4.3% | 0 / 46 |
-| **Apple Vision** (macOS, `VNRecognizeTextRequest`) | **71.7%** | **90.2%** | **33 / 46** |
+| Apple Vision (as-is) | 73.9% | 92.4% | 33 / 46 |
+| **Apple Vision, best of 4 rotations** (`scripts/vision_ocr_batch.swift`) | **75.0%** | **94.6%** | **33 / 46** |
 
 **Decision:** the report's claim is **refuted for this document**. Apple Vision
 is already installed, needs no download, and processes a page in 0.8–1.7 s.
-It is adopted as the practical first-pass extractor.
+It is adopted as the practical first-pass extractor, run over all 52 pages by
+`scripts/run_vision_ocr.py`. Orientation detection is kept because it never
+scored worse than the as-is pass on any page and lifted page 18's numeric
+recall from 74% to 84%. The figures above are against the *corrected* ground
+truth; page 21 previously read 83% only because its target was wrong.
 
-**Still true:** ~90% is not good enough to feed accounting directly. Apple
-Vision dropped digits from page 21's largest settlement (read `77609.76` for
-`186129.76`). Arithmetic self-checks are what catch that class of error.
+**Still true:** ~95% is not good enough to feed accounting directly. Dense
+transaction pages still lose digits, so every extracted value stays `OCR_ONLY`
+until a human checks it against the page image. Arithmetic self-checks are what
+catch that class of error.
 
 Reproduce: `uv run python scripts/score_benchmark.py`.
+
+### Decision: arithmetic may falsify a reading but may never rewrite one
+
+A balancing equation is evidence *about* a transcription, never a licence to
+change it. An earlier audit noticed page 21 settlement 9A did not balance and
+adopted the one figure that did — `186,129.76` — which is not written anywhere
+on the page. The re-read showed the true figures (`77,609.76 / 12,059.43 /
+65,550.33`) already balance exactly; the discrepancy had come from a misread
+sell, not from the buy.
+
+**Decision:** extraction never substitutes a value to close an equation. A
+failing block is marked `discrepancy` and keeps its raw lines; an unreadable
+token returns `None`; a correction can only be recorded through
+`append_correction`, which requires a stated reason and preserves the original
+reading and every earlier entry. Tracked as `KNOWN_BUGS.md` L-07.
 
 ### Decision: settlement reconciliation compares magnitudes, not signs
 

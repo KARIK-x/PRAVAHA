@@ -11,8 +11,9 @@ marked working because the code exists. The labels mean:
 | `NOT-IMPLEMENTED` | Deliberately not built. The reason is stated |
 | `NOT-TESTED` | Code exists but has not been executed/observed |
 
-Test suite: **650 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check` and
-`ruff format` clean. Live server verified in a real browser via Playwright.
+Test suite: **707 passed, 0 failed** (17 files, `uv run pytest`, 2026-10-12).
+`ruff check` and `ruff format` clean. Live server verified in a real browser
+via Playwright.
 
 ---
 
@@ -102,24 +103,28 @@ the owner's journal, ledger and floor-sheet tables are empty.
    2026-10-12 this compared only 60 symbols; the limit is now breadth of the
    market, not a handful of names.)
 8. **PDF extraction is transcription-gated.** All 52 pages were inspected and
-   inventoried, but automated OCR failed on 42 of them (handwriting defeats
-   tesseract), so records enter one page at a time through visual transcription.
-   The infrastructure (render → transcribe → validate → import → review) is
-   tested end-to-end; 64 sample records are imported as **unreviewed**. The
-   remaining work is transcription, not code. See
-   `docs/WRITTEN_DATA_PDF_AUDIT.md`.
-9. **A transcription error was found in that audit.** Page 21 settlement 9A's
-   buy figure was recorded as `177,609.76`; the correct value is `186,129.76`
-   (only the arithmetic confirms it — it is the sole figure that reconciles to
-   the recorded net of 65,550.33, off by 8,520 NPR). Corrected in the benchmark
-   ground truth; **the audit document itself still carries the old number** and
-   the other pages have not been re-checked the same way. See `KNOWN_BUGS.md`
-   B-02 and `TASK_QUEUE.md` T-09.
-10. **Extracted values are not safe for accounting.** The handwriting benchmark
-    measured Apple Vision at 90.2% numeric recall — far better than Tesseract's
-    4.3%, but it drops digits from large totals (page 21's largest settlement was
-    read as `77609.76` for a true `186129.76`). Arithmetic self-checks are the
-    mitigation, and they are what caught issue 9.
+   inventoried. Tesseract failed on 42 of them (handwriting defeats it). Apple
+   Vision, re-run over **all 52 pages** on 2026-10-12 with orientation detection,
+   reads every page — its output is stamped `OCR_ONLY` and is a first pass, not a
+   transcription. Records still enter one page at a time through visual
+   transcription: the render → transcribe → validate → import → review pipeline is
+   tested end-to-end, and **page 21's four settlements are now visually verified**.
+   The remaining work is transcription, not code. See
+   `docs/WRITTEN_DATA_PDF_AUDIT.md` and `docs/WRITTEN_DATA_VALIDATION_REPORT.md`.
+9. **A fabricated correction was found and reversed.** An earlier audit recorded
+   page 21 settlement 9A's buy as `177,609.76` and its sell as `120,579.43`,
+   noticed they did not produce the recorded net of `65,550.33`, and "corrected"
+   the buy to `186,129.76` *because that value balanced*. Re-reading the page
+   image on 2026-10-12 shows the figures are **77,609.76 / 12,059.43 /
+   65,550.33**, which balance exactly. **The 8,520 NPR discrepancy never
+   existed**; it was an artefact of the misread sell. The value `186,129.76` is
+   withdrawn everywhere and must never be imported. See `KNOWN_BUGS.md` B-02.
+10. **Extracted values are not safe for accounting.** With the corrected page-21
+    ground truth, Apple Vision's numeric recall over the 5 benchmark pages is
+    **94.6%** (87/92) and exact recall 75.0% (69/92), against Tesseract's
+    4.3%/3.3%. It still drops digits from dense transaction pages — page 18 is
+    84% numeric. Arithmetic self-checks are the mitigation, and issue 9 is the
+    reason they must flag a row rather than edit it.
 11. **The backtest fee rate is still a placeholder.** The research report quotes
     0.24–0.36% commission + 0.015% SEBON + Rs 25 DP charge and 7.5%/10% capital
     gains tax, but **none of it was verified against an authoritative source**,
@@ -136,8 +141,8 @@ Evidence, not assertions. Everything below was executed and observed.
 
 | What | How | Result |
 | --- | --- | --- |
-| Full test suite | `uv run pytest` | **650 passed, 0 failed**, ~34 s (was 602) |
-| Lint / format | `ruff check megatool/ tests/ scripts/`, `ruff format --check` | clean (48 files) |
+| Full test suite | `uv run pytest` | **707 passed, 0 failed**, ~68 s (was 650) |
+| Lint / format | `ruff check megatool/ tests/ scripts/`, `ruff format --check` | clean (53 files) |
 | Front end | `node --check web/static/app.js` | clean |
 | Real data in the store | `GET /api/status` on the running server | **514,018 bars, 372 symbols**, 1995-07-20 → 2026-10-09 (was 89,580 / 60 before the 2026-10-12 fetch) |
 | Every browser tab | Playwright, clicking through all **11** tabs | **0 console errors** |

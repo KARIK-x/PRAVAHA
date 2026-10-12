@@ -43,11 +43,23 @@ def targets_for(page: str, gt: dict) -> tuple[list[str], list[str]]:
     return nums, syms
 
 
+VISION = ROOT / "data" / "written_pdf" / "vision_ocr"
+
+
 def read_method(page: str, method: str) -> str:
     if method == "tesseract":
         p = OCR / f"page_{page}.txt"
     elif method == "apple_vision":
         p = BENCH / f"vision_p{page}.txt"
+    elif method == "apple_vision_rot":
+        # Batch pass over all 52 pages with orientation detection
+        # (scripts/vision_ocr_batch.swift). Same engine, best of 4 rotations.
+        p = VISION / f"page_{page}.txt"
+        if not p.exists():
+            return ""
+        # Skip the provenance header, keep only recognised lines.
+        body = p.read_text(errors="replace")
+        return body.split("\n---\n", 1)[-1]
     else:
         raise ValueError(method)
     if not p.exists():
@@ -80,6 +92,9 @@ def main() -> int:
     gt = json.loads((BENCH / "ground_truth.json").read_text())
     pages = ["02", "09", "11", "18", "21"]
     methods = ["tesseract", "apple_vision"]
+    # Only score the rotation-aware pass once it has actually been run.
+    if any((VISION / f"page_{p}.txt").exists() for p in pages):
+        methods.append("apple_vision_rot")
 
     rows = [score(p, gt, m) for p in pages for m in methods]
 

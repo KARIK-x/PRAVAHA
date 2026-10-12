@@ -22,6 +22,11 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.5",
 ]
+# Only needed to build Written_Data_Full_Transcription.xlsx. The application
+# itself does not import it, so the core dependency set is unchanged.
+xlsx = [
+    "openpyxl>=3.1",
+]
 
 [project.scripts]
 megatool = "megatool.cli:main"
@@ -30,6 +35,9 @@ megatool = "megatool.cli:main"
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
+]
+xlsx = [
+    "openpyxl>=3.1",
 ]
 
 [build-system]

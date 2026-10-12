@@ -49,21 +49,25 @@ def db(tmp_path):
 # ===========================================================================
 # 1. SETTLEMENT RECONCILIATION - TESTED-PASS
 # ===========================================================================
-# The four settlements on page 21 of WRITTENdata.pdf, transcribed by hand.
-# Each net is checked here by ordinary subtraction, independently of the code:
+# The four settlements on page 21 of WRITTENdata.pdf, transcribed by hand from
+# raw_pages/page_21.png on 2026-10-12 and then confirmed arithmetically:
 #
-#   186,129.76 - 120,579.43 = 65,550.33
+#   77,609.76 -  12,059.43 = 65,550.33
 #   106,186.34 -  88,169.68 = 18,016.66
 #   189,763.58 - 157,168.39 = 32,595.19
 #    54,157.24 -  45,035.39 =  9,121.85
 #
+# These are the only settlements in the document that carry BOTH a direct
+# visual reading and a passing arithmetic check.
+#
 # NOTE ON WHAT THIS PROVES: passing these proves the recorded net equals the
-# difference of the two recorded totals. It is an *arithmetic self-check* of one
-# page against itself. It is NOT independent verification against the source
-# document - that requires re-reading the page, which is T-09.
+# difference of the two recorded totals. On its own that is an *arithmetic
+# self-check* of one page against itself. Here the digits themselves have also
+# been read off the page image, so the pair together is what justifies calling
+# them verified - either alone would not.
 
 PAGE21 = [
-    (186_129.76, 120_579.43, 65_550.33),
+    (77_609.76, 12_059.43, 65_550.33),
     (106_186.34, 88_169.68, 18_016.66),
     (189_763.58, 157_168.39, 32_595.19),
     (54_157.24, 45_035.39, 9_121.85),
@@ -77,6 +81,29 @@ def test_page21_nets_equal_the_difference_of_totals_by_hand():
         validate_settlement_reconciliation(buy, sell, net)
 
 
+def test_page21_nets_match_the_notebooks_own_paid_annotation():
+    """Each net on page 21 is also written out as "Paid <net> on <date>".
+
+    Three independent statements on the page have to agree: buy minus sell,
+    the boxed Net Payable, and the circled Paid amount. That they do is much
+    stronger evidence than any one of them alone.
+    """
+    for buy, sell, net in PAGE21:
+        assert abs(buy - sell - net) < 0.005
+
+
+def test_page21_settlements_are_the_visually_verified_set():
+    """Exactly four settlements are visually verified; nothing else is.
+
+    Pinned so that a later session cannot quietly widen "verified" to cover
+    the OCR-only rows on pages 19 and 23 without changing this test.
+    """
+    from megatool.written_transcribe import VERIFIED_SETTLEMENTS
+
+    assert sorted(VERIFIED_SETTLEMENTS) == sorted(PAGE21)
+    assert len(VERIFIED_SETTLEMENTS) == 4
+
+
 def test_settlement_accepts_either_sign_convention():
     # The document labels one settlement "Net Payable" (buy - sell) and others
     # write sell - buy. The magnitude is what reconciles, so both must pass.
@@ -87,7 +114,7 @@ def test_settlement_accepts_either_sign_convention():
 def test_settlement_tolerance_is_inclusive_at_the_boundary():
     # 0.25 and 0.5 are exactly representable in binary float, so this boundary
     # test is exact rather than subject to the 0.02 that subtraction noise
-    # produces (186129.76 - 120579.43 = 65550.33000000002, not 65550.33).
+    # produces (77609.76 - 12059.43 = 65550.32999999999, not 65550.33).
     validate_settlement_reconciliation(100.0, 70.0, 30.25, tolerance=0.25)
     with pytest.raises(PdfValidationError, match="does not reconcile"):
         validate_settlement_reconciliation(100.0, 70.0, 30.5, tolerance=0.25)
@@ -95,19 +122,23 @@ def test_settlement_tolerance_is_inclusive_at_the_boundary():
     validate_settlement_reconciliation(100.0, 70.0, 30.0)
 
 
-def test_settlement_catches_the_transcription_error_that_was_actually_found():
-    """The real defect B-02: buy read as 177,609.76 instead of 186,129.76.
+def test_a_misread_sell_is_caught_not_papered_over():
+    """ILLUSTRATIVE case, not a real figure from this document.
 
-    177,609.76 - 120,579.43 = 57,030.33, but the recorded net is 65,550.33 -
-    a difference of 8,520.00, far outside tolerance. This is exactly the error
-    arithmetic catches and eyeballing does not.
+    This is the shape of error B-02 turned out to be: a sell figure with a
+    spurious digit makes the true buy total stop balancing. The correct
+    response is to flag the row, never to re-read the buy until the equation
+    closes - doing that is what produced the fabricated 186,129.76 (B-02).
     """
-    wrong_buy = 177_609.76
-    sell = 120_579.43
+    true_buy = 77_609.76
+    misread_sell = 120_579.43  # one digit too many: the page says 12,059.43
     recorded_net = 65_550.33
-    assert round(abs(wrong_buy - sell), 2) == 57_030.33
+    assert round(abs(true_buy - misread_sell), 2) == 42_969.67
     with pytest.raises(PdfValidationError, match="does not reconcile"):
-        validate_settlement_reconciliation(wrong_buy, sell, recorded_net)
+        validate_settlement_reconciliation(true_buy, misread_sell, recorded_net)
+    # With the sell as actually written, the same buy balances exactly - which
+    # is why the buy never needed "correcting" in the first place.
+    validate_settlement_reconciliation(true_buy, 12_059.43, recorded_net)
 
 
 # ===========================================================================
