@@ -7,6 +7,7 @@ megatool status      show data coverage and freshness
 megatool screen      run a saved screen from the command line
 megatool serve       start the web terminal
 megatool probe       check which data sources are reachable right now
+megatool floor       import / summarise a NEPSE floor sheet (import-based)
 """
 
 from __future__ import annotations
@@ -230,6 +231,113 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_indented(label: str, value: object, width: int = 22) -> None:
+    print(f"  {label:<{width}} {value}")
+
+
+def _cmd_floor_import(args: argparse.Namespace) -> int:
+    from megatool.floorsheet import FloorSheetError, import_floorsheet
+
+    path = Path(args.file)
+    if not path.exists():
+        print(f"error: no such file: {path}", file=sys.stderr)
+        return 1
+    text = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        out = import_floorsheet(text, args.date, source=args.source or path.name)
+    except FloorSheetError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Floor sheet for {out['traded_at']} ({path.name})")
+    _print_indented("rows in file:", out["rows_total"])
+    _print_indented("trades stored:", out["rows_imported"])
+    _print_indented("rows skipped:", out["rows_skipped"])
+    if out["already_imported"]:
+        print("\nThis exact file was already imported for this session; nothing was added.")
+    for warning in out["warnings"][:10]:
+        print(f"  warning: {warning}")
+    for row in out["skipped"][:10]:
+        print(f"  skipped line {row['line']}: {row['reason']}")
+    if out["warnings"] or out["skipped"]:
+        print("\nSkipped rows are reported above rather than dropped silently,")
+        print("because a silently dropped row would make every total wrong.")
+    return 0
+
+
+def _cmd_floor_summary(args: argparse.Namespace) -> int:
+    from megatool.floorsheet import list_sessions, summary
+
+    if args.sessions:
+        rows = list_sessions()
+        if not rows:
+            print("No floor sheet has been imported.")
+            print("Import one with: megatool floor import FILE --date YYYY-MM-DD")
+            return 0
+        print(f"{'DATE':<14} {'PRINTS':>8} {'SYMBOLS':>8} {'AMOUNT':>16}  SOURCE")
+        for row in rows:
+            print(
+                f"{row['traded_at']:<14} {row['prints']:>8} {row['symbols']:>8} "
+                f"{row['amount']:>16,.2f}  {row['source']}"
+            )
+        return 0
+
+    data = summary(traded_at=args.date, symbol=args.symbol, top=args.top)
+    totals = data["totals"]
+    if totals["trades"] == 0:
+        print("No floor sheet has been imported.")
+        print("Import one with: megatool floor import FILE --date YYYY-MM-DD")
+        for warning in data["warnings"]:
+            print(f"\n{warning}")
+        return 0
+
+    scope = args.date or f"{totals['sessions']} imported session(s)"
+    if args.symbol:
+        scope = f"{scope}, symbol {args.symbol.upper()}"
+    print(f"Floor-sheet summary ({scope})")
+    _print_indented("trades:", f"{totals['trades']:,}")
+    _print_indented("symbols:", totals["symbols"])
+    _print_indented("quantity:", f"{totals['quantity']:,}")
+    _print_indented("amount:", f"NPR {totals['amount']:,.2f}")
+
+    if data["top_buyers"]:
+        print("\nTop buyers (by quantity):")
+        for row in data["top_buyers"]:
+            print(
+                f"  {row['buyer']:<12} {row['quantity']:>12,}  "
+                f"{row['share_of_quantity_pct']:>7.2f}%  NPR {row['amount']:>16,.2f}"
+            )
+    if data["top_sellers"]:
+        print("\nTop sellers (by quantity):")
+        for row in data["top_sellers"]:
+            print(
+                f"  {row['seller']:<12} {row['quantity']:>12,}  "
+                f"{row['share_of_quantity_pct']:>7.2f}%  NPR {row['amount']:>16,.2f}"
+            )
+    if data["top_symbols"]:
+        print("\nMost traded symbols (by amount):")
+        for row in data["top_symbols"]:
+            print(
+                f"  {row['symbol']:<12} {row['prints']:>6} prints  "
+                f"NPR {row['amount']:>16,.2f}  "
+                f"{row['distinct_buyers']} buyer(s) / {row['distinct_sellers']} seller(s)"
+            )
+
+    conc = data["concentration"]
+    print("\nConcentration (broker CODES, not beneficial owners):")
+    _print_indented("unique buyers:", conc["unique_buyers"])
+    _print_indented("unique sellers:", conc["unique_sellers"])
+    _print_indented("buyer HHI:", conc["buyer_hhi"])
+    _print_indented("seller HHI:", conc["seller_hhi"])
+
+    for warning in data["warnings"]:
+        print(f"\nWARNING: {warning}")
+    print("\nWhat these numbers are not:")
+    for limit in data["limits"]:
+        print(f"  - {limit}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="megatool",
@@ -277,6 +385,26 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--log-level", default="warning")
     v.set_defaults(func=_cmd_serve)
 
+    fl = sub.add_parser(
+        "floor",
+        help="import and analyse a NEPSE floor sheet (there is no floor-sheet "
+        "API, so this is import-based by design)",
+    )
+    flsub = fl.add_subparsers(dest="floor_command", required=True)
+
+    fli = flsub.add_parser("import", help="import one session's floor-sheet CSV")
+    fli.add_argument("file", help="path to the CSV as published")
+    fli.add_argument("--date", required=True, help="the session date, YYYY-MM-DD")
+    fli.add_argument("--source", help="where the file came from (default: its filename)")
+    fli.set_defaults(func=_cmd_floor_import)
+
+    fls = flsub.add_parser("summary", help="concentration and counterparty analysis")
+    fls.add_argument("--date", help="restrict to one session, YYYY-MM-DD")
+    fls.add_argument("--symbol", help="restrict to one symbol")
+    fls.add_argument("--top", type=int, default=10, help="rows per table (default 10)")
+    fls.add_argument("--sessions", action="store_true", help="list imported sessions instead")
+    fls.set_defaults(func=_cmd_floor_summary)
+
     return p
 
 
@@ -288,6 +416,11 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:  # pragma: no cover
         print("\nInterrupted.")
         return 130
+    except ValueError as exc:
+        # Bad input (an unreadable file, an unknown preset, an invalid filter
+        # tree) must read as a message, never as a traceback.
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -42,7 +42,7 @@ Stop the server with `Ctrl-C`.
 | **Forecasting** | Six transparent models, each scored on an unseen hold-out against the naive "last value" baseline, with a plain-words verdict |
 | **Portfolio** | Positions derived from your own transaction ledger, valued at the latest stored close |
 | **Journal & planning** | Trade journal with win rate, R multiples and plan adherence; a planner that turns entry/stop/target into a position size for a risk budget |
-| **Floor sheet** | Import a session's CSV and see buyer/seller concentration and counterparties, described as broker codes rather than as people |
+| **Floor sheet** | Import a session's CSV (`megatool floor import`, or the API) and see buyer/seller concentration and counterparties, described as broker codes rather than as people. `megatool floor summary` prints the analysis with its limits |
 
 ## What it deliberately does not do
 

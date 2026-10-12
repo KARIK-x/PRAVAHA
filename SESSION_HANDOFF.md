@@ -28,8 +28,8 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | Indicators | `megatool/ta/` — 28 indicators, decorator registry, per-output warm-up |
 | Analysis | `scanner.py`, `backtest.py`, `forecast.py`, `research.py`, `floorsheet.py` |
 | Personal state | `portfolio.py` (ledger-derived), `journal.py`, `planning.py` |
-| Interface | `api.py` (FastAPI, ~40 routes), `cli.py`, `web/static/` |
-| Tests | `tests/` — 406 tests across 10 files |
+| Interface | `api.py` (FastAPI, ~45 routes), `cli.py` (incl. `megatool floor import|summary`), `web/static/` (8 tabs) |
+| Tests | `tests/` — 421 tests across 11 files |
 | Docs | `docs/ARCHITECTURE.md`, `DATA_SOURCES.md`, `TECH_STACK_DECISIONS.md`, `RESEARCH_REGISTER.md`, `PROJECT_STATUS.md`, this file |
 
 ### Data actually in the store
@@ -101,7 +101,8 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
    was found. The design is CSV/manual import with per-field provenance; no real file has
    ever been imported, so nothing is tested.
 3. **Floor-sheet analysis is implemented but has never been run on a real sheet** — it is
-   unit-tested against synthetic CSVs only. Import a real session to exercise it.
+   unit-tested against synthetic CSVs only, and there is **no web tab** for it yet: it is
+   reachable from `megatool floor` and the HTTP API. Import a real session to exercise it.
 4. **Bounded Research Agent not implemented** — the web-search tool failed on all three
    attempts this session (register B1–B3).
 5. **Multi-factor ranking is not built** — the scanner's filter tree is the multi-factor
