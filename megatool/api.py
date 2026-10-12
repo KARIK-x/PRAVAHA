@@ -612,11 +612,24 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
         status. Unreviewed records are included but flagged: they are a personal
         journal, not independently verified market data.
         """
-        from megatool.written_pdf import ReviewStatus, query_records
+        from megatool.written_pdf import RecordType, ReviewStatus, query_records
+
+        # Validate the record type. An unknown value is a client error
+        # (400), not a server error (500).
+        record_type_enum: RecordType | None = None
+        if record_type:
+            try:
+                record_type_enum = RecordType(record_type)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"unknown record_type: {record_type!r}. "
+                    f"Valid types: {', '.join(t.value for t in RecordType)}",
+                ) from exc
 
         rows = query_records(
             symbol=symbol,
-            record_type=record_type,
+            record_type=record_type_enum,
             page=page,
             review_status=ReviewStatus.REVIEWED if reviewed_only else None,
         )

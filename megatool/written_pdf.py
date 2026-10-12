@@ -423,13 +423,16 @@ def import_records(
     init_app_db(db_path)
     pdf_path = Path(pdf_path)
     content_hash = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
+    # Derive the page count from the document itself, never a magic number.
+    with WrittenPdfExtractor(pdf_path) as ext:
+        page_count = ext.page_count
 
     with get_conn(db_path) as conn:
         # Register the import
         cur = conn.execute(
             "INSERT OR IGNORE INTO pdf_imports (source_file, content_hash, page_count, imported_at) "
             "VALUES (?, ?, ?, ?)",
-            (pdf_path.name, content_hash, 52, now_iso()),
+            (pdf_path.name, content_hash, page_count, now_iso()),
         )
         if cur.rowcount == 0:
             row = conn.execute(
@@ -525,8 +528,12 @@ def query_records(
         where.append("review_status = ?")
         params.append(review_status.value)
     if min_confidence:
-        where.append("confidence IN (?, ?, ?)")
-        params.extend([min_confidence.value, "high", "medium"])
+        # Confidence is ordered: uncertain < low < medium < high.
+        # A minimum of X means X and every level above it.
+        order = ["uncertain", "low", "medium", "high"]
+        allowed = order[order.index(min_confidence.value) :]
+        where.append(f"confidence IN ({', '.join('?' for _ in allowed)})")
+        params.extend(allowed)
 
     clause = f"WHERE {' AND '.join(where)}" if where else ""
     with get_conn(db_path) as conn:

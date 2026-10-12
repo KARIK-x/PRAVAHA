@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from megatool.db import init_app_db
+from megatool.db import get_conn, init_app_db
 from megatool.written_pdf import (
     ExtractedRecord,
     ExtractionConfidence,
@@ -282,3 +282,61 @@ def test_extractor_save_load_json(tmp_path):
         ext.load_json(path)
         assert len(ext.records) == 4
         assert ext.records[0].symbol == "TPC"
+
+
+# ---------------------------------------------------------------- audit B fixes
+
+
+def test_import_records_stores_the_real_page_count(db):
+    """The import must record the PDF's actual page count, not a constant."""
+    records = _sample_records()
+    out = import_records(records, "WRITTENdata.pdf", db_path=db)
+    assert out["records_total"] == 4
+    with get_conn(db) as conn:
+        row = conn.execute("SELECT page_count FROM pdf_imports LIMIT 1").fetchone()
+        # WRITTENdata.pdf has 52 pages; the value must come from the file.
+        assert row["page_count"] == 52
+
+
+def test_min_confidence_filter_includes_that_level_and_above(db):
+    """min_confidence must include the requested level and everything
+    above it — never a fixed set."""
+    records = [
+        ExtractedRecord(
+            record_type=RecordType.FUNDAMENTAL,
+            page=1,
+            source_ref=f"row {i}",
+            symbol="TPC",
+            field_name="eps",
+            value=10.0 + i,
+            confidence=c,
+        )
+        for i, c in enumerate(
+            [
+                ExtractionConfidence.UNCERTAIN,
+                ExtractionConfidence.LOW,
+                ExtractionConfidence.MEDIUM,
+                ExtractionConfidence.HIGH,
+            ]
+        )
+    ]
+    import_records(records, "WRITTENdata.pdf", db_path=db)
+
+    # min=high -> only the high record
+    rows = query_records(db_path=db, min_confidence=ExtractionConfidence.HIGH)
+    assert len(rows) == 1
+    assert rows[0]["confidence"] == "high"
+
+    # min=medium -> medium and high
+    rows = query_records(db_path=db, min_confidence=ExtractionConfidence.MEDIUM)
+    assert len(rows) == 2
+    assert {r["confidence"] for r in rows} == {"medium", "high"}
+
+    # min=low -> low, medium, high
+    rows = query_records(db_path=db, min_confidence=ExtractionConfidence.LOW)
+    assert len(rows) == 3
+    assert {r["confidence"] for r in rows} == {"low", "medium", "high"}
+
+    # min=uncertain -> all four
+    rows = query_records(db_path=db, min_confidence=ExtractionConfidence.UNCERTAIN)
+    assert len(rows) == 4
