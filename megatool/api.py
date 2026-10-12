@@ -598,6 +598,63 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
         """Concentration and counterparty analysis. Descriptive, never a signal."""
         return floorsheet_summary(traded_at=traded_at, symbol=symbol, top=top)
 
+    # ------------------------------------------------------------ written pdf
+    @app.get("/api/written-pdf/records")
+    def written_pdf_records(
+        symbol: str | None = None,
+        record_type: str | None = None,
+        page: int | None = None,
+        reviewed_only: bool = False,
+    ) -> dict[str, Any]:
+        """Records extracted from Written Data.pdf.
+
+        Every record carries its source page, extraction confidence, and review
+        status. Unreviewed records are included but flagged: they are a personal
+        journal, not independently verified market data.
+        """
+        from megatool.written_pdf import ReviewStatus, query_records
+
+        rows = query_records(
+            symbol=symbol,
+            record_type=record_type,
+            page=page,
+            review_status=ReviewStatus.REVIEWED if reviewed_only else None,
+        )
+        return {
+            "count": len(rows),
+            "records": rows,
+            "note": (
+                "Records from a handwritten personal journal. They are descriptive "
+                "historical observations, not verified market data. Review status "
+                "is shown per record."
+            ),
+        }
+
+    @app.get("/api/written-pdf/summary")
+    def written_pdf_summary() -> dict[str, Any]:
+        """Coverage of the PDF extraction: how many records, by type and review status."""
+        from megatool.written_pdf import query_records
+
+        rows = query_records()
+        by_type: dict[str, int] = {}
+        by_review: dict[str, int] = {}
+        by_page: dict[int, int] = {}
+        for r in rows:
+            by_type[r["record_type"]] = by_type.get(r["record_type"], 0) + 1
+            by_review[r["review_status"]] = by_review.get(r["review_status"], 0) + 1
+            by_page[r["page"]] = by_page.get(r["page"], 0) + 1
+        return {
+            "total": len(rows),
+            "by_type": by_type,
+            "by_review_status": by_review,
+            "pages_covered": len(by_page),
+            "note": (
+                "Extraction from a 52-page handwritten journal. Automated OCR failed "
+                "on 42 of 52 pages; records were transcribed by visual inspection. "
+                "All values require human review before financial use."
+            ),
+        }
+
     # ----------------------------------------------------------- forecasting
     @app.get("/api/forecast/models")
     def forecast_models() -> dict[str, Any]:
