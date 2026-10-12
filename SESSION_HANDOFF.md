@@ -15,7 +15,7 @@ uv sync                     # dependencies into ./.venv (Python 3.12.3)
 uv run megatool init        # create/upgrade the local databases
 uv run megatool fetch       # download real NEPSE history (network)
 uv run megatool serve       # web terminal at http://127.0.0.1:8710
-uv run pytest               # 490 tests, ~20 s
+uv run pytest               # 506 tests, ~20 s
 ```
 
 The server binds `127.0.0.1` only. Nothing listens on the network interface.
@@ -28,8 +28,8 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | Indicators | `megatool/ta/` — 28 indicators, decorator registry, per-output warm-up |
 | Analysis | `scanner.py`, `backtest.py`, `forecast.py`, `research.py`, `floorsheet.py` |
 | Personal state | `portfolio.py` (ledger-derived), `journal.py`, `planning.py` |
-| Interface | `api.py` (FastAPI, ~45 routes), `cli.py` (incl. `megatool floor import|summary`), `web/static/` (8 tabs) |
-| Tests | `tests/` — 490 tests across 13 files |
+| Interface | `api.py` (FastAPI, ~45 routes), `cli.py` (incl. `megatool floor import|summary`), `web/static/` (10 tabs) |
+| Tests | `tests/` — 506 tests across 13 files |
 | Docs | `docs/ARCHITECTURE.md`, `DATA_SOURCES.md`, `TECH_STACK_DECISIONS.md`, `RESEARCH_REGISTER.md`, `PROJECT_STATUS.md`, `TESTING.md`, `SOURCES.md`, this file |
 
 ### Data actually in the store
@@ -62,7 +62,11 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
     page, extraction confidence, and review status.
   - CLI — `megatool pdf import|summary|list`.
   - API — `GET /api/written-pdf/records`, `GET /api/written-pdf/summary`.
-  - **PDF Journal tab** (9th tab) — summary, records table, filters, empty state.
+  - **PDF Journal tab** (9th tab) — summary, records table, filters, empty state,
+    plus per-row **review / reject** buttons wired to `POST /api/written-pdf/review`.
+  - **Floor Sheet tab** (10th tab) — paste-and-import, session / symbol / Top-N
+    filters, and panels for totals, buyers, sellers, symbols, pairs, HHI
+    concentration, sessions and imports.
   - Research assistant — includes *reviewed* PDF records as cited findings.
   - 24 tests in `tests/test_written_pdf.py`.
 - 64 sample records imported as **unreviewed**; nothing enters the portfolio or
@@ -95,6 +99,8 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | `927be9f` | `/api/written-pdf/records` and `/api/written-pdf/summary` |
 | `5f11ce9` | Web UI: PDF Journal tab (9th tab) |
 | `f400a54` | **Audit B fixes**: real page count, confidence filter, `record_type` 400 |
+| `5f16f03` | PDF **review workflow** + **journal-only research** fallback; fixes 2 bugs I introduced |
+| `a05a2c3` | **Floor Sheet tab** (10th tab); defines the missing `.good`/`.bad` cell classes |
 
 ## 4. Decisions worth not re-litigating
 
@@ -156,6 +162,18 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | P2 | `min_confidence` filter always included `high` + `medium`, so `min_confidence=high` returned medium records | walked the ordered-level logic | proper ordered filter: the requested level and everything above it; 4-level test |
 | P3 | `GET /api/written-pdf/records?record_type=...` passed a raw string to code that calls `.value` on it → **HTTP 500** on every request | executed against a running server | endpoint validates the type → **400** naming valid types; CLI already exits 1 |
 
+### From this session's robustness pass (2026-10-12)
+
+| # | Defect | How it surfaced | Fix |
+| --- | --- | --- | --- |
+| R1 | The unreviewed-PDF warning was **inverted**: it claimed "none are reviewed yet" for records that *were* reviewed, because `pdf_findings` only ever holds reviewed rows | reading the code after wiring it to the UI | query all records, surface reviewed, count the rest; warning now names the actual unreviewed count |
+| R2 | The ternary sat **inside** the list literal, so an empty case appended `[]` to `warnings` — the UI rendered an empty bullet | same read-through | moved the conditional outside the list |
+| R3 | `pdf_findings` were returned by the API but **never rendered** — the whole integration was invisible in the Research tab | grepped `app.js` for `pdf_findings` | `renderPdfFindings()`; wired into both the ask and report paths |
+| R4 | A symbol in the handwritten PDF but not in the 60-symbol store (TPC, SAHAS) returned a bare **404**, making the journal unreachable for exactly those names | tested the review flow on TPC | `journal_only_answer()`; states "No stored price history" rather than hiding it. Symbols with neither still 404 (regression test) |
+| R5 | A store with no `pdf_records` table raised a raw `sqlite3.OperationalError` (a 500 waiting to happen) | unit test hit it directly | catches *only* "no such table" → treated as "nothing extracted yet"; other errors still raise |
+| R6 | `.good` / `.bad` cell classes were **never defined in styles.css** — the PDF table's confidence and review colouring did nothing | wrote the same classes into the Floor Sheet tab | defined `.good { color: var(--up) }` and `.bad { color: var(--down) }` |
+| R7 | The research report head rendered `as of null · 0 bars since undefined` for a journal-only symbol | traced the journal-only path through the UI | head text branches on `d.journal_only` |
+
 ### From earlier in the session
 
 | # | Defect | How it surfaced | Fix |
@@ -186,8 +204,10 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
    was found. The design is CSV/manual import with per-field provenance; no real file has
    ever been imported, so nothing is tested.
 3. **Floor-sheet analysis is implemented but has never been run on a real sheet** — it is
-   unit-tested against synthetic CSVs only, and there is **no web tab** for it yet: it is
-   reachable from `megatool floor` and the HTTP API. Import a real session to exercise it.
+   unit-tested against synthetic CSVs only. It now has a **Floor Sheet web tab** (paste,
+   import, filter, all seven panels), verified in-browser with a synthetic 5-row sheet;
+   it has never been exercised against a real published floor sheet. Import a real session
+   to close this.
 4. **Bounded Research Agent not implemented** — the web-search tool failed on all three
    attempts this session (register B1–B3).
 5. **Multi-factor ranking is not built** — the scanner's filter tree is the multi-factor
@@ -205,13 +225,17 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 
 ## 7. Verification evidence
 
-- `uv run pytest` — **490 passed, 0 failed** (2026-10-12), 13 test files.
+- `uv run pytest` — **506 passed, 0 failed** (2026-10-12), 13 test files.
 - `ruff check` and `ruff format` — clean.
-- All **nine** web tabs exercised in a real browser (Playwright) with **0 console errors**;
+- All **ten** web tabs exercised in a real browser (Playwright) with **0 console errors**;
   the refusal path, the oversell rejection, the empty-journal "—" and the PDF tab's
   empty state were each read back from the DOM. Screenshots in `docs/screenshots/`.
 - Floor-sheet analysis and the PDF import verified end-to-end against **throwaway**
   `MEGATOOL_DATA_DIR` stores (second server instance), so the owner's store stayed clean.
+- The **PDF review workflow** and the **journal-only research answer** were exercised in
+  the browser as well as the API: a row's review button moved reviewed 1 → 2, and asking
+  about TPC (no bars) answered from the journal while ZZZZ (no bars, no records) still
+  returned 404.
 - Live endpoints exercised with `curl` against the running server. Full evidence table in
   `PROJECT_STATUS.md` §5.
 - Two audit passes on the PDF module: Audit A (functional — every workflow executed)

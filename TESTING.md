@@ -7,7 +7,7 @@ Every claim in this file was verified by executing the named command on the proj
 
 | Command | Result |
 | --- | --- |
-| `uv run pytest` | **490 passed**, ~20 s |
+| `uv run pytest` | **506 passed**, ~20 s |
 | `ruff check .` | clean |
 | `ruff format .` | clean |
 
@@ -15,7 +15,7 @@ Per-file test counts:
 
 | File | Tests | What it covers |
 | --- | --- | --- |
-| `tests/test_api.py` | 65 | Route behaviour, validation, error mapping, response shapes |
+| `tests/test_api.py` | 73 | Route behaviour, validation, error mapping, review endpoint, journal fallback |
 | `tests/test_audit_a_fixes.py` | 45 | Regression tests for defects found by Audit A and Audit B |
 | `tests/test_backtest.py` | 32 | Long/flat engine, fills, fees, assumptions |
 | `tests/test_cli_floor.py` | 9 | `megatool floor import` / `floor summary` |
@@ -25,9 +25,9 @@ Per-file test counts:
 | `tests/test_journal.py` | 30 | CRUD, win rate, R multiples, plan adherence, unknown fields |
 | `tests/test_planning.py` | 21 | Position sizing, R multiples, warnings |
 | `tests/test_portfolio.py` | 29 | Ledger-derived positions, P&L, validation, UTC normalisation |
-| `tests/test_research.py` | 28 | Cited findings, question routing, refusal of predictions |
+| `tests/test_research.py` | 32 | Cited findings, question routing, refusal of predictions, journal-only answer |
 | `tests/test_scanner.py` | 21 | Metrics, presets, filter-tree validation |
-| `tests/test_written_pdf.py` | 24 | PDF extraction, validation, idempotent import, confidence filter |
+| `tests/test_written_pdf.py` | 28 | PDF extraction, validation, idempotent import, confidence filter, review workflow |
 
 ## How to run
 

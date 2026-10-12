@@ -11,7 +11,7 @@ marked working because the code exists. The labels mean:
 | `NOT-IMPLEMENTED` | Deliberately not built. The reason is stated |
 | `NOT-TESTED` | Code exists but has not been executed/observed |
 
-Test suite: **490 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check` and
+Test suite: **506 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check` and
 `ruff format` clean. Live server verified in a real browser via Playwright.
 
 ---
@@ -39,7 +39,7 @@ Test suite: **490 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check`
 
 ## 2. Web UI
 
-Nine tabs, all exercised in a real browser (Playwright) with **0 console errors**.
+Ten tabs, all exercised in a real browser (Playwright) with **0 console errors**.
 Screenshots in `docs/screenshots/`.
 
 | Tab | Status |
@@ -48,7 +48,8 @@ Screenshots in `docs/screenshots/`.
 | Research | `TESTED-PASS` — cited report rendered for ADBL (33 findings, every row showing value + window + definition, no `[object Object]`, no `undefined`); a predictive question is refused verbatim and does **not** fall back to the full report; forecast comparison shows `NO DEMONSTRATED SKILL` on every model at or above 1.0 |
 | Portfolio | `TESTED-PASS` — empty state explicit; a buy valued at the latest stored close with that stated on screen; **oversell rejected with the server's plain-English message** ("cannot sell 500 of ADBL: only 10 held in the ledger"); a symbol with no stored price shows as unvalued with a warning rather than being carried at cost |
 | Journal | `TESTED-PASS` — with no closed trades the win rate, avg R and adherence render as **"—", never as 0%**; with real entries, stats/per-strategy/grading work and an ungradable entry shows the server's explanation; the planner returns risk/share, R:R, units, cash used and actual risk |
-| PDF Journal | `TESTED-PASS` — summary card (records / types / pages covered / reviewed vs unreviewed), an explicit warning that unreviewed records are descriptive not verified, a records table with page + confidence + review status, and working symbol / type / page / reviewed-only filters. Empty state reads "Import with: megatool pdf import FILE.json". Verified in-browser on the isolated store (64 records) and the real store (empty state) |
+| Floor Sheet | `TESTED-PASS` — 10th tab. Session/symbol/Top-N filters, paste-and-import box, and all seven panels (totals, buyers, sellers, symbols, pairs, concentration, sessions, imports). Verified on an isolated store with a 5-row synthetic sheet: totals 870 qty / 323,920 amount match the CSV by hand, symbol filter narrows to NICA 450/112,800, buyer HHI 3341 recomputed by hand, import reports "5 of 5 rows (0 skipped)". Real store shows the empty state |
+| PDF Journal | `TESTED-PASS` — summary card (records / types / pages covered / reviewed vs unreviewed), an explicit warning that unreviewed records are descriptive not verified, a records table with page + confidence + review status, working symbol / type / page / reviewed-only filters, and per-row **review / reject buttons** (verified: reviewed 1 → 2 in-browser). Empty state reads "Import with: megatool pdf import FILE.json". Verified in-browser on the isolated store (64 records) and the real store (empty state) |
 
 Test rows created during browser verification were deleted through the UI and the API:
 the owner's journal, ledger and floor-sheet tables are empty.
@@ -99,7 +100,7 @@ Evidence, not assertions. Everything below was executed and observed.
 
 | What | How | Result |
 | --- | --- | --- |
-| Full test suite | `uv run pytest` | **490 passed, 0 failed**, ~20 s |
+| Full test suite | `uv run pytest` | **506 passed, 0 failed**, ~20 s |
 | Lint / format | `ruff check .`, `ruff format .` | clean |
 | Real data in the store | `GET /api/status` on the running server | 89,580 bars, 60 symbols, 1995-07-20 → 2026-10-09 |
 | Every browser tab | Playwright, clicking through all 8 tabs | **0 console errors** |
@@ -124,6 +125,15 @@ Evidence, not assertions. Everything below was executed and observed.
 | PDF tab, isolated store | Playwright, click the PDF Journal tab | summary 64 records / 6 pages, table renders, symbol filter → 1 TPC row, reviewed-only → "No records match", **0 console errors** |
 | PDF tab, real store | Playwright, click the PDF Journal tab | empty state: "No records extracted yet. Import with: megatool pdf import FILE.json", **0 console errors** |
 | All 9 tabs, real server | Playwright click-through on :8710 | **0 console errors**; store intact at 89,580 bars / 60 symbols |
+| All 10 tabs, real server | Playwright click-through on :8710 after the Floor Sheet tab | **0 console errors**; 60 symbols intact; floor sheet and PDF both correctly empty |
+| Floor Sheet import (UI) | paste a 5-row synthetic sheet, click Import | "Imported 5 of 5 rows (0 skipped)"; totals 870 / 323,920 match the CSV by hand |
+| Floor Sheet HHI (UI) | buyers B1 300, B2 300, B4 270 of 870 | HHI **3341** rendered — recomputed by hand as 34.48²+34.48²+31.03² = 3340.7 |
+| Floor Sheet filter (UI) | symbol = NICA | totals narrow to 2 prints / 450 qty / 112,800 — matches the CSV rows by hand |
+| PDF review (UI) | click a row's "✓ review" | summary moves reviewed 1 → 2, unreviewed 63 → 62; **0 console errors** |
+| Research: journal-only (UI) | ask about TPC (no bars, has a journal record) | answers from the journal, headed "No stored price history for TPC"; redundant "No findings." suppressed |
+| Research: still 404s | ask about ZZZZ (no bars, no records) | 404 `no stored history for ZZZZ` — the fallback does not weaken it |
+| Research: unreviewed hidden | ask about SAHAS (3 unreviewed records) | `pdf_findings: []` plus warnings naming the 3 unreviewed records |
+| Cell colouring | `.good` / `.bad` classes used by the PDF table | **were undefined in styles.css** — confidence/review colour did nothing; now defined |
 
 ## 6. How to run it
 
@@ -133,5 +143,5 @@ uv sync
 uv run megatool init      # create the databases
 uv run megatool fetch     # download real history (network)
 uv run megatool serve     # http://127.0.0.1:8710
-uv run pytest             # 490 tests
+uv run pytest             # 506 tests
 ```
