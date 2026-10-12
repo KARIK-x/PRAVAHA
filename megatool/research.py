@@ -531,6 +531,25 @@ def answer(
     symbol = symbol.upper()
     q = (question or "").lower()
     report = build_report(df, symbol, universe)
+    pdf_findings: list[dict[str, Any]] = []
+    if "journal" in q or "written" in q or "pdf" in q or "eps" in q:
+        # The PDF is a historical personal journal. Its records are included only
+        # with their source page and review status, never as verified market data.
+        from megatool.written_pdf import ReviewStatus, query_records
+
+        pdf_rows = query_records(symbol=symbol, review_status=ReviewStatus.REVIEWED)
+        for row in pdf_rows:
+            pdf_findings.append(
+                {
+                    "topic": "historical journal",
+                    "field": f"{row.get('field_name', '')} (page {row['page']})",
+                    "value": row.get("value"),
+                    "unit": row.get("unit"),
+                    "source": "Written Data.pdf",
+                    "review_status": row.get("review_status"),
+                    "note": "Personal journal record. Descriptive, not independently verified.",
+                }
+            )
 
     predictive = (
         "will ",
@@ -590,7 +609,11 @@ def answer(
             else "No topic matched. Ask about: " + ", ".join(TOPICS)
         ),
         "findings": findings,
+        "pdf_findings": pdf_findings,
         "topic_help": {k: TOPIC_HELP[k] for k in TOPICS},
         "limits": report.limits,
-        "warnings": report.warnings,
+        "warnings": report.warnings + (
+            [f"{len(pdf_findings)} PDF records found, but none are reviewed yet."
+             if pdf_findings else []]
+        ),
     }
