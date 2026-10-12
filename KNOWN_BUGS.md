@@ -301,16 +301,61 @@ An edge column of boxed figures (27, 28, 29, 15, 11.5, 16) sits beside the four
 blocks and is **not transcribed**. This is why `page_fully_transcribed` is false
 for page 21 despite all four settlements being read and verified.
 
-### S-06 — Page 28, 12C: read three ways and still 2.00 apart
+### S-06 — Page 28, 12C: RESOLVED by a second reading, original kept
 
-As read, `77,793.55 − 68,832.46 = 8,961.09` against a written net of
-**8,963.09**. Arithmetic proves one of the three readings is wrong — a 3/5 swap
-in the buy or a 1/3 in the net produces exactly this — but cannot say which.
-All three figures are therefore stored exactly as written, the gap sits in
-`source_discrepancies`, `net_matches_written_totals` is `False`, and **no cause
-is assigned**: this is an unresolved reading, not a proven mistake in the
-notebook. The red Paid cloud is left `None` because it cannot be trusted while
-the block is in doubt. Needs a re-read at higher magnification.
+Originally read `77,793.55 − 68,832.46 = 8,961.09` against a written net of
+**8,963.09**. Arithmetic proved one of the three readings was wrong but could
+not say which, so the gap was recorded and nothing was changed.
+
+Resolved 2026-10-12. The NotebookLM digitization of the same page
+(`digitized_trading_ledger_and_notes.md`, December ledger: *"12 Dec: Buy ENL
+(60 x 1291.33) = NPR 77,795.55"*) reads **77,795.55**, and
+`77,795.55 − 68,832.46 = 8,963.09` — the net read by eye on that page. Two of
+the three by-eye figures side with the second reading against the by-eye buy.
+
+`buy_total` is now `77,795.55`, `net_matches_written_totals` is `True`, and
+`verification_status` is **`corrected_verified`**, not `verified`. The original
+`77,793.55` is preserved in `superseded_readings` with the reason; it is never
+deleted. **No cause is assigned** to the underlying qty/price oddity, and the
+red Paid cloud remains `None`.
+
+The correction rests on a second independent reading of the page, corroborated
+by arithmetic — not on arithmetic alone. Arithmetic still cannot say what a
+number says; it can only tell you when two readings disagree.
+
+---
+
+### S-07 — Page 30, 12D: the 0.01 sits in the written total, not a component
+
+The buy components read by eye sum to **283,457.43**; the page writes
+**283,457.42**. Originally this could have been a misread component.
+
+The reference file's four December day totals for those exact dates
+(98,889.26 · 95,841.88 · 75,943.63 · 12,782.66) match every component read by
+eye — and they too sum to .43. With all four independently confirmed, the
+discrepancy is localised to the **written total**.
+
+Still not repaired. `buy_total` remains `283,457.42` as written, the gap stays
+in `source_discrepancies`, and both readings are reported side by side in
+`reference_component_cross_check.csv`. The total is what the notebook says;
+that does not become `.43` because `.43` balances.
+
+---
+
+### S-08 — The reference file's quantity × price does not equal its own totals
+
+`digitized_trading_ledger_and_notes.md` states line totals that its own
+`qty × price` does not reproduce: `60 × 1291.33 = 77,479.80` against a stated
+`77,795.55`; `10 × 1257.0 = 12,570.00` against a stated `12,497.86`;
+`90 × 1142 + 100 × 234.27 = 126,207.00` against a stated `131,261.64`.
+
+**No cause is assigned** — a fee or charge structure would explain a consistent
+upward drift, but transaction-cost rates are an open blocker (T-12, B-12) and
+this document is not evidence for them.
+
+Practical consequence: only the file's **stated totals** are treated as
+evidence, and only for cross-checking. Its `qty`/`price` columns are never used
+to derive, fill or correct a figure anywhere in this codebase.
 
 ---
 

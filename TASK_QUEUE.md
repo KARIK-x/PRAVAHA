@@ -11,7 +11,7 @@ fact or a human decision), **NEXT**, **BACKLOG**.
 
 | ID | Task | Evidence |
 |---|---|---|
-| T-A1 | Reconcile state: code, DB, tests, git | Clean tree before changes; 602 → **650** tests then → **709** (17 files), exit 0; real store row counts (journal/portfolio/pdf/fundamentals) all **0** after runs; PDF untouched (SHA `d7ea6fe4…`, mtime 08:33). |
+| T-A1 | Reconcile state: code, DB, tests, git | Clean tree before changes; 602 → **650** tests then → **709** then → **729** (18 files), exit 0; real store row counts (journal/portfolio/pdf/fundamentals) all **0** after runs; PDF untouched (SHA `d7ea6fe4…`, mtime 08:33). |
 | T-A2 | Verify the ranking claims independently | 372 → **369 ranked + 3 excluded** (CFL 41, CMB 14, SLBBLP 50 bars, all < `min_bars=60`); accounting balances; weights sum to 1.0; dense ranks; scores descending; 0 unavailable factors in contributions or effective weight. |
 | T-A3 | Investigate median-substitution bias | **Confirmed not neutral.** 8 gap symbols; removing them changes 361/361 scores and **284/361 ranks**, max 0.61 pts. Recorded as **L-05**, behaviour pinned by test, not silently "fixed". |
 | T-A4 | Audit Fundamentals Lab guards | Real store honestly reports **0**. Three defects found and fixed: **B-13** lakh parser, **B-14** field/unit validation, **B-15** opt-in staleness guard. |
@@ -21,10 +21,10 @@ fact or a human decision), **NEXT**, **BACKLOG**.
 | T-A8 | Inspect Ollama, no changes made | See T-10 below. Nothing upgraded, nothing pulled (412 refused before download; model list unchanged at 2). |
 | T-A9 | Phase 2 financial-correctness tests | New `tests/test_financial_integrity.py` (**33 tests**, all hand-computed fixtures) + **15** added to fundamentals/written_pdf. |
 
-**Test count: 602 → 650, later 650 → 709 (17 files).** Defects: **B-13, B-14,
-B-15 fixed**; B-16..B-18 opened; L-05, L-06 documented. **B-01 and B-02 were
-reversed by visual reads of pages 19/21/23** — the "bugs" were in the earlier
-audit's readings, not the notebook.
+**Test count: 602 → 650, later 650 → 709, later 709 → 729 (18 files).** Defects:
+**B-13, B-14, B-15 fixed**; B-16..B-18 opened; L-05, L-06 documented. **B-01 and
+B-02 were reversed by visual reads of pages 19/21/23** — the "bugs" were in the
+earlier audit's readings, not the notebook.
 
 ---
 
@@ -46,10 +46,18 @@ how to validate it, and what needs an owner decision.
   30** transcribed and visually verified — **15 records** out of the 19
   candidate blocks the parser found. Page 20 inspected, nothing transcribed
   from it, but its circled labels independently corroborate page 19's block
-  grouping. One read block (page 28, 12C) does not reconcile and is recorded
-  as-is. **0 of 52 pages fully transcribed.**
+  grouping. **0 of 52 pages fully transcribed.**
+* **Progress (2026-10-12, reference pass):** the owner's NotebookLM/ChatGPT
+  outputs are now parsed by `megatool/written_reference.py` and cross-checked
+  against the eye reads — **27/27 settlement total fields agree, 11/11 readable
+  component sides agree, 0 disagreements**. Page 28's 12C was **resolved** on
+  that evidence (`buy_total` 77,793.55 → **77,795.55**, original kept in
+  `superseded_readings`, status `corrected_verified`); page 30's 12D 0.01 is now
+  localised to the written total (S-07). **Nothing was imported into the DB**
+  and no visually read figure was changed to make a sum close.
 * **Remaining:** pages 22/24/26/27/29/31/32/33 (the other settlement and
-  transaction pages), then the fundamentals pages 1–18 and 34–52.
+  transaction pages), then the fundamentals pages 1–18 and 34–52. The visual
+  read pass needs image access, which was off for the reference pass.
 * **Technical dependency:** `scripts/run_vision_ocr.py` +
   `scripts/vision_ocr_batch.swift`, `megatool/written_transcribe.py`
   (`extract_settlements`, `parse_money`), `scripts/build_transcription.py`.

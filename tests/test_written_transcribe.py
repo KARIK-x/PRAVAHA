@@ -409,7 +409,13 @@ def test_the_visually_read_set_grows_without_losing_page_membership():
     assert len(VISUALLY_READ_PAGE_30) == 3
     assert len(ALL_VISUALLY_READ) == 15
     assert sorted(VISUALLY_READ_PAGES) == [19, 21, 23, 28, 30]
-    assert all(d["verification_status"] == "verified" for d in ALL_VISUALLY_READ)
+    # verified, or corrected_verified where a reading was superseded by a
+    # second digitization with the original kept. Nothing else may appear.
+    assert {d["verification_status"] for d in ALL_VISUALLY_READ} <= {
+        "verified",
+        "corrected_verified",
+    }
+    assert any(d["verification_status"] == "corrected_verified" for d in ALL_VISUALLY_READ)
     # Every record still names the page it came from.
     assert all("page" in d for d in ALL_VISUALLY_READ)
 
@@ -544,19 +550,24 @@ def test_page30_records_say_what_they_did_not_read_instead_of_guessing():
     assert d["buy_total"] == 283_457.42
 
 
-def test_page28_12c_reports_a_disagreement_instead_of_nudging_a_figure():
-    """12C doesn't close as read. That is recorded, not resolved.
+def test_page28_12c_was_corrected_with_the_original_kept_and_no_cause_invented():
+    """12C originally read 77793.55 and did not close. Now it does.
 
-    ``77793.55 - 68832.46 = 8961.09`` against a written net of ``8963.09``.
-    Arithmetic tells us *that* one of the three readings is wrong; it cannot
-    say which, so nothing here picks a number to make it balance.
+    The correction is *not* arithmetic picking a number. The reference file
+    ``digitized_trading_ledger_and_notes.md`` independently reads this line as
+    77795.55, and that agrees with the net read by eye on the same page
+    (8963.09). Two of three by-eye figures side with it against the by-eye buy.
+
+    What must stay true: the original reading is still stored, the status is
+    ``corrected_verified`` rather than ``verified``, no cause is invented, and
+    the untouched discrepancies elsewhere on the page are still untouched.
     """
     by_label = {d["label"]: d for d in VISUALLY_READ_PAGE_28}
     assert set(by_label) == {"12A", "12B", "12C"}
 
     a, b, c = by_label["12A"], by_label["12B"], by_label["12C"]
 
-    # The two that close, close on every check.
+    # The two that were never in doubt still close on every check.
     for block in (a, b):
         assert round(sum(block["buy_components"]), 2) == block["buy_total"]
         assert round(sum(block["sell_components"]), 2) == block["sell_total"]
@@ -565,24 +576,40 @@ def test_page28_12c_reports_a_disagreement_instead_of_nudging_a_figure():
         assert block["source_discrepancies"] == []
         assert block["settled"] == block["net"]
 
-    # 12C does not close, and the record says so.
-    assert c["net_matches_written_totals"] is False
-    assert round(c["buy_total"] - c["sell_total"], 2) == 8_961.09
-    assert c["net"] == 8_963.09  # what the page writes, unchanged
-    assert len(c["source_discrepancies"]) == 1
-    assert "2.00" in c["source_discrepancies"][0]
+    # 12C now closes, on the corrected buy.
+    assert c["buy_total"] == 77_795.55
+    assert round(c["buy_total"] - c["sell_total"], 2) == 8_963.09 == c["net"]
+    assert c["net"] == 8_963.09  # the net was always read as this; unchanged
+    assert c["net_matches_written_totals"] is True
+    assert c["source_discrepancies"] == []
 
-    # No figure was adjusted to close it, and no cause was assigned.
-    assert c["buy_total"] == 77_793.55
-    assert c["sell_total"] == 68_832.46
-    assert any("does not say which" in n for n in c["ocr_notes"])
-    assert any("not as a proven mistake" in n for n in c["ocr_notes"])
+    # The original reading survives — correction is append-only.
+    assert len(c["superseded_readings"]) == 1
+    s = c["superseded_readings"][0]
+    assert s["field"] == "buy_total"
+    assert s["original_reading"] == 77_793.55
+    assert s["corrected_value"] == 77_795.55
+    assert "digitized_trading_ledger_and_notes.md" in s["reason"]
+    assert "not merely to make the sum close" in s["reason"]
 
-    # The Paid note is withheld for the same reason: with the block in doubt,
-    # a cloud figure would be a guess.
+    # Corrected is a distinct status from plain verified.
+    assert c["verification_status"] == "corrected_verified"
+    assert a["verification_status"] == b["verification_status"] == "verified"
+
+    # No cause is invented for the qty/price oddity in the reference file.
+    assert any("No cause is assigned" in n for n in c["ocr_notes"])
+    assert any("not treated as evidence" in n for n in c["ocr_notes"])
+
+    # The Paid note stays unread — it was never resolvable.
     assert c["settled"] is None
     assert c["settled_on"] is None
     assert "NOT read" in c["evidence"]
+
+    # Corrections here did not disturb the untouched source gaps elsewhere.
+    d = {x["label"]: x for x in VISUALLY_READ_PAGE_30}["12D"]
+    assert d["net_matches_written_totals"] is True
+    assert len(d["source_discrepancies"]) == 1
+    assert d["buy_total"] == 283_457.42  # the 0.01 was NOT closed by editing
 
 
 # ================================================================ provenance

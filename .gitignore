@@ -49,6 +49,13 @@ WRITTENdata.pdf
 Written Data.pdf
 Written_Data_All_52_Pages_Digitized.xlsx
 Written_Data_Full_Transcription.xlsx
+# Secondary digitizations of WRITTENdata.pdf produced outside this repo
+# (NotebookLM / ChatGPT). They restate the same private trades, holdings,
+# watchlists and EPS, so they are private for exactly the same reason — even
+# though the code reads them, megatool/written_reference.py.
+digitized_trading_ledger_and_notes.md
+digitized_trading_ledger_and_notes.pdf
+trading_ledger_master_data.xlsx
 data/written_pdf/
 data/transcription/
 docs/written_pdf_raw/

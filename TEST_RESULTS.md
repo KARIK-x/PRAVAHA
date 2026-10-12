@@ -1,14 +1,14 @@
 # Test results
 
-**Last run:** 2026-10-12 · **709 passed, 0 failed, 0 skipped** · 44.93 s · exit 0
-**Lint:** `ruff check` clean · `ruff format --check` clean (53 files)
+**Last run:** 2026-10-12 · **729 passed, 0 failed, 0 skipped** · 36.90 s · exit 0
+**Lint:** `ruff check` clean · `ruff format --check` clean (55 files)
 **Front end:** `node --check web/static/app.js` clean
 
-Reproduce:
+Reproduce (this run used the `.venv` interpreter directly — same suite, `addopts` supplies `-q`):
 
 ```bash
 cd "/Users/ashim/Downloads/AI trading NEPSE"
-uv run pytest
+.venv/bin/python -m pytest -p no:warnings      # or: uv run pytest
 uv run ruff check megatool/ tests/ scripts/
 uv run ruff format --check megatool/ tests/ scripts/
 node --check web/static/app.js
@@ -39,10 +39,11 @@ node --check web/static/app.js
 | `test_floorsheet.py` | 25 |
 | `test_scanner.py` | 21 |
 | `test_planning.py` | 21 |
+| `test_written_reference.py` | 20 **(new)** |
 | `test_cli_floor.py` | 9 |
-| **Total (17 files)** | **709** |
+| **Total (18 files)** | **729** |
 
-Progression: 511 (13 files) → 602 → 650 → 707 → **709** (17 files).
+Progression: 511 (13 files) → 602 → 650 → 707 → 709 → **729** (18 files).
 
 ---
 

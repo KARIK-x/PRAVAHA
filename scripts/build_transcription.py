@@ -23,6 +23,12 @@ Outputs (all git-ignored — this is the owner's private trading record):
     data/written_pdf/transcription/transcription_manifest.json
     data/written_pdf/transcription/settlements.csv
     data/written_pdf/transcription/review_queue.csv
+    data/written_pdf/transcription/reference_*.csv      (secondary digitizations)
+
+The ``reference_*.csv`` files come from NotebookLM's and ChatGPT's independent
+readings of the same notebook (see :mod:`megatool.written_reference`). They are
+labelled ``secondary_digitization`` / ``unverified`` / ``historical_handwritten``
+on every row and are never mixed into the visually read records.
 
 Idempotent: re-running overwrites the outputs and creates no duplicates.
 """
@@ -46,6 +52,11 @@ WORKBOOK = ROOT / "Written_Data_Full_Transcription.xlsx"
 WORKING_COPY = ROOT / "Written_Data_All_52_Pages_Digitized.xlsx"
 
 from megatool.written_pdf import read_vision_page  # noqa: E402
+from megatool.written_reference import (  # noqa: E402
+    load_reference,
+    reference_summary,
+    write_reference_csvs,
+)
 from megatool.written_transcribe import (  # noqa: E402
     ALL_VISUALLY_READ,
     VISUALLY_INSPECTED_PAGES,
@@ -505,9 +516,18 @@ def main() -> int:
     )
     counts = write_csvs(manifest)
 
+    # Secondary digitizations of the same notebook (NotebookLM / ChatGPT).
+    # Parsed for cross-checking and delivery only — never imported, never
+    # allowed to change a visually read figure.
+    ref = load_reference(ROOT)
+    ref_counts = write_reference_csvs(OUT_DIR, ref)
+    ref_sum = reference_summary(ref)
+
     print(f"manifest: {len(manifest)} pages -> {OUT_DIR / 'transcription_manifest.json'}")
     for name, n in counts.items():
         print(f"csv: {n:>4} rows -> {OUT_DIR / name}")
+    for name, n in ref_counts.items():
+        print(f"ref: {n:>4} rows -> {OUT_DIR / name}")
     if not args.no_workbook:
         n = write_workbook(manifest)
         if n:
@@ -525,6 +545,35 @@ def main() -> int:
     print(f"  settlements read by eye     : {verified_records}")
     print(f"  pages FULLY transcribed     : {fully}/52")
     print(f"  pages needing review        : {sum(1 for m in manifest if m['needs_review'])}/52")
+
+    if ref_sum["files_found"]:
+        print()
+        print(f"  reference files parsed      : {', '.join(ref_sum['files_found'])}")
+        print(
+            f"  ref rows (all UNVERIFIED)   : "
+            f"{ref_sum['transactions']} tx, {ref_sum['fundamentals']} fund, "
+            f"{ref_sum['scoreboards']} scores, {ref_sum['strategies']} strategies, "
+            f"{ref_sum['watchlists']} watchlists, {ref_sum['workbook_rows']} workbook"
+        )
+        print(
+            f"  settlement totals cross-check: "
+            f"{ref_sum['fields_agree']}/{ref_sum['fields_compared']} fields agree, "
+            f"{ref_sum['settlements_with_disagreement']} disagreement(s)"
+        )
+        print(
+            f"  component cross-check        : "
+            f"{ref_sum['component_sides_agreeing']}/"
+            f"{ref_sum['component_sides_readable']} readable sides agree, "
+            f"{ref_sum['component_sides_disagreeing']} disagree, "
+            f"{ref_sum['component_sides_not_read_by_eye']} never read by eye"
+        )
+        print(
+            "  these figures are secondary_digitization / unverified / "
+            "historical_handwritten — not current market data"
+        )
+    else:
+        print()
+        print(f"  reference files              : none found ({ref_sum['files_missing']})")
     return 0
 
 

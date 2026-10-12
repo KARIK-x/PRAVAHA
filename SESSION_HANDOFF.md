@@ -15,7 +15,7 @@ uv sync                     # dependencies into ./.venv (Python 3.12.3)
 uv run megatool init        # create/upgrade the local databases
 uv run megatool fetch       # download real NEPSE history (network)
 uv run megatool serve       # web terminal at http://127.0.0.1:8710
-uv run pytest               # 709 tests, ~45 s
+uv run pytest               # 729 tests, ~37 s
 ```
 
 The server binds `127.0.0.1` only. Nothing listens on the network interface.
@@ -29,7 +29,7 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | Analysis | `scanner.py`, `backtest.py`, `forecast.py`, `research.py`, `floorsheet.py` |
 | Personal state | `portfolio.py` (ledger-derived), `journal.py`, `planning.py` |
 | Interface | `api.py` (FastAPI, 45 routes), `cli.py` (incl. `megatool floor import|summary`), `web/static/` (11 tabs) |
-| Tests | `tests/` — 709 tests across 17 files |
+| Tests | `tests/` — 729 tests across 18 files |
 | Docs | `docs/ARCHITECTURE.md`, `DATA_SOURCES.md`, `TECH_STACK_DECISIONS.md`, `RESEARCH_REGISTER.md`, `PROJECT_STATUS.md`, `TESTING.md`, `SOURCES.md`, `DECISIONS.md`, `KNOWN_BUGS.md`, `TEST_RESULTS.md`, `TASK_QUEUE.md`, this file |
 
 ### Data actually in the store
@@ -296,7 +296,7 @@ problem.
 
 ## 7. Verification evidence
 
-- `uv run pytest` — **709 passed, 0 failed** (2026-10-12), 17 test files.
+- `.venv/bin/python -m pytest -p no:warnings` — **729 passed, 0 failed** (2026-10-12), 18 test files.
 - `ruff check` and `ruff format` — clean.
 - All **ten** web tabs exercised in a real browser (Playwright) with **0 console errors**;
   the refusal path, the oversell rejection, the empty-journal "—" and the PDF tab's

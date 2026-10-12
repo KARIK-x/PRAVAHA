@@ -315,6 +315,13 @@ VISUALLY_READ_PAGE_30: list[dict[str, Any]] = [
             "so it may be a misread component rather than an error in the "
             "notebook. Both readings are kept as read; neither was changed to "
             "close the gap.",
+            "Corroborated 2026-10-12: the four buy components read here "
+            "(98889.26, 95841.88, 75943.63, 12782.66) match the four Dec day "
+            "totals in digitized_trading_ledger_and_notes.md exactly, and the "
+            "three sell components do too. With every component independently "
+            "confirmed, the 0.01 now sits in the written total rather than in a "
+            "component — still not repaired, still 283457.42 as written. See "
+            "reference_component_cross_check.csv.",
             "The red Received cloud (amount and date) could not be resolved at "
             "this magnification. settled and settled_on are None by choice: "
             "nothing was guessed. Re-read the cloud before using this block.",
@@ -378,6 +385,13 @@ VISUALLY_READ_PAGE_30: list[dict[str, Any]] = [
             "the Sell column and inside the Net Payable calculation — and is "
             "what was read. components_ok.sell is False because there is "
             "nothing to check, not because a sum disagreed.",
+            "Corroborated 2026-10-12: the reference file gives two Dec sell "
+            "totals (12497.86 for 29 Dec, 130228.05 for 31 Dec) which sum to "
+            "142725.91 — exactly the total read here. That is recorded in "
+            "reference_component_cross_check.csv, NOT here: sell_components "
+            "stays empty because a machine reading is not a visual reading, "
+            "and this record claims to be one. The owner can promote them "
+            "after looking at the page.",
             "The red Paid cloud (amount and date) could not be resolved at "
             "this magnification. settled and settled_on are None by choice. "
             "A figure reading 12557.57 appears elsewhere on the page but "
@@ -466,8 +480,8 @@ VISUALLY_READ_PAGE_28: list[dict[str, Any]] = [
         "label": "12C",
         "page": 28,
         "dates": "12 Dec buy, 12 Dec sell",
-        "buy_components": [77_793.55],
-        "buy_total": 77_793.55,
+        "buy_components": [77_795.55],
+        "buy_total": 77_795.55,
         "buy_total_is_written": True,
         "sell_components": [68_832.46],
         "sell_total": 68_832.46,
@@ -477,28 +491,50 @@ VISUALLY_READ_PAGE_28: list[dict[str, Any]] = [
         "settled_label": "Paid",
         "settled_on": None,
         "components_ok": {"buy": True, "sell": True},
-        "net_matches_written_totals": False,
-        "source_discrepancies": [
-            "buy 77793.55 - sell 68832.46 = 8961.09 but the written net is 8963.09 (2.00)",
+        "net_matches_written_totals": True,
+        "source_discrepancies": [],
+        "superseded_readings": [
+            {
+                "field": "buy_total",
+                "original_reading": 77_793.55,
+                "corrected_value": 77_795.55,
+                "reason": (
+                    "The 2026-10-12 visual read of page_28.png gave 77793.55, "
+                    "leaving the block 2.00 short of its written net, and the "
+                    "note itself named a 3/5 swap in the buy as the likely "
+                    "culprit. The NotebookLM digitization of the same page "
+                    "(digitized_trading_ledger_and_notes.md, December 2024 "
+                    "ledger: '12 Dec: Buy ENL (60 x 1291.33) = NPR 77,795.55') "
+                    "reads 77795.55, and 77795.55 - 68832.46 = 8963.09 — the "
+                    "net read by eye on that same page. Two of the three "
+                    "by-eye figures therefore agree with the second "
+                    "digitization and against the by-eye buy. Corrected on "
+                    "that basis — a second independent reading of the page, "
+                    "corroborated by the arithmetic — not merely to make the "
+                    "sum close. The original reading is kept here."
+                ),
+            },
         ],
-        "superseded_readings": [],
         "ocr_notes": [
-            "As read, the three figures on this block disagree by 2.00. A 3/5 "
-            "swap in the buy or a 1/3 swap in the net would produce exactly "
-            "this, so at least one of the three readings is wrong. The image "
-            "does not say which, so nothing was adjusted and no cause is "
-            "assigned: this is recorded as an unresolved reading, not as a "
-            "proven mistake in the notebook. Re-read all three before use.",
-            "The red Paid cloud could not be tied to a figure once the above "
-            "was in doubt, so settled and settled_on are None rather than "
-            "guessed.",
+            "Correction applied, not a silent edit: buy_total was 77793.55 and "
+            "is now 77795.55. Both values are stored in superseded_readings "
+            "and verification_status is corrected_verified, not verified.",
+            "No cause is assigned to the underlying disagreement. The "
+            "reference file's own quantity x price for this line "
+            "(60 x 1291.33 = 77479.80) does not equal its stated total "
+            "either, so the qty/price columns of that file are not treated as "
+            "evidence here — only its stated total.",
+            "The red Paid cloud could not be tied to a figure, so settled and "
+            "settled_on stay None rather than guessed.",
         ],
-        "verification_status": VerificationStatus.VERIFIED.value,
+        "verification_status": VerificationStatus.CORRECTED_VERIFIED.value,
         "evidence": (
-            "visual read of raw_pages/page_28.png on 2026-10-12; the block was "
-            "read but does NOT reconcile — 77793.55 - 68832.46 = 8961.09 "
-            "against a written net of 8963.09. No figure was changed. The "
-            "Paid annotation was NOT read — settled is None"
+            "visual read of raw_pages/page_28.png on 2026-10-12, corrected "
+            "2026-10-12 against digitized_trading_ledger_and_notes.md; "
+            "77795.55 - 68832.46 = 8963.09 exactly, matching the net read by "
+            "eye on the page. Original reading 77793.55 preserved in "
+            "superseded_readings. The Paid annotation was NOT read — settled "
+            "is None"
         ),
     },
 ]
