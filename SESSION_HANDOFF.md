@@ -15,7 +15,7 @@ uv sync                     # dependencies into ./.venv (Python 3.12.3)
 uv run megatool init        # create/upgrade the local databases
 uv run megatool fetch       # download real NEPSE history (network)
 uv run megatool serve       # web terminal at http://127.0.0.1:8710
-uv run pytest               # 466 tests, ~20 s
+uv run pytest               # 490 tests, ~20 s
 ```
 
 The server binds `127.0.0.1` only. Nothing listens on the network interface.
@@ -29,7 +29,7 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | Analysis | `scanner.py`, `backtest.py`, `forecast.py`, `research.py`, `floorsheet.py` |
 | Personal state | `portfolio.py` (ledger-derived), `journal.py`, `planning.py` |
 | Interface | `api.py` (FastAPI, ~45 routes), `cli.py` (incl. `megatool floor import|summary`), `web/static/` (8 tabs) |
-| Tests | `tests/` — 466 tests across 12 files |
+| Tests | `tests/` — 490 tests across 13 files |
 | Docs | `docs/ARCHITECTURE.md`, `DATA_SOURCES.md`, `TECH_STACK_DECISIONS.md`, `RESEARCH_REGISTER.md`, `PROJECT_STATUS.md`, `TESTING.md`, `SOURCES.md`, this file |
 
 ### Data actually in the store
@@ -48,10 +48,28 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 
 - `WRITTENdata.pdf` (52 pages, 7.3 MB) sits in the project root. It was moved there
   from `~/Downloads/AI Trading Nipsy/Written Data.pdf`.
-- It is a **handwritten, fully scanned** document with **no text layer** — OCR is required.
-- PyMuPDF renders pages; tesseract 5.5.0 with `eng`/`osd`/`snum` is installed.
-- It is git-ignored: it contains private trading records and must not be committed.
-- Extraction is **in progress**; see `docs/WRITTEN_DATA_PDF_AUDIT.md`.
+- It is a **handwritten, fully scanned** document with **no text layer**.
+- Automated OCR was run on all 52 pages with tesseract 5.5.0 and **failed on 42**
+  — tesseract is built for printed text, not handwriting. Records are transcribed
+  visually; the AI inspected **all 52 pages** and inventoried each one.
+- It is git-ignored: private trading records, never committed.
+- **Extraction infrastructure is complete and tested** (`docs/`):
+  - `megatool/written_pdf.py` — page rendering (PyMuPDF), `ExtractedRecord`
+    provenance (page, source_ref, confidence, review status), validators
+    (symbol/price/quantity/EPS/settlement reconciliation), idempotent
+    `import_records` + `query_records`.
+  - schema v3 — `pdf_imports`, `pdf_records`; every record carries its source
+    page, extraction confidence, and review status.
+  - CLI — `megatool pdf import|summary|list`.
+  - API — `GET /api/written-pdf/records`, `GET /api/written-pdf/summary`.
+  - **PDF Journal tab** (9th tab) — summary, records table, filters, empty state.
+  - Research assistant — includes *reviewed* PDF records as cited findings.
+  - 24 tests in `tests/test_written_pdf.py`.
+- 64 sample records imported as **unreviewed**; nothing enters the portfolio or
+  journal without explicit validated entry.
+- Docs: `docs/WRITTEN_DATA_PDF_AUDIT.md` (page inventory),
+  `WRITTEN_DATA_DICTIONARY.md`, `WRITTEN_DATA_VALIDATION_REPORT.md`,
+  `WRITTEN_DATA_IMPORT_GUIDE.md`.
 
 ## 3. Commits this session
 
@@ -69,6 +87,14 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | `12a2ec3` | `megatool floor` CLI (import / summary) |
 | `3e53cbd` | Fix every confirmed finding from Audit A and Audit B (2 CRITICAL, 4 HIGH, M/L items) |
 | `2446e6a` | Expose `comparable` (win-rate denominator) in journal stats; fix vacuous test |
+| `2b390a8` | Docs: create `TESTING.md` and `SOURCES.md`; refresh all stale counts |
+| `b90eda5` | Written Data.pdf: extraction module, schema v3, tests |
+| `9b2e2fb` | `megatool pdf import\|summary\|list` CLI |
+| `d22a95b` | Written Data.pdf cross-validation report |
+| `b2c0548` | Research assistant includes PDF records as cited findings |
+| `927be9f` | `/api/written-pdf/records` and `/api/written-pdf/summary` |
+| `5f11ce9` | Web UI: PDF Journal tab (9th tab) |
+| `f400a54` | **Audit B fixes**: real page count, confidence filter, `record_type` 400 |
 
 ## 4. Decisions worth not re-litigating
 
@@ -122,6 +148,14 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | B7 | Sizing gave no signal when the budget cannot buy one unit | Audit B, re-verified | explicit warning |
 | B8 | Affordability cap did not disclose that fees are excluded | Audit B, re-verified | warning states it |
 
+### From this session's Audit B (2026-10-12) — new PDF module
+
+| # | Defect | How it surfaced | Fix |
+| --- | --- | --- | --- |
+| P1 | `import_records` stored a magic number `52` as the PDF's page count | reading the code against the document | derived from the PDF itself; regression test reads `pdf_imports.page_count` |
+| P2 | `min_confidence` filter always included `high` + `medium`, so `min_confidence=high` returned medium records | walked the ordered-level logic | proper ordered filter: the requested level and everything above it; 4-level test |
+| P3 | `GET /api/written-pdf/records?record_type=...` passed a raw string to code that calls `.value` on it → **HTTP 500** on every request | executed against a running server | endpoint validates the type → **400** naming valid types; CLI already exits 1 |
+
 ### From earlier in the session
 
 | # | Defect | How it surfaced | Fix |
@@ -163,28 +197,34 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 7. **Prices are unadjusted** for bonus and rights issues, so every "return" in the
    forecast, research and scanner output is a price change, not a total return.
 8. **The third-party dataset licence is unresolved.**
-9. **PDF extraction is incomplete** — located and OCR-ready, not yet extracted. See
+9. **PDF transcription is the open work** — the extraction infrastructure is
+   complete and tested (render → transcribe → validate → import → review), but
+   handwriting defeats automated OCR on 42 of 52 pages, so each page must be
+   transcribed visually. 64 sample records are imported as unreviewed. See
    `docs/WRITTEN_DATA_PDF_AUDIT.md`.
 
 ## 7. Verification evidence
 
-- `uv run pytest` — **466 passed, 0 failed** (2026-10-12).
+- `uv run pytest` — **490 passed, 0 failed** (2026-10-12), 13 test files.
 - `ruff check` and `ruff format` — clean.
-- All eight web tabs exercised in a real browser (Playwright) with **0 console errors**;
-  the refusal path, the oversell rejection and the empty-journal "—" were each read back
-  from the DOM. Screenshots in `docs/screenshots/`.
-- Floor-sheet analysis verified end-to-end against a **throwaway** `MEGATOOL_DATA_DIR`
-  (second server instance), so the owner's store stayed clean.
+- All **nine** web tabs exercised in a real browser (Playwright) with **0 console errors**;
+  the refusal path, the oversell rejection, the empty-journal "—" and the PDF tab's
+  empty state were each read back from the DOM. Screenshots in `docs/screenshots/`.
+- Floor-sheet analysis and the PDF import verified end-to-end against **throwaway**
+  `MEGATOOL_DATA_DIR` stores (second server instance), so the owner's store stayed clean.
 - Live endpoints exercised with `curl` against the running server. Full evidence table in
   `PROJECT_STATUS.md` §5.
-- Audit A and Audit B both executed; every confirmed finding re-verified before and after
-  the fix. 45 regression tests in `tests/test_audit_a_fixes.py`.
+- Two audit passes on the PDF module: Audit A (functional — every workflow executed)
+  and Audit B (independent correctness review — 3 defects found and fixed, each with a
+  regression test). Earlier audits: 45 regression tests in `tests/test_audit_a_fixes.py`.
 
 ## 8. What the next session should do, in order
 
-1. **Extract and validate the PDF.** See `docs/WRITTEN_DATA_PDF_AUDIT.md`. The document
-   is located, OCR-ready (PyMuPDF + tesseract), and git-ignored as private. No page has
-   been extracted yet. Build the page-by-page inventory first, then extract table by table.
+1. **Transcribe more PDF pages** and import them as unreviewed, then review. The
+   workflow is built and tested end-to-end: render a page, transcribe visually
+   (see `docs/WRITTEN_DATA_IMPORT_GUIDE.md`), write a JSON record list, run
+   `megatool pdf import`, then mark reviewed. Start with the trading-record pages
+   (18-33) — their settlement arithmetic is self-checking.
 2. Import a real floor sheet and check the analysis against the published page.
 3. Import fundamentals CSVs (SEBON quarterly statistics) and compute P/E, P/B, ROE and
    dividend yield **with per-field provenance**.

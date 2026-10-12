@@ -11,7 +11,7 @@ marked working because the code exists. The labels mean:
 | `NOT-IMPLEMENTED` | Deliberately not built. The reason is stated |
 | `NOT-TESTED` | Code exists but has not been executed/observed |
 
-Test suite: **466 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check` and
+Test suite: **490 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check` and
 `ruff format` clean. Live server verified in a real browser via Playwright.
 
 ---
@@ -35,11 +35,11 @@ Test suite: **466 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check`
 | 13 | **Trading Journal** | `TESTED-PASS` | CRUD, win rate, R multiples, plan adherence, per-strategy breakdown; trades without a complete plan are counted in win rate but excluded from R stats **and both are reported**. 30 unit + 5 API tests |
 | 14 | **Floor-sheet Intelligence** | `PARTIAL` | Import, validation and analysis are **implemented and tested** (25 unit + 5 API + 9 CLI tests). Reachable two ways: `megatool floor import FILE --date YYYY-MM-DD` / `megatool floor summary`, and `POST /api/floorsheet/import`. Verified end-to-end against an **isolated** database (second server instance and a throwaway `MEGATOOL_DATA_DIR`), so the owner's store stayed clean. It has **never been run on a real floor sheet** — only on synthetic CSVs — and there is **no web tab** for it yet |
 | 15 | **Bounded Research Agent** | `NOT-IMPLEMENTED` | The web-search tool failed on every attempt this session (register B1–B3). No autonomous agent loop was built; the deterministic Research Assistant (#8) is what exists instead |
-| 16 | **PDF records (Written Data.pdf)** | `PARTIAL` | The 52-page handwritten journal is located and OCR-ready (PyMuPDF + tesseract). Extraction is **in progress** — see `docs/WRITTEN_DATA_PDF_AUDIT.md`. No PDF record has yet been imported into the portfolio or journal |
+| 16 | **PDF records (Written Data.pdf)** | `PARTIAL` | Extraction infrastructure is complete and tested: `megatool/written_pdf.py` (rendering, `ExtractedRecord` provenance, validation, idempotent import), schema v3 (`pdf_imports`/`pdf_records`), CLI (`megatool pdf import\|summary\|list`), API (`/api/written-pdf/*`), a **PDF Journal tab**, and 24 tests. Automated OCR **failed on 42 of 52 pages** (tesseract vs handwriting), so records are transcribed visually; all 52 pages inspected and inventoried (`docs/WRITTEN_DATA_PDF_AUDIT.md`). 64 sample records imported as **unreviewed**. It has **never been run on a fully transcribed sheet**, and no record has entered the portfolio or journal |
 
 ## 2. Web UI
 
-Eight tabs, all exercised in a real browser (Playwright) with **0 console errors**.
+Nine tabs, all exercised in a real browser (Playwright) with **0 console errors**.
 Screenshots in `docs/screenshots/`.
 
 | Tab | Status |
@@ -48,6 +48,7 @@ Screenshots in `docs/screenshots/`.
 | Research | `TESTED-PASS` — cited report rendered for ADBL (33 findings, every row showing value + window + definition, no `[object Object]`, no `undefined`); a predictive question is refused verbatim and does **not** fall back to the full report; forecast comparison shows `NO DEMONSTRATED SKILL` on every model at or above 1.0 |
 | Portfolio | `TESTED-PASS` — empty state explicit; a buy valued at the latest stored close with that stated on screen; **oversell rejected with the server's plain-English message** ("cannot sell 500 of ADBL: only 10 held in the ledger"); a symbol with no stored price shows as unvalued with a warning rather than being carried at cost |
 | Journal | `TESTED-PASS` — with no closed trades the win rate, avg R and adherence render as **"—", never as 0%**; with real entries, stats/per-strategy/grading work and an ungradable entry shows the server's explanation; the planner returns risk/share, R:R, units, cash used and actual risk |
+| PDF Journal | `TESTED-PASS` — summary card (records / types / pages covered / reviewed vs unreviewed), an explicit warning that unreviewed records are descriptive not verified, a records table with page + confidence + review status, and working symbol / type / page / reviewed-only filters. Empty state reads "Import with: megatool pdf import FILE.json". Verified in-browser on the isolated store (64 records) and the real store (empty state) |
 
 Test rows created during browser verification were deleted through the UI and the API:
 the owner's journal, ledger and floor-sheet tables are empty.
@@ -84,8 +85,12 @@ the owner's journal, ledger and floor-sheet tables are empty.
    and impact are not modelled.
 7. **The relative-strength ranking compares only the 60 locally stored symbols**, not
    NEPSE. The UI states this.
-8. **PDF extraction is incomplete.** The 52-page handwritten journal has been located
-   and is OCR-ready, but no page has been fully extracted and validated yet. See
+8. **PDF extraction is transcription-gated.** All 52 pages were inspected and
+   inventoried, but automated OCR failed on 42 of them (handwriting defeats
+   tesseract), so records enter one page at a time through visual transcription.
+   The infrastructure (render → transcribe → validate → import → review) is
+   tested end-to-end; 64 sample records are imported as **unreviewed**. The
+   remaining work is transcription, not code. See
    `docs/WRITTEN_DATA_PDF_AUDIT.md`.
 
 ## 5. Verification log
@@ -94,7 +99,7 @@ Evidence, not assertions. Everything below was executed and observed.
 
 | What | How | Result |
 | --- | --- | --- |
-| Full test suite | `uv run pytest` | **466 passed, 0 failed**, ~20 s |
+| Full test suite | `uv run pytest` | **490 passed, 0 failed**, ~20 s |
 | Lint / format | `ruff check .`, `ruff format .` | clean |
 | Real data in the store | `GET /api/status` on the running server | 89,580 bars, 60 symbols, 1995-07-20 → 2026-10-09 |
 | Every browser tab | Playwright, clicking through all 8 tabs | **0 console errors** |
@@ -113,6 +118,12 @@ Evidence, not assertions. Everything below was executed and observed.
 | Impossible exit | exit_price −5 and NaN | 400 naming the field (was graded as a real stop) |
 | Backdated sell | sell dated before its funding buy | 400 with the reason (was accepted, corrupting realised P&L) |
 | Typo'd journal field | `entry_prc` | 400 listing the unknown field (was 200, data silently dropped) |
+| PDF page count | import the sample, read `pdf_imports.page_count` | 52, **read from the document** (was a hardcoded magic number) |
+| PDF confidence filter | `query_records(min_confidence=high)` on a mixed-confidence set | returns only `high` (was returning `medium` too) |
+| PDF record type via API | `GET /api/written-pdf/records?record_type=fundamental` / `garbage` | 200 with 62 records / **400** naming the valid types (was 500) |
+| PDF tab, isolated store | Playwright, click the PDF Journal tab | summary 64 records / 6 pages, table renders, symbol filter → 1 TPC row, reviewed-only → "No records match", **0 console errors** |
+| PDF tab, real store | Playwright, click the PDF Journal tab | empty state: "No records extracted yet. Import with: megatool pdf import FILE.json", **0 console errors** |
+| All 9 tabs, real server | Playwright click-through on :8710 | **0 console errors**; store intact at 89,580 bars / 60 symbols |
 
 ## 6. How to run it
 
@@ -122,5 +133,5 @@ uv sync
 uv run megatool init      # create the databases
 uv run megatool fetch     # download real history (network)
 uv run megatool serve     # http://127.0.0.1:8710
-uv run pytest             # 466 tests
+uv run pytest             # 490 tests
 ```

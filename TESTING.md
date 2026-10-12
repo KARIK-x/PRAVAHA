@@ -7,7 +7,7 @@ Every claim in this file was verified by executing the named command on the proj
 
 | Command | Result |
 | --- | --- |
-| `uv run pytest` | **466 passed**, ~20 s |
+| `uv run pytest` | **490 passed**, ~20 s |
 | `ruff check .` | clean |
 | `ruff format .` | clean |
 
@@ -27,6 +27,7 @@ Per-file test counts:
 | `tests/test_portfolio.py` | 29 | Ledger-derived positions, P&L, validation, UTC normalisation |
 | `tests/test_research.py` | 28 | Cited findings, question routing, refusal of predictions |
 | `tests/test_scanner.py` | 21 | Metrics, presets, filter-tree validation |
+| `tests/test_written_pdf.py` | 24 | PDF extraction, validation, idempotent import, confidence filter |
 
 ## How to run
 
