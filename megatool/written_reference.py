@@ -641,6 +641,10 @@ def load_reference(root: Path | None = None) -> dict[str, Any]:
 
     # --- structured workbook ----------------------------------------------
     out.update(_load_workbook(base))
+    # The workbook is a separate file; it must appear in files_found or the
+    # summary claims only the .md was parsed while writing workbook rows.
+    if out.get("files_found_workbook"):
+        out["files_found"] = [*out["files_found"], *out["files_found_workbook"]]
 
     return out
 

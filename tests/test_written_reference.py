@@ -310,7 +310,8 @@ def test_summary_counts_match_the_data_they_count(ref: dict) -> None:
     assert s["component_sides_readable"] == len(readable)
     assert s["component_sides_agreeing"] + s["component_sides_disagreeing"] == len(readable)
     assert s["fields_compared"] >= s["fields_agree"]
-    assert s["files_found"] == [MD_FILENAME]
+    assert set(s["files_found"]) == {MD_FILENAME, wr.XLSX_FILENAME}
+    assert ref["workbook_rows"], "the workbook is present and must be reported as parsed"
 
 
 # --------------------------------------------------------------------------
