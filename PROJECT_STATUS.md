@@ -11,7 +11,7 @@ marked working because the code exists. The labels mean:
 | `NOT-IMPLEMENTED` | Deliberately not built. The reason is stated |
 | `NOT-TESTED` | Code exists but has not been executed/observed |
 
-Test suite: **511 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check` and
+Test suite: **602 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check` and
 `ruff format` clean. Live server verified in a real browser via Playwright.
 
 ---
@@ -24,8 +24,8 @@ Test suite: **511 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check`
 | 2 | **Market Dashboard** | `TESTED-PASS` | Breadth/movers/most-active render in the browser; the response carries `is_live: false` and shows **no index value** because no index source is available |
 | 3 | **Charting Terminal** | `TESTED-PASS` | Candles + volume + 28 indicators; verified in-browser against pandas (SMA 1014.485 / 877.87 matched exactly) |
 | 4 | **Stock Scanner** | `TESTED-PASS` | 19 metrics, 4 presets, filter-tree validation with plain-English 400s; 21 scanner tests + 65 API tests |
-| 5 | **Multi-Factor Engine** | `PARTIAL` | The scanner's filter tree **is** the multi-factor engine (AND/OR composition, 19 metrics). A ranked/scored factor model with normalisation and weights is **not built** |
-| 6 | **Fundamentals Lab** | `NOT-IMPLEMENTED` | SEBON publishes fundamentals as publications, not an API (research register A5). Design is CSV/manual import with per-field provenance. **No fundamental data has ever been fetched**, so no ratio is computed anywhere |
+| 5 | **Multi-Factor Ranking** | `TESTED-PASS` | `megatool/ranking.py` + `POST /api/rank` + a Screener-tab panel. Five price/volume factors, percentile-ranked and weighted; **every score decomposes into per-factor contributions that sum back to it** (verified on the real universe: 0 of 369 mismatched). Missing factors are median-substituted *and flagged*; symbols past `max_missing_fraction` are excluded with a stated reason. Five factors that need unavailable data (P/E, P/B, dividend yield, index-relative strength, sector) are declared at **zero weight** rather than faked. `as_of` truncates before any factor runs. 27 unit + 10 API tests |
+| 6 | **Fundamentals Lab** | `PARTIAL` | The **mechanism** is built and tested: `megatool/fundamentals.py`, schema v4, `GET /api/fundamentals/summary`, `GET /api/fundamentals/{symbol}`, `POST /api/fundamentals/import` (with `dry_run`), and an 11th web tab. Every value carries source, reporting period, unit and verification level; P/E, P/B and dividend yield **refuse** unverified inputs, unknown periods, periods >120 days apart, stale figures and non-positive denominators. **The store holds 0 records** — no verified source is connected (ShareSansar serves per-company reports behind a CSRF-protected AJAX POST, so nothing is scraped). 44 unit + 7 API tests |
 | 7 | **News / Events** | `NOT-IMPLEMENTED` | No machine-readable news source was found (A7/A8). Nothing is scraped |
 | 8 | **AI Research Assistant** | `TESTED-PASS` (as a rules engine) | **There is no LLM** — no key, and no local model fits 8 GB RAM. What ships is a deterministic rules engine that cites the window and definition behind every number, and **refuses** predictive/prescriptive questions. 28 unit + 6 API tests |
 | 9 | **Forecasting Lab** | `TESTED-PASS` | 6 models, all scored on an unseen hold-out against the naive baseline, with a plain-words verdict (`NO DEMONSTRATED SKILL` where true). 29 unit + 5 API tests |
@@ -39,7 +39,7 @@ Test suite: **511 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check`
 
 ## 2. Web UI
 
-Ten tabs, all exercised in a real browser (Playwright) with **0 console errors**.
+Eleven tabs, all exercised in a real browser (Playwright) with **0 console errors**.
 Screenshots in `docs/screenshots/`.
 
 | Tab | Status |
@@ -50,6 +50,8 @@ Screenshots in `docs/screenshots/`.
 | Journal | `TESTED-PASS` — with no closed trades the win rate, avg R and adherence render as **"—", never as 0%**; with real entries, stats/per-strategy/grading work and an ungradable entry shows the server's explanation; the planner returns risk/share, R:R, units, cash used and actual risk |
 | Floor Sheet | `TESTED-PASS` — 10th tab. Session/symbol/Top-N filters, paste-and-import box, and all seven panels (totals, buyers, sellers, symbols, pairs, concentration, sessions, imports). Verified on an isolated store with a 5-row synthetic sheet: totals 870 qty / 323,920 amount match the CSV by hand, symbol filter narrows to NICA 450/112,800, buyer HHI 3341 recomputed by hand, import reports "5 of 5 rows (0 skipped)". Real store shows the empty state |
 | PDF Journal | `TESTED-PASS` — summary card (records / types / pages covered / reviewed vs unreviewed), an explicit warning that unreviewed records are descriptive not verified, a records table with page + confidence + review status, working symbol / type / page / reviewed-only filters, and per-row **review / reject buttons** (verified: reviewed 1 → 2 in-browser). Empty state reads "Import with: megatool pdf import FILE.json". Verified in-browser on the isolated store (64 records) and the real store (empty state) |
+| Factor ranking (in Screener) | `TESTED-PASS` — **not a separate tab**; a second card inside Screener. "Rank universe" with as-of / top / min-bars controls. Verified on the real 372-symbol universe: summary renders *Universe 372 · Ranked 369 · Insufficient data 3 · Factors used 5*, 369 rows with per-row top contributions, and a 10-row factor table (5 `available`, 5 `unavailable` with reasons). Each excluded symbol states why (e.g. "41 bars … needs 60"). Screenshot: `docs/screenshots/ranking-panel.png` |
+| Fundamentals | `TESTED-PASS` — **11th tab**. Store summary (records / symbols / no period stated / verified / extracted only), symbol lookup, and CSV import with **Validate only** and **Import**. Verified in-browser: dry-run reported *"Valid: 2 rows across 1 symbol(s) — nothing written"* and the real store still held 0 rows; a malformed CSV returned *"400: rejected: row 2: missing required column(s): value, source"* inline without a JS error. Screenshot: `docs/screenshots/fundamentals-tab.png` |
 
 Test rows created during browser verification were deleted through the UI and the API:
 the owner's journal, ledger and floor-sheet tables are empty.
@@ -62,7 +64,11 @@ the owner's journal, ledger and floor-sheet tables are empty.
 | `github.com/Aabishkar2/nepse-data` | **IN USE** — **372/372 symbols imported** (514,018 rows, 1995-07-20 → 2026-10-09), fetched 2026-10-12. **No LICENSE file**: personal local use with per-row attribution only; `data/` is git-ignored so nothing is redistributed |
 | Local CSV import | **AVAILABLE** — the guaranteed fallback, documented in `docs/DATA_SOURCES.md` §1.2 |
 | NEPSE index / sector indices | **UNAVAILABLE** — the dashboard deliberately shows no index figure rather than a stale or invented one |
-| SEBON / NRB / merolagani / sharesansar | **INSPECTED, NOT WIRED** — reachable, but publish pages and publications, not documented APIs |
+| SEBON / NRB / merolagani | **INSPECTED, NOT WIRED** — reachable, but publish pages and publications, not documented APIs |
+| ShareSansar company pages | **INSPECTED, NOT WIRED (2026-10-12)** — HTTP 200, and the HTML does expose `symbol` and `sector` per company (which would fill the NULL `security_master.sector`). Per-company financial reports are served by a **CSRF-protected AJAX POST**. A public page does not imply permission to automate collection, so nothing is scraped. Candidate for an owner decision — see `TASK_QUEUE.md` T-11 |
+| ShareSansar Scraper archive (`omitnomis.github.io/ShareSansarScraper`) | **REACHABLE, NOT WIRED** — bulk workbook `Data/combined_excel.xlsx` verified HTTP 200, ~41 MB, last-modified 2026-10-11. No LICENSE on the archive either; needs a licensing decision before use. Candidate cross-check for the GitHub dataset |
+| nepsedata.com · nrb.org.np | **REACHABLE, NOT WIRED (2026-10-12)** — HTTP 200 on both |
+| nepsealpha.com | **BLOCKED** — HTTP 403 |
 | `cdsc.com.np` | **FAILED** — fetch timed out |
 
 ## 4. Known issues, in priority order
@@ -79,9 +85,15 @@ the owner's journal, ledger and floor-sheet tables are empty.
 4. **Prices are unadjusted** for bonus and rights issues, so every "return" in the
    Forecasting Lab, Research Assistant and scanner is a *price* change, not a total return.
    NEPSE corporate actions are not available in the imported data.
-5. **Fundamentals and News/Events do not exist** (rows 6 and 7), and the **floor sheet
-   has never been run on real data** — it is unit-tested against synthetic CSVs only.
-   Nothing about real published floor-sheet headers has been proven.
+5. **Fundamentals exist as a mechanism but hold no data, and News/Events do not
+   exist at all.** The Lab stores only caller-supplied CSV and the real store has
+   **0 records**, because no source may be assumed to permit automated collection.
+   The **floor sheet has never been run on real data** — it is unit-tested against
+   synthetic CSVs only. Nothing about real published floor-sheet headers has been
+   proven.
+   *(New, 2026-10-12)* **`security_master.sector` is NULL for all 372 symbols**,
+   so sector-relative ranking and peer comparison are unavailable; the ranker
+   declares `sector_percentile` unavailable at zero weight instead of faking it.
 6. **Backtest fills are optimistic at the bar level.** Next-bar-open is honest about
    *when* you could trade, but it assumes the open was available in full size. Liquidity
    and impact are not modelled.
@@ -96,6 +108,27 @@ the owner's journal, ledger and floor-sheet tables are empty.
    tested end-to-end; 64 sample records are imported as **unreviewed**. The
    remaining work is transcription, not code. See
    `docs/WRITTEN_DATA_PDF_AUDIT.md`.
+9. **A transcription error was found in that audit.** Page 21 settlement 9A's
+   buy figure was recorded as `177,609.76`; the correct value is `186,129.76`
+   (only the arithmetic confirms it — it is the sole figure that reconciles to
+   the recorded net of 65,550.33, off by 8,520 NPR). Corrected in the benchmark
+   ground truth; **the audit document itself still carries the old number** and
+   the other pages have not been re-checked the same way. See `KNOWN_BUGS.md`
+   B-02 and `TASK_QUEUE.md` T-09.
+10. **Extracted values are not safe for accounting.** The handwriting benchmark
+    measured Apple Vision at 90.2% numeric recall — far better than Tesseract's
+    4.3%, but it drops digits from large totals (page 21's largest settlement was
+    read as `77609.76` for a true `186129.76`). Arithmetic self-checks are the
+    mitigation, and they are what caught issue 9.
+11. **The backtest fee rate is still a placeholder.** The research report quotes
+    0.24–0.36% commission + 0.015% SEBON + Rs 25 DP charge and 7.5%/10% capital
+    gains tax, but **none of it was verified against an authoritative source**,
+    and web search is unavailable here — so none of it was hard-coded. See
+    `TASK_QUEUE.md` T-12.
+12. **Local vision-language models are untested.** Ollama 0.5.7 rejects every
+    vision model with `412: requires a newer version` (latest v0.40.3). Updating
+    an installed application is a machine change left to the owner —
+    `TASK_QUEUE.md` T-10.
 
 ## 5. Verification log
 
@@ -103,10 +136,17 @@ Evidence, not assertions. Everything below was executed and observed.
 
 | What | How | Result |
 | --- | --- | --- |
-| Full test suite | `uv run pytest` | **511 passed, 0 failed**, ~20 s |
-| Lint / format | `ruff check .`, `ruff format .` | clean |
+| Full test suite | `uv run pytest` | **602 passed, 0 failed**, ~19 s (was 511) |
+| Lint / format | `ruff check megatool/ tests/ scripts/`, `ruff format --check` | clean (48 files) |
+| Front end | `node --check web/static/app.js` | clean |
 | Real data in the store | `GET /api/status` on the running server | **514,018 bars, 372 symbols**, 1995-07-20 → 2026-10-09 (was 89,580 / 60 before the 2026-10-12 fetch) |
-| Every browser tab | Playwright, clicking through all tabs (8 at the time of this audit) | **0 console errors** |
+| Every browser tab | Playwright, clicking through all **11** tabs | **0 console errors** |
+| Ranking on real data | `POST /api/rank` against the 372-symbol universe | 369 ranked / 3 excluded with reasons; **0 of 369 had contributions that did not sum to the score**; 8 flagged as incomplete |
+| Schema migration v3 → v4 | server restart | `fundamentals` table created; real store correctly reports **0 rows** |
+| Fundamentals dry-run in-browser | clicked *Validate only* on a 2-row CSV | "Valid: 2 rows across 1 symbol(s) — nothing written"; real store re-checked afterwards: still 0 rows |
+| Handwriting benchmark | `uv run python scripts/score_benchmark.py` over 5 ground-truthed pages | Apple Vision **90.2%** numeric vs Tesseract **4.3%**; Apple Vision symbolic 33/46 vs Tesseract 0/46 |
+| Official NEPSE API | `uv run megatool probe` | HTTP 401, body `WARNING: UNAUTHORIZED ACCESS`. The report's TLS-downgrade fix rejected: measured `ssl_verify_result 0` |
+| Recommended data sources | single GET each | ShareSansar 200 · nepsedata.com 200 · ShareSansar Scraper workbook 200 (~41 MB) · nrb.org.np 200 · nepsealpha 403 |
 | Research assistant honesty | Asked "will ADBL go up tomorrow?" | Refused verbatim, listed what it can answer instead, showed no numbers |
 | Research citations | Read the rendered table from the DOM | 33 findings for ADBL, every row carrying value + unit + window + definition; zero `undefined`, zero `[object Object]` |
 | Portfolio oversell | Sold 500 ADBL while holding 10 | Rejected: "cannot sell 500 of ADBL: only 10 held in the ledger" |

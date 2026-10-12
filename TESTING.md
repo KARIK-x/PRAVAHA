@@ -7,7 +7,7 @@ Every claim in this file was verified by executing the named command on the proj
 
 | Command | Result |
 | --- | --- |
-| `uv run pytest` | **511 passed**, ~20 s |
+| `uv run pytest` | **602 passed**, ~19 s |
 | `ruff check .` | clean |
 | `ruff format .` | clean |
 
@@ -15,19 +15,25 @@ Per-file test counts:
 
 | File | Tests | What it covers |
 | --- | --- | --- |
-| `tests/test_api.py` | 73 | Route behaviour, validation, error mapping, review endpoint, journal fallback |
-| `tests/test_audit_a_fixes.py` | 45 | Regression tests for defects found by Audit A and Audit B |
-| `tests/test_backtest.py` | 32 | Long/flat engine, fills, fees, assumptions |
-| `tests/test_cli_floor.py` | 9 | `megatool floor import` / `floor summary` |
-| `tests/test_floorsheet.py` | 25 | CSV parsing, HHI, counterparties, concentration |
-| `tests/test_forecast.py` | 29 | Six models, hold-out scoring, skill ratio |
 | `tests/test_indicators.py` | 132 | 28 indicators, reference values, warm-up, edge cases |
-| `tests/test_journal.py` | 30 | CRUD, win rate, R multiples, plan adherence, unknown fields |
-| `tests/test_planning.py` | 21 | Position sizing, R multiples, warnings |
-| `tests/test_portfolio.py` | 29 | Ledger-derived positions, P&L, validation, UTC normalisation |
+| `tests/test_api.py` | 90 | Route behaviour, validation, error mapping, review endpoint, journal fallback, `/api/rank`, `/api/fundamentals/*` |
+| `tests/test_audit_a_fixes.py` | 45 | Regression tests for defects found by Audit A and Audit B |
+| `tests/test_fundamentals.py` | 44 | Provenance, units, periods, verification levels, CSV validation, idempotent storage, ratio guards |
+| `tests/test_written_pdf.py` | 36 | PDF extraction, validation, idempotent import, confidence filter, review workflow, settlement reconciliation |
 | `tests/test_research.py` | 32 | Cited findings, question routing, refusal of predictions, journal-only answer |
+| `tests/test_backtest.py` | 32 | Long/flat engine, fills, fees, assumptions |
+| `tests/test_journal.py` | 30 | CRUD, win rate, R multiples, plan adherence, unknown fields |
+| `tests/test_portfolio.py` | 29 | Ledger-derived positions, P&L, validation, UTC normalisation |
+| `tests/test_forecast.py` | 29 | Six models, hold-out scoring, skill ratio |
+| `tests/test_ranking.py` | 27 | Score decomposition, missing-data handling, exclusion reasons, `as_of` truncation, factor polarity |
+| `tests/test_floorsheet.py` | 25 | CSV parsing, HHI, counterparties, concentration |
 | `tests/test_scanner.py` | 21 | Metrics, presets, filter-tree validation |
-| `tests/test_written_pdf.py` | 28 | PDF extraction, validation, idempotent import, confidence filter, review workflow |
+| `tests/test_planning.py` | 21 | Position sizing, R multiples, warnings |
+| `tests/test_cli_floor.py` | 9 | `megatool floor import` / `floor summary` |
+
+A separate, non-pytest benchmark measures handwriting extraction on five
+ground-truthed PDF pages — see `TEST_RESULTS.md` for the numbers and
+`uv run python scripts/score_benchmark.py` to reproduce it.
 
 ## How to run
 
@@ -93,3 +99,8 @@ it pins down so a future reader can tell what it protects against.
 | `test_written_pdf.py::test_review_status_refuses_returning_to_unreviewed` | A checked record could be sent back to `unreviewed`, hiding that it was once reviewed |
 | `test_research.py::test_journal_only_answer_survives_a_missing_pdf_table` | A store with no `pdf_records` table raised `sqlite3.OperationalError` instead of answering |
 | `test_api.py::test_research_ask_still_404s_when_there_is_nothing_to_answer` | The journal-only fallback must not turn "no data at all" into a 200 |
+| `test_written_pdf.py::test_settlement_reconciliation_all_four_page21_settlements` | `validate_settlement_reconciliation` signed its comparison as `sell − buy`, so it rejected **all four correct settlements** on page 21 (labelled "Net Payable = buy − sell"). The magnitude check still raises on a genuinely wrong net |
+| `test_ranking.py::test_truncation_works_with_store_column_name` | The look-ahead guard looked for a column named `date`, but `MarketStore.get_bars` returns `trading_date` — so any store-loaded frame silently bypassed the `as_of` cut |
+| `test_ranking.py::test_universe_accounting_balances` | Symbols below `min_bars` were dropped before ranking, so `universe_size` no longer equalled `ranked + excluded` (observed: 4 ≠ 3 + 0) |
+| `test_api.py::test_rank_reports_when_as_of_leaves_nothing_rankable` | An early `as_of` surfaced a misleading 400 ("no factor has both a positive weight and observed data") instead of an honest empty result |
+| `test_fundamentals.py::test_unknown_field_allowed_when_unit_given` | The unknown-field import path was dead code: `records_from_rows` demanded an explicit unit, then `validate()` rejected that same field |

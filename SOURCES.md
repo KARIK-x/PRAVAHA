@@ -48,17 +48,27 @@ quotes. No index value is shown because no index source is available.
 
 ## Inspected, not wired
 
-These were inspected during research (see `docs/RESEARCH_REGISTER.md`) and found to
-publish human-readable pages rather than documented APIs:
+Re-checked with a single informational GET each on **2026-10-12**. Reachability is
+recorded because a future session should not have to re-derive it; nothing was
+downloaded in bulk and no source was scraped.
 
-| Source | URL | What it offers | Why not wired |
-| --- | --- | --- | --- |
-| NEPSE floor sheet | https://www.nepalstock.com/floor-sheet | Session trade prints | Page-based; import used instead (`megatool floor`) |
-| NEPSE listed companies | https://www.nepalstock.com/company | Company profiles | Page-based |
-| SEBON | https://www.sebon.gov.np/ | Fundamentals, disclosures | Publications, not an API |
-| CDSC | https://cdsc.com.np/ | Settlement data | Fetch timed out |
-| Nepal Rastra Bank | https://www.nrb.org.np/ | Macro/sector data | Not attempted for market data |
-| merolagani / sharesansar | — | Fundamentals, news | Page-based |
+| Source | URL | Status | What it offers | Why not wired |
+| --- | --- | --- | --- | --- |
+| ShareSansar company pages | `sharesansar.com/company/<SYMBOL>` | **HTTP 200** (265 KB) | The HTML itself exposes `symbol` and **`sector`** per company (e.g. `NABIL` → `Commercial Bank`) | Per-company financial reports are served by a **CSRF-protected AJAX POST**. A public page does not imply permission to automate collection, so nothing is scraped. Filling `sector` from here is an owner decision (`TASK_QUEUE.md` T-11) |
+| ShareSansar Scraper archive | `omitnomis.github.io/ShareSansarScraper` | **HTTP 200** | Bulk OHLCV workbook `Data/combined_excel.xlsx` — ~41 MB, `Last-Modified: 2026-10-11`, no login or paywall | **No LICENSE on the archive either.** A candidate cross-check for the GitHub dataset once licensing is settled (`TASK_QUEUE.md` T-15) |
+| nepsedata.com | `nepsedata.com` | **HTTP 200** | The report claims an index series 2003–2026 | **That index claim was not verified.** Listed as a candidate, not as a source |
+| Nepal Rastra Bank | `nrb.org.np` | **HTTP 200** | Macro/sector data | Not attempted for market data |
+| nepsealpha.com | `nepsealpha.com` | **HTTP 403** | — | Refuses the request |
+| SEBON | `sebon.gov.np` | not retested | Fundamentals, disclosures | Publications, not an API |
+| CDSC | `cdsc.com.np` | not retested | Settlement data | Fetch timed out previously |
+| merolagani | — | not retested | Fundamentals, news | Page-based |
+
+**Rejected outright, with the evidence:**
+
+| Candidate | Report's claim | Why it was rejected |
+| --- | --- | --- |
+| `setTLSVerification(False)` | Needed to reach the official API | Measured `ssl_verify_result 0` — there is **no certificate error**. The observed failure is an HTTP/2 `PROTOCOL_ERROR`, and forcing HTTP/1.1 yields an empty reply. The recommendation addresses a problem that does not exist |
+| `NepseUnofficialApi` | Would get past the 401 | The official endpoint answers `401 WARNING: UNAUTHORIZED ACCESS`. Automating a token scheme to pass that is an access-control bypass, which this project does not do |
 
 ## Local import (always available)
 
@@ -72,8 +82,16 @@ and is documented in `docs/DATA_SOURCES.md` §1.2.
 - Test fixtures are labelled `SYNTHETIC-TEST-FIXTURE` and are never mixed with real data.
 - Floor-sheet imports record the source label and a content hash, so re-importing the
   same file cannot double-count a session.
-- Records from `WRITTENdata.pdf` (when integrated) carry a page reference and
-  extraction confidence, and are marked as extracted, not authoritative.
+- Records from `WRITTENdata.pdf` carry a page reference and extraction confidence,
+  and are marked as extracted, not authoritative. Every settlement or total is
+  self-checked against its own arithmetic, and disagreements are flagged rather than
+  smoothed over.
+- Fundamentals carry `source`, `source_ref`, `period_end`, `unit` and a
+  `verification` level (`extracted` → `reviewed` → `verified`). A record with no
+  source cannot be stored at all, and the ratio guards refuse unreviewed inputs.
+- Nothing in this project scrapes. ShareSansar's `sector` field is *known to be
+  available* in its public HTML, and is still not collected, because reachability
+  is not permission.
 
 See `docs/DATA_SOURCES.md` for the full detail and `docs/WRITTEN_DATA_PDF_AUDIT.md`
 for the PDF extraction record.

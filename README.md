@@ -25,7 +25,7 @@ uv run megatool serve        # start the web terminal at http://127.0.0.1:8710
 Run the test suite:
 
 ```bash
-uv run pytest                # 511 tests, ~20s
+uv run pytest                # 602 tests, ~20s
 ```
 
 Stop the server with `Ctrl-C`.
@@ -43,6 +43,9 @@ Stop the server with `Ctrl-C`.
 | **Portfolio** | Positions derived from your own transaction ledger, valued at the latest stored close |
 | **Journal & planning** | Trade journal with win rate, R multiples and plan adherence; a planner that turns entry/stop/target into a position size for a risk budget |
 | **Floor sheet** | Import a session's CSV (`megatool floor import`, the **Floor Sheet** web tab, or the API) and see buyer/seller concentration and counterparties, described as broker codes rather than as people. `megatool floor summary` prints the analysis with its limits |
+| **Ranking** | `POST /api/rank` and a panel in the Screener tab: weighted, percentile-ranked factors where **every score decomposes into per-factor contributions that add back to it**. Missing data is substituted with the cross-sectional median *and flagged*; symbols without enough history are listed separately with a reason. Factors needing data this tool does not have (P/E, P/B, dividend yield, index- and sector-relative rank) are named and held at zero weight rather than faked |
+| **Fundamentals** | An 11th tab plus `POST /api/fundamentals/import`: CSV in, every value carrying its source, reporting period, unit and verification level. P/E, P/B and dividend yield **refuse** unreviewed inputs, unknown periods, periods too far apart, stale figures and non-positive denominators. Nothing is fetched from the web |
+| **Written PDF** | The 52-page handwritten journal is inventoried and cross-validated. Automated OCR cannot read it, so records are transcribed visually with per-value confidence, and review happens in three places (API, PDF Journal tab, `megatool pdf review`). Settlement and total arithmetic self-checks catch transcription errors |
 
 ## What it deliberately does not do
 

@@ -15,7 +15,7 @@ uv sync                     # dependencies into ./.venv (Python 3.12.3)
 uv run megatool init        # create/upgrade the local databases
 uv run megatool fetch       # download real NEPSE history (network)
 uv run megatool serve       # web terminal at http://127.0.0.1:8710
-uv run pytest               # 511 tests, ~20 s
+uv run pytest               # 602 tests, ~20 s
 ```
 
 The server binds `127.0.0.1` only. Nothing listens on the network interface.
@@ -28,9 +28,9 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | Indicators | `megatool/ta/` — 28 indicators, decorator registry, per-output warm-up |
 | Analysis | `scanner.py`, `backtest.py`, `forecast.py`, `research.py`, `floorsheet.py` |
 | Personal state | `portfolio.py` (ledger-derived), `journal.py`, `planning.py` |
-| Interface | `api.py` (FastAPI, ~45 routes), `cli.py` (incl. `megatool floor import|summary`), `web/static/` (10 tabs) |
-| Tests | `tests/` — 511 tests across 13 files |
-| Docs | `docs/ARCHITECTURE.md`, `DATA_SOURCES.md`, `TECH_STACK_DECISIONS.md`, `RESEARCH_REGISTER.md`, `PROJECT_STATUS.md`, `TESTING.md`, `SOURCES.md`, this file |
+| Interface | `api.py` (FastAPI, 45 routes), `cli.py` (incl. `megatool floor import|summary`), `web/static/` (11 tabs) |
+| Tests | `tests/` — 602 tests across 15 files |
+| Docs | `docs/ARCHITECTURE.md`, `DATA_SOURCES.md`, `TECH_STACK_DECISIONS.md`, `RESEARCH_REGISTER.md`, `PROJECT_STATUS.md`, `TESTING.md`, `SOURCES.md`, `DECISIONS.md`, `KNOWN_BUGS.md`, `TEST_RESULTS.md`, `TASK_QUEUE.md`, this file |
 
 ### Data actually in the store
 
@@ -103,7 +103,30 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | `5f16f03` | PDF **review workflow** + **journal-only research** fallback; fixes 2 bugs I introduced |
 | `a05a2c3` | **Floor Sheet tab** (10th tab); defines the missing `.good`/`.bad` cell classes |
 | `f708210` | **CLI**: `megatool pdf review --ids ... --status ...` (third review surface) |
-| *(this commit)* | **Full-market fetch**: 60 → **372 symbols** (514,018 bars); docs + PDF cross-validation re-run |
+| `9714ec5` | **Full-market fetch**: 60 → **372 symbols** (514,018 bars); docs + PDF cross-validation re-run |
+| `092ce95` | **Multi-factor ranking** (`megatool/ranking.py`, `POST /api/rank`, Screener panel) + **settlement-sign defect** fix (B-01) |
+| `2806181` | **Fundamentals Lab** (`megatool/fundamentals.py`, schema v3→v4, 3 endpoints, 11th tab) |
+| *(this commit)* | Docs: `DECISIONS.md`, `KNOWN_BUGS.md`, `TEST_RESULTS.md`, `TASK_QUEUE.md`; refreshed status + handoff |
+
+### Work done this session that is *not* a code commit
+
+The research report `MEGA_TOOL_RESEARCH_REPORT.md` was evaluated claim by claim
+against the running code. Findings (all reproduced in `DECISIONS.md`):
+
+| Report claim | Verdict |
+| --- | --- |
+| "64 OCR attempted extractions" | **Refuted** — 64 is the row count of the git-ignored visual-transcription sample; the real store has 0. `raw_ocr/` holds 52 files, 24 non-empty, all gibberish. |
+| "Tesseract/Apple Vision cannot read handwriting — Confirmed" | **Refuted for this document** — benchmarked: Apple Vision 90.2% numeric recall vs Tesseract 4.3%. The report cited a blog post; the claim had never been tested here. |
+| "`setTLSVerification(False)`" | **Rejected** — measured `ssl_verify_result 0`; there is no certificate error. The failure is HTTP/2 `PROTOCOL_ERROR`. |
+| "Use `NepseUnofficialApi`" | **Rejected** — the official endpoint answers 401 `WARNING: UNAUTHORIZED ACCESS`; automating a token scheme to pass that is an access-control bypass. |
+| "Adopt `backtesting.py`" | **Moot** — `megatool/backtest.py` with 32 tests already exists and is honest about its placeholder fee. |
+| nepsedata.com has index data 2003–2026 | **Not verified** — the host is reachable (200), but the index claim was not confirmed. Listed as a candidate, not a source. |
+
+Also: the 4 documents the report claimed existed (`TASK_QUEUE.md`,
+`TEST_RESULTS.md`, `KNOWN_BUGS.md`, `DECISIONS.md`) did not — they are now
+created. The "web search failure" the report diagnosed was this harness's own
+tool returning `unknown: "Web search cancelled"` three times, not an app config
+problem.
 
 ## 4. Decisions worth not re-litigating
 
@@ -203,33 +226,66 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 
 1. ~~60 of 372 symbols imported.~~ **RESOLVED**: all 372 are in (514,018 rows);
    the fetch is repeatable and idempotent.
-2. **Fundamentals Lab and News/Events are not implemented.** SEBON publishes fundamentals
-   as publications, not an API (research register A5), and no machine-readable news source
-   was found. The design is CSV/manual import with per-field provenance; no real file has
-   ever been imported, so nothing is tested.
-3. **Floor-sheet analysis is implemented but has never been run on a real sheet** — it is
+2. ~~Multi-factor ranking is not built.~~ **RESOLVED (2026-10-12)**:
+   `megatool/ranking.py` + `POST /api/rank` + a Screener panel. 369 of the 372
+   real symbols rank; every score decomposes into per-factor contributions that
+   sum back to it. **Still missing:** the factors are price/volume only — P/E,
+   P/B, dividend yield, index-relative and sector-relative rank are all *declared
+   unavailable at zero weight* rather than faked.
+3. **Fundamentals Lab: mechanism built, store empty.** CSV import, provenance,
+   reporting periods, units, verification levels and ratio guards are built and
+   tested (schema v4, 11th tab), but the store holds **0 records** because no
+   verified source is connected — and ShareSansar's per-company reports sit
+   behind a CSRF-protected AJAX POST, so nothing is scraped. **News/Events** are
+   still not implemented at all.
+4. **Floor-sheet analysis is implemented but has never been run on a real sheet** — it is
    unit-tested against synthetic CSVs only. It now has a **Floor Sheet web tab** (paste,
    import, filter, all seven panels), verified in-browser with a synthetic 5-row sheet;
    it has never been exercised against a real published floor sheet. Import a real session
    to close this.
-4. **Bounded Research Agent not implemented** — the web-search tool failed on all three
-   attempts this session (register B1–B3).
-5. **Multi-factor ranking is not built** — the scanner's filter tree is the multi-factor
-   engine; there is no normalised/weighted factor score.
-6. **No index or sector data anywhere**, because no source is available. The dashboard
+5. **`security_master.sector` is NULL for every one of the 372 symbols.** The source
+   dataset is OHLCV only and `ingest.py:148` hard-codes `None`, which blocks
+   sector-relative ranking and peer comparison. ShareSansar company pages *do* expose
+   `sector` in their HTML — collecting 372 pages is a scraping decision for the owner,
+   not for me (`TASK_QUEUE.md` T-11).
+6. **Bounded Research Agent is not built, and cannot be.** Web search returned
+   `unknown: "Web search cancelled"` on all three attempts — an environment limitation,
+   not an auth or config problem (that hypothesis was tested and disproved). The
+   deterministic rules engine works and refuses predictive questions correctly, but it
+   has no live-data path.
+7. **No index or sector data anywhere**, because no source is available. The dashboard
    deliberately shows no index value.
-7. **Prices are unadjusted** for bonus and rights issues, so every "return" in the
+8. **Prices are unadjusted** for bonus and rights issues, so every "return" in the
    forecast, research and scanner output is a price change, not a total return.
-8. **The third-party dataset licence is unresolved.**
-9. **PDF transcription is the open work** — the extraction infrastructure is
-   complete and tested (render → transcribe → validate → import → review), but
-   handwriting defeats automated OCR on 42 of 52 pages, so each page must be
-   transcribed visually. 64 sample records are imported as unreviewed. See
-   `docs/WRITTEN_DATA_PDF_AUDIT.md`.
+9. **The backtest's NEPSE cost/tax assumptions are a labelled placeholder.** The report
+   quotes 0.24–0.36% commission, 0.015% SEBON, Rs 25 DP charge, 7.5%/10% capital gains
+   tax and T+2 — **none verified**, and web search is unavailable here, so none was
+   hard-coded. Needs an authoritative source (`TASK_QUEUE.md` T-12).
+10. **A transcription error was found in the PDF work.** Page 21 settlement 9A's buy
+    figure was recorded as `177,609.76`; the correct value is `186,129.76`, off by
+    8,520 NPR — only the arithmetic caught it (`186,129.76 − 120,579.43 = 65,550.33`,
+    the exact recorded net). Corrected in the benchmark ground truth; **the audit
+    document still carries the old number**, and no other page has been re-checked the
+    same way (`KNOWN_BUGS.md` B-02).
+11. **Extracted values are not safe for accounting.** The benchmark measured Apple Vision
+    at 90.2% numeric recall (vs Tesseract's 4.3%) — a big win, but it still drops digits
+    from large totals: page 21's largest settlement was read as `77609.76` for a true
+    `186129.76`. Arithmetic self-checks are the mitigation, and they are what caught gap 10.
+12. **Local vision-language models remain untested.** Ollama 0.5.7 refuses every vision
+    model with `412: requires a newer version` (latest v0.40.3). Updating an installed
+    application is a machine change I left to the owner.
+13. **The third-party dataset licence is unresolved.**
+14. **PDF transcription is the open work** — the extraction infrastructure is
+    complete and tested (render → transcribe → validate → import → review), but
+    handwriting defeats automated OCR on 42 of 52 pages, so each page must be
+    transcribed visually. 64 sample records are imported as unreviewed. See
+    `docs/WRITTEN_DATA_PDF_AUDIT.md`. The benchmark now gives a practical route:
+    Apple Vision as a first pass, arithmetic checks to flag disagreements, human
+    review of only the flagged rows.
 
 ## 7. Verification evidence
 
-- `uv run pytest` — **511 passed, 0 failed** (2026-10-12), 13 test files.
+- `uv run pytest` — **602 passed, 0 failed** (2026-10-12), 15 test files.
 - `ruff check` and `ruff format` — clean.
 - All **ten** web tabs exercised in a real browser (Playwright) with **0 console errors**;
   the refusal path, the oversell rejection, the empty-journal "—" and the PDF tab's
@@ -248,17 +304,42 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 
 ## 8. What the next session should do, in order
 
-1. **Transcribe more PDF pages** and import them as unreviewed, then review. The
-   workflow is built and tested end-to-end: render a page, transcribe visually
-   (see `docs/WRITTEN_DATA_IMPORT_GUIDE.md`), write a JSON record list, run
-   `megatool pdf import`, then mark reviewed. Start with the trading-record pages
-   (18-33) — their settlement arithmetic is self-checking.
-2. Import a real floor sheet and check the analysis against the published page.
-3. Import fundamentals CSVs (SEBON quarterly statistics) and compute P/E, P/B, ROE and
-   dividend yield **with per-field provenance**.
-4. ~~Widen coverage to all 372 symbols.~~ **Done 2026-10-12** — all 372 are in
+Mirrors `TASK_QUEUE.md`, which carries the same list with acceptance criteria.
+
+1. **Re-verify the PDF transcription page by page (T-09).** A real 8,520 NPR
+   transcription error was found this session (gap 10) and was only caught by
+   arithmetic. Practical route now measured: run Apple Vision as a first pass
+   (`scripts/vision_ocr.swift`), let the settlement/total arithmetic self-checks
+   flag disagreements, and visually review only the flagged rows. Pages 18–33
+   (the trading records) are the highest yield because their arithmetic
+   self-checks. The audit document still carries the wrong 9A figure.
+2. **Ask the owner about an Ollama upgrade (T-10)** — the one part of the
+   handwriting benchmark left undone. Ollama 0.5.7 refuses every vision model
+   with `412`; latest is v0.40.3. Updating an installed application is a machine
+   change, so it needs approval. If approved, benchmark a small vision model on
+   the *same five pages* against Apple Vision before adopting anything.
+3. **Ask the owner about sector data (T-11)** — `security_master.sector` is NULL
+   for all 372 symbols, which blocks sector-relative ranking and peer
+   comparison. Preferred: the owner supplies a `symbol → sector` CSV (import
+   path is a small sibling of the fundamentals one). Alternative: the owner
+   authorises ShareSansar collection; the field is in that site's public HTML.
+4. **Verify the NEPSE cost/tax/settlement assumptions against an authoritative
+   source (T-12)** — SEBON, NEPSE or a broker notice, ideally cross-checked
+   against one of the owner's own contract notes. Then make them named,
+   configurable presets carrying a source and a date. **Do not hard-code the
+   report's figures**; they remain unverified and the backtest's fee rate is
+   still a placeholder.
+5. **Import a real floor sheet (T-13)** and check the analysis against the
+   published page. It has only ever run on synthetic CSVs.
+6. **Populate the Fundamentals Lab.** The mechanism is complete and tested; it
+   needs a real, permitted source. Whatever is imported must carry reporting
+   period, unit, source and verification level — the ratio guards will refuse
+   anything else by design.
+7. **Walk-forward validation of the ranking (T-16)** — rank monthly using only
+   data up to each month, form top/bottom quartiles, measure the next-month
+   spread. Chronological only; label it research, not evidence of profit.
+8. ~~Widen coverage to all 372 symbols.~~ **Done 2026-10-12** — all 372 are in
    (514,018 rows). Re-run `uv run megatool fetch` to refresh; stop the server first,
    since DuckDB allows only one writer.
-5. Add a normalised multi-factor score on top of the existing scanner filter tree.
-6. Re-check the official NEPSE API block with `probe()` occasionally — do not work around
-   it, and never store credentials.
+9. **Re-check the official NEPSE API with `probe()` occasionally** — do not work
+   around it, and never store credentials.
