@@ -522,11 +522,11 @@ def build_report(
 def journal_only_answer(symbol: str, question: str = "") -> dict[str, Any]:
     """Answer from the handwritten journal when there is no price history.
 
-    Many symbols appear in Written Data.pdf but are not in the 60-symbol
-    stored dataset. Returning a bare 404 for those would make the journal
-    unreachable, so this returns whatever reviewed journal records exist —
-    clearly labelled as journal records, with the absence of price history
-    stated rather than hidden.
+    Many symbols appear in Written Data.pdf but are not in the stored market
+    dataset (run `megatool fetch` to see what is stored). Returning a bare 404
+    for those would make the journal unreachable, so this returns whatever
+    reviewed journal records exist — clearly labelled as journal records, with
+    the absence of price history stated rather than hidden.
     """
     # A fresh or partially-migrated store has no pdf_records table yet. That
     # means nothing has been extracted — it must not crash the endpoint.

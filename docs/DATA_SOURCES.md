@@ -157,16 +157,20 @@ against it without touching any other module — that is the point of the adapte
 | Metric | Value |
 | --- | --- |
 | Symbols stored | 60 |
-| Bars stored | 89,580 |
+| Bars stored | 514,018 |
 | First bar | 1995-07-20 |
 | Latest bar | 2026-10-09 |
-| Last retrieved | 2026-10-11 |
+| Last retrieved | 2026-10-12 |
 | Symbols available upstream | ~372 |
+| Symbols stored | **372 (all of them)** |
 | Live feed | **not connected** |
 
 Verified against `GET /api/status` on the running server, not by reading the code.
 
-Coverage is **wide in time but narrow across the market**: some names go back to 1995,
-but only 60 of the ~372 available symbols are stored. Symbols such as NABIL/NICL/NMB are
-**not** stored, so `/api/bars/NABIL` correctly returns 404 — that is a coverage limit, not
-a bug. Widen it with `megatool fetch --limit 60` (or higher, bounded by disk and time).
+Coverage is **wide in time, and since 2026-10-12 wide across the market too**: some
+names go back to 1995, and all ~372 available symbols are stored. NABIL, NICL and NMB
+all return 200 from `/api/bars/...` (before 2026-10-12 only 60 symbols were stored and
+those calls correctly returned 404 — that was a coverage limit, not a bug).
+
+To refresh everything: `uv run megatool fetch` (idempotent; stop the server first,
+because DuckDB allows only one writer).

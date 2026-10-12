@@ -11,7 +11,7 @@ marked working because the code exists. The labels mean:
 | `NOT-IMPLEMENTED` | Deliberately not built. The reason is stated |
 | `NOT-TESTED` | Code exists but has not been executed/observed |
 
-Test suite: **506 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check` and
+Test suite: **511 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check` and
 `ruff format` clean. Live server verified in a real browser via Playwright.
 
 ---
@@ -20,7 +20,7 @@ Test suite: **506 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check`
 
 | # | Module | Status | Evidence |
 | --- | --- | --- | --- |
-| 1 | **Data foundation** (ingest, canonical schema, provenance, quality flags) | `TESTED-PASS` | 9,561→**89,580 real rows / 60 symbols** stored; idempotent re-ingest inserts 0 duplicates; quality sweep flags (never deletes) 1.31% suspect rows; `open` outside the day range in ~15% of source rows, recorded not hidden |
+| 1 | **Data foundation** (ingest, canonical schema, provenance, quality flags) | `TESTED-PASS` | 9,561→89,580→**514,018 real rows / 372 symbols** stored; full-market `fetch` run 2026-10-12 (**372/372 succeeded**, 424,438 new rows, no errors); idempotent re-ingest inserts 0 duplicates; quality sweep **flags, never deletes**: 51,700 rows (10.06%) carry a flag — 40,026 `open_outside_range`, 12,444 `volume_spike`, 417 `close_outside_range`, 204 `price_jump`, 109 `high_low_inverted` |
 | 2 | **Market Dashboard** | `TESTED-PASS` | Breadth/movers/most-active render in the browser; the response carries `is_live: false` and shows **no index value** because no index source is available |
 | 3 | **Charting Terminal** | `TESTED-PASS` | Candles + volume + 28 indicators; verified in-browser against pandas (SMA 1014.485 / 877.87 matched exactly) |
 | 4 | **Stock Scanner** | `TESTED-PASS` | 19 metrics, 4 presets, filter-tree validation with plain-English 400s; 21 scanner tests + 65 API tests |
@@ -59,7 +59,7 @@ the owner's journal, ledger and floor-sheet tables are empty.
 | Source | Status |
 | --- | --- |
 | Official NEPSE API (`nepalstock.com/api/nots/*`) | **BLOCKED** — HTTP 401 on all 11 probed endpoints; a logged-in session is required. No credential use, no token reverse-engineering |
-| `github.com/Aabishkar2/nepse-data` | **IN USE** — 372 symbols available, 60 imported (89,580 rows, 1995-07-20 → 2026-10-09). **No LICENSE file**: personal local use with per-row attribution only; `data/` is git-ignored so nothing is redistributed |
+| `github.com/Aabishkar2/nepse-data` | **IN USE** — **372/372 symbols imported** (514,018 rows, 1995-07-20 → 2026-10-09), fetched 2026-10-12. **No LICENSE file**: personal local use with per-row attribution only; `data/` is git-ignored so nothing is redistributed |
 | Local CSV import | **AVAILABLE** — the guaranteed fallback, documented in `docs/DATA_SOURCES.md` §1.2 |
 | NEPSE index / sector indices | **UNAVAILABLE** — the dashboard deliberately shows no index figure rather than a stale or invented one |
 | SEBON / NRB / merolagani / sharesansar | **INSPECTED, NOT WIRED** — reachable, but publish pages and publications, not documented APIs |
@@ -67,9 +67,10 @@ the owner's journal, ledger and floor-sheet tables are empty.
 
 ## 4. Known issues, in priority order
 
-1. **Only 60 of 372 available symbols are imported.** Coverage is wide in time (back to
-   995 for some names) but narrow across the market. *Fix:* `uv run megatool fetch --all`
-   when disk/time allows, or import the CSVs directly.
+1. ~~Only 60 of 372 available symbols are imported.~~ **RESOLVED 2026-10-12**:
+   `uv run megatool fetch` imported all **372/372** (514,018 rows). The scanner
+   now evaluates 372 symbols and relative-strength ranks against 334 peers.
+   Kept in the list for history; it is no longer open.
 2. **Third-party data licensing is unresolved.** The dataset has no LICENSE file. This is
    acceptable for personal local analysis with attribution and is the reason `data/` is
    git-ignored — but it is not resolved, and the data must not be redistributed.
@@ -84,8 +85,10 @@ the owner's journal, ledger and floor-sheet tables are empty.
 6. **Backtest fills are optimistic at the bar level.** Next-bar-open is honest about
    *when* you could trade, but it assumes the open was available in full size. Liquidity
    and impact are not modelled.
-7. **The relative-strength ranking compares only the 60 locally stored symbols**, not
-   NEPSE. The UI states this.
+7. **The relative-strength ranking compares the 372 locally stored symbols**, not the
+   whole NEPSE market, and uses unadjusted prices. The UI states this. (Before
+   2026-10-12 this compared only 60 symbols; the limit is now breadth of the
+   market, not a handful of names.)
 8. **PDF extraction is transcription-gated.** All 52 pages were inspected and
    inventoried, but automated OCR failed on 42 of them (handwriting defeats
    tesseract), so records enter one page at a time through visual transcription.
@@ -100,7 +103,7 @@ Evidence, not assertions. Everything below was executed and observed.
 
 | What | How | Result |
 | --- | --- | --- |
-| Full test suite | `uv run pytest` | **506 passed, 0 failed**, ~20 s |
+| Full test suite | `uv run pytest` | **511 passed, 0 failed**, ~20 s |
 | Lint / format | `ruff check .`, `ruff format .` | clean |
 | Real data in the store | `GET /api/status` on the running server | 89,580 bars, 60 symbols, 1995-07-20 → 2026-10-09 |
 | Every browser tab | Playwright, clicking through all tabs (8 at the time of this audit) | **0 console errors** |
@@ -134,6 +137,13 @@ Evidence, not assertions. Everything below was executed and observed.
 | Research: still 404s | ask about ZZZZ (no bars, no records) | 404 `no stored history for ZZZZ` — the fallback does not weaken it |
 | Research: unreviewed hidden | ask about SAHAS (3 unreviewed records) | `pdf_findings: []` plus warnings naming the 3 unreviewed records |
 | Cell colouring | `.good` / `.bad` classes used by the PDF table | **were undefined in styles.css** — confidence/review colour did nothing; now defined |
+| Full-market fetch | `uv run megatool fetch` (real store, server stopped first) | **372/372 succeeded**, 514,018 rows, 424,438 new, 0 errors, coverage 1995-07-20 → 2026-10-09 |
+| Store after fetch | `GET /api/health` | `bars_stored: 514018`, `symbols_stored: 372` |
+| Scanner breadth | `POST /api/screen` with `bars_listed >= 60` | **evaluated 372**, eligible 371, passed 369 (was 60 evaluated) |
+| Relative-strength breadth | `POST /api/research/ask` ADBL "relative strength" | `peer_median_3m_pct` cites **"median across 334 other stored symbols"** (was 59) |
+| PDF ↔ market overlap | 47 sample symbols ∩ stored set | **36 overlap** (was 0 with the 60-symbol set) |
+| Journal price vs stored close | p.11 dated 2025-07-04, nearest stored day 2025-07-03 | SBI −0.31%, EBL −1.19%, SCB −2.97% — consistent with the transcription, **not a confirmation** |
+| DuckDB single-writer | second process opened the store while the server held it | refused with `Conflicting lock is held` — server stopped before every fetch; no corruption |
 
 ## 6. How to run it
 
@@ -143,5 +153,5 @@ uv sync
 uv run megatool init      # create the databases
 uv run megatool fetch     # download real history (network)
 uv run megatool serve     # http://127.0.0.1:8710
-uv run pytest             # 506 tests
+uv run pytest             # 511 tests
 ```

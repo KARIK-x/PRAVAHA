@@ -7,7 +7,7 @@ Every claim in this file was verified by executing the named command on the proj
 
 | Command | Result |
 | --- | --- |
-| `uv run pytest` | **506 passed**, ~20 s |
+| `uv run pytest` | **511 passed**, ~20 s |
 | `ruff check .` | clean |
 | `ruff format .` | clean |
 

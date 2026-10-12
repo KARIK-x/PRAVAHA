@@ -15,7 +15,7 @@ uv sync                     # dependencies into ./.venv (Python 3.12.3)
 uv run megatool init        # create/upgrade the local databases
 uv run megatool fetch       # download real NEPSE history (network)
 uv run megatool serve       # web terminal at http://127.0.0.1:8710
-uv run pytest               # 506 tests, ~20 s
+uv run pytest               # 511 tests, ~20 s
 ```
 
 The server binds `127.0.0.1` only. Nothing listens on the network interface.
@@ -29,12 +29,13 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | Analysis | `scanner.py`, `backtest.py`, `forecast.py`, `research.py`, `floorsheet.py` |
 | Personal state | `portfolio.py` (ledger-derived), `journal.py`, `planning.py` |
 | Interface | `api.py` (FastAPI, ~45 routes), `cli.py` (incl. `megatool floor import|summary`), `web/static/` (10 tabs) |
-| Tests | `tests/` — 506 tests across 13 files |
+| Tests | `tests/` — 511 tests across 13 files |
 | Docs | `docs/ARCHITECTURE.md`, `DATA_SOURCES.md`, `TECH_STACK_DECISIONS.md`, `RESEARCH_REGISTER.md`, `PROJECT_STATUS.md`, `TESTING.md`, `SOURCES.md`, this file |
 
 ### Data actually in the store
 
-- **89,580 real daily bars, 60 symbols**, coverage 1995-07-20 → 2026-10-09.
+- **514,018 real daily bars, 372 symbols** (all of them), coverage 1995-07-20 →
+  2026-10-09. Expanded from 60 symbols on 2026-10-12 with `uv run megatool fetch`.
 - Source: `github.com/Aabishkar2/nepse-data` (372 symbols available; **no LICENSE file**,
   so: personal local use, per-row attribution, `data/` git-ignored, nothing redistributed).
 - Official NEPSE API is **BLOCKED** (HTTP 401 on all 11 probed endpoints) — see
@@ -101,6 +102,8 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | `f400a54` | **Audit B fixes**: real page count, confidence filter, `record_type` 400 |
 | `5f16f03` | PDF **review workflow** + **journal-only research** fallback; fixes 2 bugs I introduced |
 | `a05a2c3` | **Floor Sheet tab** (10th tab); defines the missing `.good`/`.bad` cell classes |
+| `f708210` | **CLI**: `megatool pdf review --ids ... --status ...` (third review surface) |
+| *(this commit)* | **Full-market fetch**: 60 → **372 symbols** (514,018 bars); docs + PDF cross-validation re-run |
 
 ## 4. Decisions worth not re-litigating
 
@@ -198,7 +201,8 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 
 ## 6. Known gaps — the honest list
 
-1. **60 of 372 available symbols are imported.** Wide in time, narrow across the market.
+1. ~~60 of 372 symbols imported.~~ **RESOLVED**: all 372 are in (514,018 rows);
+   the fetch is repeatable and idempotent.
 2. **Fundamentals Lab and News/Events are not implemented.** SEBON publishes fundamentals
    as publications, not an API (research register A5), and no machine-readable news source
    was found. The design is CSV/manual import with per-field provenance; no real file has
@@ -225,7 +229,7 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 
 ## 7. Verification evidence
 
-- `uv run pytest` — **506 passed, 0 failed** (2026-10-12), 13 test files.
+- `uv run pytest` — **511 passed, 0 failed** (2026-10-12), 13 test files.
 - `ruff check` and `ruff format` — clean.
 - All **ten** web tabs exercised in a real browser (Playwright) with **0 console errors**;
   the refusal path, the oversell rejection, the empty-journal "—" and the PDF tab's
@@ -252,7 +256,9 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 2. Import a real floor sheet and check the analysis against the published page.
 3. Import fundamentals CSVs (SEBON quarterly statistics) and compute P/E, P/B, ROE and
    dividend yield **with per-field provenance**.
-4. Widen coverage to all 372 symbols when disk/time allows (`uv run megatool fetch --all`).
+4. ~~Widen coverage to all 372 symbols.~~ **Done 2026-10-12** — all 372 are in
+   (514,018 rows). Re-run `uv run megatool fetch` to refresh; stop the server first,
+   since DuckDB allows only one writer.
 5. Add a normalised multi-factor score on top of the existing scanner filter tree.
 6. Re-check the official NEPSE API block with `probe()` occasionally — do not work around
    it, and never store credentials.
