@@ -20,7 +20,7 @@ from typing import Any
 
 from megatool.config import PATHS, ensure_dirs
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -170,6 +170,49 @@ CREATE TABLE IF NOT EXISTS settings (
 
 CREATE INDEX IF NOT EXISTS idx_tx_symbol ON portfolio_transactions (symbol);
 CREATE INDEX IF NOT EXISTS idx_journal_symbol ON journal_entries (symbol);
+
+-- ---------------------------------------------------------------------------
+-- Written Data.pdf extraction (schema v3)
+--
+-- Every record extracted from the handwritten journal carries its source page,
+-- extraction confidence, and review status. Nothing is treated as verified
+-- until a human has reviewed it. The original PDF is never modified and is
+-- git-ignored as private.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS pdf_imports (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_file  TEXT NOT NULL,               -- e.g. "WRITTENdata.pdf"
+    content_hash TEXT NOT NULL,               -- sha256 of the PDF file
+    page_count   INTEGER NOT NULL,
+    imported_at  TEXT NOT NULL,
+    UNIQUE (source_file, content_hash)
+);
+
+-- One row per extracted record. The unique key is the record's identity in the
+-- source (page + source_ref + field), so re-importing the same extraction
+-- cannot create duplicates.
+CREATE TABLE IF NOT EXISTS pdf_records (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    import_id     INTEGER NOT NULL REFERENCES pdf_imports(id),
+    record_type   TEXT NOT NULL,              -- fundamental | price | trade | settlement | ...
+    page          INTEGER NOT NULL,           -- 1-indexed page in the PDF
+    source_ref    TEXT NOT NULL DEFAULT '',  -- table name, row/column if identifiable
+    raw_text      TEXT NOT NULL DEFAULT '',  -- original transcription
+    value         TEXT,                       -- JSON-encoded extracted value
+    field_name    TEXT NOT NULL DEFAULT '',  -- eps | net_worth | price | quantity | ...
+    symbol        TEXT,                       -- NEPSE symbol if applicable
+    record_date   TEXT,                       -- ISO date if applicable
+    unit          TEXT,                       -- NPR | shares | crore | lakh | ratio | ...
+    confidence    TEXT NOT NULL DEFAULT 'uncertain',  -- high | medium | low | uncertain
+    review_status TEXT NOT NULL DEFAULT 'unreviewed', -- unreviewed | reviewed | corrected | rejected
+    note          TEXT NOT NULL DEFAULT '',
+    UNIQUE (import_id, page, source_ref, field_name, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pdf_records_symbol ON pdf_records (symbol);
+CREATE INDEX IF NOT EXISTS idx_pdf_records_page ON pdf_records (page);
+CREATE INDEX IF NOT EXISTS idx_pdf_records_review ON pdf_records (review_status);
 """
 
 

@@ -46,7 +46,7 @@ An autouse fixture in `tests/conftest.py` redirects **both** databases to a thro
 directory for every test:
 
 ```python
-monkeypatch.setattr(Paths, "app_db",  property(lambda self: tmp_path / "isolated_state.sqlite"))
+monkeypatch.setattr(Paths, "app_db", property(lambda self: tmp_path / "isolated_state.sqlite"))
 monkeypatch.setattr(Paths, "market_db", property(lambda self: tmp_path / "isolated_market.duckdb"))
 ```
 
