@@ -103,6 +103,31 @@ def test_validate_settlement_reconciliation_catches_discrepancy():
         validate_settlement_reconciliation(100_000.0, 200_000.0, 50_000.0)
 
 
+# Regression: "Net Payable" on page 21 is buy - sell, not sell - buy. The
+# original implementation signed the comparison and rejected all four correct
+# settlements on that page.
+def test_settlement_reconciliation_accepts_net_payable_convention():
+    # 106,186.34 (buy) - 88,169.68 (sell) = 18,016.66 payable
+    validate_settlement_reconciliation(106_186.34, 88_169.68, 18_016.66)
+
+
+def test_settlement_reconciliation_all_four_page21_settlements():
+    page21 = [
+        (186_129.76, 120_579.43, 65_550.33),
+        (106_186.34, 88_169.68, 18_016.66),
+        (189_763.58, 157_168.39, 32_595.19),
+        (54_157.24, 45_035.39, 9_121.85),
+    ]
+    for buy, sell, net in page21:
+        validate_settlement_reconciliation(buy, sell, net)
+
+
+def test_settlement_reconciliation_still_rejects_wrong_net_when_buy_exceeds_sell():
+    # buy > sell, but the net is wrong - must still raise.
+    with pytest.raises(PdfValidationError, match="does not reconcile"):
+        validate_settlement_reconciliation(106_186.34, 88_169.68, 99_999.99)
+
+
 # ---------------------------------------------------------------- number parsing
 
 

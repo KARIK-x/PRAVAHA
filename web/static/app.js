@@ -431,6 +431,106 @@ async function updatePresetDesc(presets) {
   run();
 }
 
+/* ------------------------------------------------------------------ ranking */
+async function runRank() {
+  const errEl = $("#rank-error");
+  errEl.textContent = "";
+  $("#rank-table").innerHTML = "";
+  $("#rank-summary").innerHTML = "";
+  try {
+    const body = {
+      top: parseInt($("#rank-top").value, 10) || 25,
+      min_bars: parseInt($("#rank-minbars").value, 10) || 60,
+    };
+    const asof = $("#rank-asof").value;
+    if (asof) body.as_of = asof;
+
+    const r = await api("/api/rank", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    const excluded = (r.excluded || []).length;
+    $("#rank-summary").innerHTML = [
+      ["Universe", fmtInt(r.universe_size)],
+      ["Ranked", fmtInt(r.ranked.length)],
+      ["Insufficient data", fmtInt(excluded)],
+      ["As of", r.as_of || "latest"],
+      ["Factors used", fmtInt(Object.keys(r.weights).length)],
+    ]
+      .map(
+        ([k, v]) =>
+          `<div class="stat"><div class="k">${k}</div><div class="v" style="font-size:15px">${esc(v)}</div></div>`
+      )
+      .join("");
+
+    if (!r.ranked.length) {
+      $("#rank-table").innerHTML = `<div class="error">${esc(
+        (r.notes || []).join(" · ") || "Nothing could be ranked."
+      )}</div>`;
+    } else {
+      const rows = r.ranked.map((x) => {
+        const top3 = Object.entries(x.contributions)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 3)
+          .map(([k, v]) => `${esc(k)} ${v.toFixed(1)}`)
+          .join(" · ");
+        return [
+          { html: `<b>${x.rank}</b>` },
+          { html: `<b class="click">${esc(x.symbol)}</b>`, cls: "click" },
+          { html: esc(x.score != null ? x.score.toFixed(1) : "—") },
+          { html: esc(top3), cls: "wrap muted" },
+          {
+            html: x.complete
+              ? `<span class="pill pass">complete</span>`
+              : `<span class="pill pill-info" title="${esc(x.missing.join(", "))}">gaps</span>`,
+          },
+        ];
+      });
+      $("#rank-table").innerHTML = table(
+        ["#", "Symbol", "Score", "Top contributions", "Data"],
+        rows
+      );
+      $$("#rank-table tr.click").forEach((tr) =>
+        tr.addEventListener("click", () => {
+          $("#symbol-input").value = tr.cells[1].textContent.trim();
+          showView("charts");
+          loadChart();
+        })
+      );
+    }
+
+    const factorRows = (r.factors || []).map((f) => [
+      { html: `<code>${esc(f.key)}</code>` },
+      { html: esc(f.label) },
+      {
+        html: f.available
+          ? esc((f.weight * 100).toFixed(0) + "%")
+          : `<span class="muted">n/a</span>`,
+      },
+      {
+        html: f.available
+          ? `<span class="pill pass">available</span>`
+          : `<span class="pill pill-info">unavailable</span>`,
+      },
+      { html: esc(f.blurb || ""), cls: "wrap muted" },
+    ]);
+    $("#rank-factors").innerHTML = table(
+      ["Factor", "Label", "Weight", "Status", "Definition"],
+      factorRows
+    );
+
+    if (r.disclaimer) $("#rank-hint").textContent = r.disclaimer;
+    if (r.notes && r.notes.length) {
+      $("#rank-hint").textContent =
+        r.disclaimer + " " + r.notes.join(" ");
+    }
+  } catch (e) {
+    errEl.textContent = e.message;
+  }
+}
+
 /* -------------------------------------------------------------------- data */
 async function loadData() {
   try {
@@ -1520,6 +1620,8 @@ function boot() {
   $("#symbol-input").addEventListener("keydown", (e) => { if (e.key === "Enter") loadChart(); });
   $("#run-screen").addEventListener("click", () => updatePresetDesc());
   $("#preset").addEventListener("change", () => updatePresetDesc());
+  $("#run-rank").addEventListener("click", runRank);
+  $("#rank-asof").addEventListener("keydown", (e) => { if (e.key === "Enter") runRank(); });
   $("#export-screen").addEventListener("click", () => {
     if (!currentScreenTree) return;
     const url = `/api/screen/export.csv?tree=${encodeURIComponent(JSON.stringify(currentScreenTree))}`;

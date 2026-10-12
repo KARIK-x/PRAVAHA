@@ -191,6 +191,103 @@ def test_screen_csv_export(client):
     assert "TEST1" in r.text and "TEST2" in r.text
 
 
+# ------------------------------------------------------------------- ranking
+
+
+def test_rank_returns_ordered_scores_with_explanation(client):
+    d = client.post("/api/rank", json={}).json()
+    assert d["universe_size"] == 2
+    assert len(d["ranked"]) == 2
+    assert [r["rank"] for r in d["ranked"]] == [1, 2]
+    scores = [r["score"] for r in d["ranked"]]
+    assert scores == sorted(scores, reverse=True)
+    for entry in d["ranked"]:
+        assert entry["contributions"]
+        assert abs(sum(entry["contributions"].values()) - entry["score"]) < 0.01
+        assert entry["percentiles"]
+
+
+def test_rank_declares_unavailable_factors_with_zero_weight(client):
+    d = client.post("/api/rank", json={}).json()
+    assert d["unavailable"]
+    for key in ("pe_ratio", "pb_ratio", "dividend_yield"):
+        assert key in d["unavailable"]
+        assert key not in d["weights"]
+        for entry in d["ranked"]:
+            assert key not in entry["contributions"]
+
+
+def test_rank_states_it_is_not_a_signal(client):
+    d = client.post("/api/rank", json={}).json()
+    assert "not a prediction" in d["disclaimer"]
+
+
+def test_rank_rejects_unknown_factor(client):
+    r = client.post("/api/rank", json={"weights": {"astrology": 1.0}})
+    assert r.status_code == 400
+    assert "unknown factor" in r.json()["detail"]
+
+
+def test_rank_rejects_negative_weight(client):
+    r = client.post("/api/rank", json={"weights": {"momentum_3m": -1.0}})
+    assert r.status_code == 400
+
+
+def test_rank_rejects_symbol_with_no_history(client):
+    r = client.post("/api/rank", json={"symbols": ["NOSUCH"]})
+    assert r.status_code == 404
+
+
+def test_rank_truncates_history_at_as_of(client):
+    full = client.post("/api/rank", json={}).json()
+    cut = client.post("/api/rank", json={"as_of": "2026-05-01"}).json()
+    assert cut["truncated_to"] == "2026-05-01"
+    # 87 of 120 bars remain, so both symbols still rank.
+    assert len(cut["ranked"]) == 2
+    # Percentile ranks depend only on cross-sectional *order*, so with two
+    # monotonic symbols the composite score is legitimately unchanged. The
+    # underlying factor values must differ - that is the direct evidence the
+    # bars after as_of were excluded from the computation.
+    assert cut["ranked"][0]["raw_values"] != full["ranked"][0]["raw_values"]
+    # momentum_3m (60d) is computable in both cases; momentum_6m (120d) needs
+    # more than the 120 bars the fixture stores, so it is None throughout.
+    assert (
+        cut["ranked"][0]["raw_values"]["momentum_3m"]
+        != full["ranked"][0]["raw_values"]["momentum_3m"]
+    )
+
+
+def test_rank_reports_when_as_of_leaves_nothing_rankable(client):
+    # 2026-01-20 is only 14 bars in, below min_bars=60.
+    r = client.post("/api/rank", json={"as_of": "2026-01-20"})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["ranked"] == []
+    assert len(d["excluded"]) == 2
+    assert any("nothing could be ranked" in n for n in d["notes"])
+    assert all("insufficient data" in e["note"] for e in d["excluded"])
+
+
+def test_rank_respects_top_limit(client):
+    d = client.post("/api/rank", json={"top": 1}).json()
+    assert len(d["top"]) == 1
+    assert len(d["ranked"]) == 2
+
+
+def test_rank_weight_override_changes_score(client):
+    base = client.post("/api/rank", json={}).json()
+    only_vol = client.post(
+        "/api/rank", json={"weights": {"momentum_3m": 0.0, "volatility": 1.0}}
+    ).json()
+    # Default weights include momentum_3m; the override must drop it.
+    assert "momentum_3m" in base["weights"]
+    assert "momentum_3m" not in only_vol["weights"]
+    for entry in only_vol["ranked"]:
+        assert "momentum_3m" not in entry["contributions"]
+        assert "volatility" in entry["contributions"]
+        assert abs(sum(entry["contributions"].values()) - entry["score"]) < 0.01
+
+
 def test_quality_endpoint_reports_flags(client):
     d = client.get("/api/quality", params={"symbol": "TEST1"}).json()
     assert d["symbols_checked"] == 1

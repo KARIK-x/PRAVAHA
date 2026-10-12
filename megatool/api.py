@@ -85,6 +85,13 @@ from megatool.portfolio import (
     remove_manual_position,
     value_portfolio,
 )
+from megatool.ranking import (
+    DEFAULT_WEIGHTS,
+    PRICE_FACTORS,
+    UNAVAILABLE_FACTORS,
+    RankConfig,
+    rank_universe,
+)
 from megatool.research import (
     TOPIC_HELP,
     TOPICS,
@@ -124,6 +131,22 @@ class PydanticScreenRequest(BaseModel):
     symbols: list[str] | None = None
     as_of: date | None = None
     min_bars: int = 30
+
+
+class PydanticRankRequest(BaseModel):
+    """Ranking request body. Declared at module scope for the same reason as
+    :class:`PydanticScreenRequest`.
+
+    ``weights`` only overrides the factors it names; omitted factors keep their
+    defaults. Only factors with real backing data can receive a positive weight.
+    """
+
+    symbols: list[str] | None = None
+    as_of: date | None = None
+    min_bars: int = Field(60, ge=1, le=10_000)
+    max_missing_fraction: float = Field(0.5, ge=0.0, le=1.0)
+    weights: dict[str, float] | None = None
+    top: int = Field(50, ge=1, le=1000)
 
 
 class PydanticBacktestRequest(BaseModel):
@@ -488,6 +511,62 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
                 if r.passed or not r.eligible
             ],
         }
+
+    @app.post("/api/rank")
+    def rank(req: PydanticRankRequest) -> dict[str, Any]:
+        """Rank the stored universe by transparent, weighted factors.
+
+        Every factor's percentile and its weighted contribution are returned,
+        so a score can be reconstructed by hand. Factors without backing data
+        are listed under ``unavailable`` and score nothing.
+        """
+        weights = dict(DEFAULT_WEIGHTS)
+        if req.weights:
+            for key, value in req.weights.items():
+                if key not in PRICE_FACTORS:
+                    raise HTTPException(
+                        400,
+                        f"unknown factor {key!r}; known factors: "
+                        + ", ".join(sorted(PRICE_FACTORS)),
+                    )
+                if value < 0:
+                    raise HTTPException(400, f"weight for {key!r} must be >= 0")
+                weights[key] = float(value)
+
+        config = RankConfig(
+            weights=weights,
+            min_bars=req.min_bars,
+            max_missing_fraction=req.max_missing_fraction,
+            as_of=req.as_of.isoformat() if req.as_of else None,
+        )
+
+        store = get_store()
+        wanted = list(req.symbols) if req.symbols else store.symbols(min_bars=1)
+        frames: dict[str, pd.DataFrame] = {}
+        for symbol in wanted:
+            df = store.get_bars(symbol.upper(), end=req.as_of)
+            if not df.empty:
+                frames[symbol.upper()] = df
+
+        if not frames:
+            raise HTTPException(404, "no stored history for the requested symbols")
+
+        try:
+            result = rank_universe(frames, config)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+        payload = result.to_dict()
+        payload["requested"] = len(wanted)
+        payload["truncated_to"] = req.as_of.isoformat() if req.as_of else None
+        payload["unavailable"] = UNAVAILABLE_FACTORS
+        payload["top"] = payload["ranked"][: req.top]
+        payload["disclaimer"] = (
+            "A ranking is a research view over past data. It is not a "
+            "prediction, a recommendation, or a trading signal, and it does "
+            "not indicate expected profit."
+        )
+        return payload
 
     @app.get("/api/screen/export.csv")
     def screen_export(tree: str) -> str:

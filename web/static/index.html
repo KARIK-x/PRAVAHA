@@ -114,6 +114,33 @@
       <div id="screen-summary" class="stat-row"></div>
       <div id="screen-results" class="tablewrap"></div>
     </div>
+
+    <div class="card">
+      <h2>Factor ranking</h2>
+      <div class="controls">
+        <label>As of
+          <input id="rank-asof" type="date" />
+        </label>
+        <label>Top
+          <input id="rank-top" type="number" value="25" min="1" max="500" />
+        </label>
+        <label>Min bars
+          <input id="rank-minbars" type="number" value="60" min="1" max="5000" />
+        </label>
+        <button id="run-rank">Rank universe</button>
+      </div>
+      <p class="hint" id="rank-hint">
+        Composite of weighted, percentile-ranked factors. This is a view over past
+        data, not a prediction or a trading signal.
+      </p>
+      <div id="rank-error" class="error"></div>
+      <div class="stat-row" id="rank-summary"></div>
+      <div id="rank-table" class="tablewrap"></div>
+      <details>
+        <summary>Factors, weights and gaps</summary>
+        <div id="rank-factors" class="tablewrap"></div>
+      </details>
+    </div>
   </section>
 
   <!-- ------------------------------------------------------------ BACKTEST -->

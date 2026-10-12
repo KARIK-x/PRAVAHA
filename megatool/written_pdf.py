@@ -310,15 +310,27 @@ def validate_eps(value: float, symbol: str) -> float:
 def validate_settlement_reconciliation(
     buy_total: float, sell_total: float, net_amount: float, tolerance: float = 0.02
 ) -> None:
-    """Check that a settlement reconciles: sell_total - buy_total ≈ net_amount.
+    """Check that a settlement reconciles: |buy - sell| must equal |net|.
 
-    A discrepancy greater than `tolerance` NPR is flagged, not silently accepted.
+    NEPSE settlements produce a single net amount whose *direction* depends on
+    which side is larger:
+
+      * ``buy > sell`` -> a **net payable** (you owe), sign positive
+      * ``sell > buy`` -> a **net receivable** (you are owed), sign positive
+
+    The document under extraction ("Written Data.pdf", page 21) labels these
+    "Net Payable" and writes ``buy - sell``; other records write ``sell - buy``.
+    Comparing signed values therefore rejects settlements that are in fact
+    correct, so the magnitude is what reconciles.
+
+    A discrepancy greater than `tolerance` NPR is flagged, not silently
+    accepted - a genuinely wrong net still raises.
     """
-    expected = sell_total - buy_total
-    if abs(expected - net_amount) > tolerance:
+    expected_magnitude = abs(buy_total - sell_total)
+    if abs(abs(net_amount) - expected_magnitude) > tolerance:
         raise PdfValidationError(
-            f"settlement does not reconcile: sell {sell_total} - buy {buy_total} "
-            f"= {expected}, but net recorded as {net_amount}"
+            f"settlement does not reconcile: buy {buy_total} vs sell {sell_total} "
+            f"differs by {expected_magnitude}, but net recorded as {net_amount}"
         )
 
 
