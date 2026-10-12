@@ -105,7 +105,7 @@ Evidence, not assertions. Everything below was executed and observed.
 | --- | --- | --- |
 | Full test suite | `uv run pytest` | **511 passed, 0 failed**, ~20 s |
 | Lint / format | `ruff check .`, `ruff format .` | clean |
-| Real data in the store | `GET /api/status` on the running server | 89,580 bars, 60 symbols, 1995-07-20 → 2026-10-09 |
+| Real data in the store | `GET /api/status` on the running server | **514,018 bars, 372 symbols**, 1995-07-20 → 2026-10-09 (was 89,580 / 60 before the 2026-10-12 fetch) |
 | Every browser tab | Playwright, clicking through all tabs (8 at the time of this audit) | **0 console errors** |
 | Research assistant honesty | Asked "will ADBL go up tomorrow?" | Refused verbatim, listed what it can answer instead, showed no numbers |
 | Research citations | Read the rendered table from the DOM | 33 findings for ADBL, every row carrying value + unit + window + definition; zero `undefined`, zero `[object Object]` |
@@ -128,7 +128,8 @@ Evidence, not assertions. Everything below was executed and observed.
 | PDF tab, isolated store | Playwright, click the PDF Journal tab | summary 64 records / 6 pages, table renders, symbol filter → 1 TPC row, reviewed-only → "No records match", **0 console errors** |
 | PDF tab, real store | Playwright, click the PDF Journal tab | empty state: "No records extracted yet. Import with: megatool pdf import FILE.json", **0 console errors** |
 | All 9 tabs, real server | Playwright click-through on :8710 | **0 console errors**; store intact at 89,580 bars / 60 symbols |
-| All 10 tabs, real server | Playwright click-through on :8710 after the Floor Sheet tab | **0 console errors**; 60 symbols intact; floor sheet and PDF both correctly empty |
+| All 10 tabs, real server | Playwright click-through on :8710 after the Floor Sheet tab | **0 console errors**; floor sheet and PDF both correctly empty |
+| All 10 tabs after the 372-symbol fetch | Playwright click-through on :8710, then the screener | **0 console errors**; screener returned 29 rows with per-condition explanations |
 | Floor Sheet import (UI) | paste a 5-row synthetic sheet, click Import | "Imported 5 of 5 rows (0 skipped)"; totals 870 / 323,920 match the CSV by hand |
 | Floor Sheet HHI (UI) | buyers B1 300, B2 300, B4 270 of 870 | HHI **3341** rendered — recomputed by hand as 34.48²+34.48²+31.03² = 3340.7 |
 | Floor Sheet filter (UI) | symbol = NICA | totals narrow to 2 prints / 450 qty / 112,800 — matches the CSV rows by hand |
