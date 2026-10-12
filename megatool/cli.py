@@ -194,6 +194,67 @@ def _cmd_screen(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_walk_forward(args: argparse.Namespace) -> int:
+    import json
+
+    from megatool.market_store import MarketStore
+    from megatool.walkforward import WalkForwardConfig, walk_forward
+
+    config = WalkForwardConfig(
+        frequency=args.frequency,
+        start=args.start,
+        end=args.end,
+        top_quantile=args.top_quantile,
+        min_bars=args.min_bars,
+        permutations=args.permutations,
+    )
+    problems = config.validate()
+    if problems:
+        print("; ".join(problems), file=sys.stderr)
+        return 2
+
+    with MarketStore(read_only=True) as store:
+        frames = {}
+        for symbol in store.symbols(min_bars=1):
+            df = store.get_bars(symbol)
+            if not df.empty:
+                frames[symbol] = df
+
+    if not frames:
+        print("no stored history to validate", file=sys.stderr)
+        return 1
+
+    result = walk_forward(frames, config)
+    payload = result.to_dict()
+
+    s = payload["summary"]
+    cb = payload["chance_baseline"]
+    print(f"Walk-forward validation of the ranking — {config.frequency_label}")
+    print(f"  window      : {args.start or 'start of data'} .. {args.end or 'end of data'}")
+    print(f"  periods     : {s['periods_used']} used, {s['periods_skipped']} skipped")
+
+    def pct(v):
+        return "n/a" if v is None else f"{v * 100:.3f}%"
+
+    print(f"  mean spread : {pct(s['mean_spread'])}   (top quantile - bottom quantile)")
+    print(f"  hit rate    : {pct(s['hit_rate'])}")
+    print(f"  cum long    : {pct(s['cumulative_long'])}")
+    print(f"  cum bench   : {pct(s['cumulative_benchmark'])}")
+    print(f"  chance p95  : {pct(cb['p95_spread'])}")
+    print(f"  percentile  : {cb['observed_percentile']}")
+    print(f"  beats chance: {cb['beats_chance']}")
+    print()
+    print("Caveats — these numbers are optimistic and are not advice:")
+    for c in payload["caveats"]:
+        print(f"  - {c}")
+
+    if args.json_out:
+        with open(args.json_out, "w") as fh:
+            json.dump(payload, fh, indent=2)
+        print(f"\nfull detail written to {args.json_out}")
+    return 0
+
+
 def _cmd_probe(args: argparse.Namespace) -> int:
     from megatool.datasources.nepalstock_official import NepalStockOfficialAdapter
     from megatool.datasources.nepse_data_repo import NepseDataRepoAdapter
@@ -374,6 +435,19 @@ def build_parser() -> argparse.ArgumentParser:
         + ", ".join(["oversold_rsi", "volume_surge", "near_52w_high", "above_sma50"]),
     )
     s.set_defaults(func=_cmd_screen)
+
+    w = sub.add_parser(
+        "walk-forward",
+        help="validate the ranking historically (rank at each period end, hold the tails)",
+    )
+    w.add_argument("--frequency", choices=["M", "Q"], default="Q")
+    w.add_argument("--start", help="first rebalance date (YYYY-MM-DD)")
+    w.add_argument("--end", help="last rebalance date (YYYY-MM-DD)")
+    w.add_argument("--top-quantile", type=float, default=0.25)
+    w.add_argument("--min-bars", type=int, default=60)
+    w.add_argument("--permutations", type=int, default=100)
+    w.add_argument("--json", dest="json_out", help="write full detail to this path")
+    w.set_defaults(func=_cmd_walk_forward)
 
     sub.add_parser("probe", help="check which data sources are reachable").set_defaults(
         func=_cmd_probe

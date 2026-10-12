@@ -129,6 +129,7 @@ from megatool.scanner import (
 )
 from megatool.ta import available as ta_available
 from megatool.ta import compute as ta_compute
+from megatool.walkforward import WalkForwardConfig, walk_forward
 
 
 def _now() -> str:
@@ -163,6 +164,24 @@ class PydanticRankRequest(BaseModel):
     max_missing_fraction: float = Field(0.5, ge=0.0, le=1.0)
     weights: dict[str, float] | None = None
     top: int = Field(50, ge=1, le=1000)
+
+
+class PydanticWalkForwardRequest(BaseModel):
+    """Walk-forward validation request.
+
+    Bounded by default: a monthly walk-forward over the full history takes
+    minutes, so the defaults keep a single request inside a reasonable time.
+    """
+
+    frequency: str = Field("Q", description="M (monthly) or Q (quarterly)")
+    start: date | None = None
+    end: date | None = None
+    top_quantile: float = Field(0.25, ge=0.01, le=0.5)
+    min_bars: int = Field(60, ge=1, le=10_000)
+    max_missing_fraction: float = Field(0.5, ge=0.0, le=1.0)
+    weights: dict[str, float] | None = None
+    permutations: int = Field(100, ge=0, le=2000)
+    random_seed: int = 20261012
 
 
 class PydanticFundamentalsImport(BaseModel):
@@ -603,6 +622,67 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
             "A ranking is a research view over past data. It is not a "
             "prediction, a recommendation, or a trading signal, and it does "
             "not indicate expected profit."
+        )
+        return payload
+
+    # ------------------------------------------------------- walk-forward
+    @app.post("/api/walk-forward")
+    def walk_forward_endpoint(req: PydanticWalkForwardRequest) -> dict[str, Any]:
+        """Validate the ranking historically: rank at each period end, hold the
+        tails, measure what happened next.
+
+        This is the honest test of whether the ranking has ever worked. It
+        ranks using only data available at each rebalance date, so there is no
+        look-ahead, and it reports the result against both the whole-universe
+        benchmark and a random-selection baseline.
+
+        The response always carries the caveats. Read them before reading the
+        numbers.
+        """
+        weights = dict(DEFAULT_WEIGHTS)
+        if req.weights:
+            for key, value in req.weights.items():
+                if key not in PRICE_FACTORS:
+                    raise HTTPException(
+                        400,
+                        f"unknown factor {key!r}; known factors: "
+                        + ", ".join(sorted(PRICE_FACTORS)),
+                    )
+                if value < 0:
+                    raise HTTPException(400, f"weight for {key!r} must be >= 0")
+                weights[key] = float(value)
+
+        config = WalkForwardConfig(
+            frequency=req.frequency,
+            start=req.start.isoformat() if req.start else None,
+            end=req.end.isoformat() if req.end else None,
+            top_quantile=req.top_quantile,
+            min_bars=req.min_bars,
+            max_missing_fraction=req.max_missing_fraction,
+            weights=weights,
+            permutations=req.permutations,
+            random_seed=req.random_seed,
+        )
+        problems = config.validate()
+        if problems:
+            raise HTTPException(400, "; ".join(problems))
+
+        store = get_store()
+        frames: dict[str, pd.DataFrame] = {}
+        for symbol in store.symbols(min_bars=1):
+            df = store.get_bars(symbol)
+            if not df.empty:
+                frames[symbol] = df
+        if not frames:
+            raise HTTPException(404, "no stored history to validate")
+
+        result = walk_forward(frames, config)
+        payload = result.to_dict()
+        payload["disclaimer"] = (
+            "A walk-forward spread is a research measurement over past data. It "
+            "is not a prediction, a recommendation, or a trading signal, and it "
+            "does not indicate expected profit. The caveats in this response "
+            "apply to every number in it."
         )
         return payload
 

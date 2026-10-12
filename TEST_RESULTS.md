@@ -1,6 +1,6 @@
 # Test results
 
-**Last run:** 2026-10-12 · **731 passed, 0 failed, 0 skipped** · 41.36 s · exit 0
+**Last run:** 2026-10-12 · **759 passed, 0 failed, 0 skipped** · 38.43 s · exit 0
 **Lint:** `ruff check` clean · `ruff format --check` clean (55 files)
 **Front end:** `node --check web/static/app.js` clean
 
@@ -40,10 +40,11 @@ node --check web/static/app.js
 | `test_scanner.py` | 21 |
 | `test_planning.py` | 21 |
 | `test_written_reference.py` | 20 **(new)** |
+| `test_walkforward.py` | 23 **(new)** |
 | `test_cli_floor.py` | 9 |
-| **Total (18 files)** | **731** |
+| **Total (18 files)** | **759** |
 
-Progression: 511 (13 files) → 602 → 650 → 707 → 709 → 729 → **731** (18 files).
+Progression: 511 (13 files) → 602 → 650 → 707 → 709 → 729 → 731 → **759** (18 files).
 
 ---
 
@@ -119,6 +120,21 @@ Ordered scores with explanations, unavailable factors at zero weight, "not a
 prediction" disclaimer, 400s for bad weights, 404 for unknown symbols, `as_of`
 truncation, the nothing-rankable case, CSV import/query/idempotency,
 malformed-CSV rejection, and `dry_run` writing nothing.
+
+### `test_walkforward.py` (23, new) — walk-forward validation of the ranking
+
+The honest test of whether the ranking has ever worked: rank at each period end
+using only data available then, hold the tails, measure what happened next.
+
+| Area | What is asserted |
+|---|---|
+| Hand arithmetic | A six-symbol fixture whose flat price segments make every forward return a round number; the expected spreads (0.15, 0.04) and the summary mean (0.095) are written down in the test, not asked of the module |
+| No look-ahead | Perturbing every bar *after* a rebalance leaves that period's chosen symbols unchanged; poisoning all later bars with absurd values does the same |
+| Speed trim | Trimming each frame to the 250-bar factor window returns **exactly** the same ranking as the full frame, period by period — the optimisation is pinned, not trusted |
+| Eligibility gate | A trim narrower than `min_bars` cannot starve the gate, because the effective window is `max(trim_window, min_bars)` |
+| Staleness | A carried-forward price is flagged `stale_outcome`, never treated as a fresh trade; the count reaches the summary |
+| Chance baseline | Reproducible under a fixed seed; a large consistent spread clears the null; `permutations=0` reports `None` rather than guessing |
+| Honesty | Every result carries the survivorship-bias and no-costs caveats, and the chance baseline explains itself in the payload |
 
 ---
 

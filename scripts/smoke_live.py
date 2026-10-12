@@ -79,6 +79,10 @@ def read_only_posts(symbol: str) -> dict[str, tuple[str, Any]]:
     return {
         "/api/screen": ("POST", {"tree": tree}),
         "/api/rank": ("POST", {"top": 5}),
+        "/api/walk-forward": (
+            "POST",
+            {"frequency": "Q", "start": "2024-01-01", "end": "2026-12-31", "permutations": 10},
+        ),
         "/api/backtest": (
             "POST",
             {

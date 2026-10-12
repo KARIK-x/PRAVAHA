@@ -11,7 +11,7 @@ marked working because the code exists. The labels mean:
 | `NOT-IMPLEMENTED` | Deliberately not built. The reason is stated |
 | `NOT-TESTED` | Code exists but has not been executed/observed |
 
-Test suite: **731 passed, 0 failed** (18 files, `.venv/bin/python -m pytest -p no:warnings`, 2026-10-12).
+Test suite: **759 passed, 0 failed** (18 files, `.venv/bin/python -m pytest -p no:warnings`, 2026-10-12).
 `ruff check` and `ruff format` clean. Live app verified this session against the
 running server with the real 514,018-row store: `scripts/smoke_live.py` derives
 its probe list from the server's own OpenAPI spec and exercised **35 of 45
@@ -147,11 +147,12 @@ Evidence, not assertions. Everything below was executed and observed.
 
 | What | How | Result |
 | --- | --- | --- |
-| Full test suite | `.venv/bin/python -m pytest -p no:warnings` | **731 passed, 0 failed**, 41.36 s (was 709, then 729) |
-| Lint / format | `ruff check megatool/ tests/ scripts/`, `ruff format --check` | clean (55 files) |
+| Full test suite | `.venv/bin/python -m pytest -p no:warnings` | **759 passed, 0 failed**, 38.43 s (was 709, 729, 731) |
+| Lint / format | `ruff check megatool/ tests/ scripts/`, `ruff format --check` | clean (56 files) |
 | Front end | `node --check web/static/app.js` | clean |
-| Live route coverage | `.venv/bin/python scripts/smoke_live.py` (server restarted on the changed code) | **35/45 routes probed, 35 expected, 0 unexpected, exit 0**; 10 mutating routes skipped by design |
+| Live route coverage | `.venv/bin/python scripts/smoke_live.py` (server restarted on the changed code) | **36/46 routes probed, 36 expected, 0 unexpected, exit 0**; 10 mutating routes skipped by design |
 | B-17 fix impact | DuckDB aggregates over `price_bars` before/after | 124 `invalid` rows excluded; **45/45** affected symbols' full-history ATR changed; **8** all-time lows corrected from `0.0`; **0** symbols lost a latest price, **0** removed |
+| Walk-forward validation | `scripts/walk_forward_report.py` over the real store | The ranking's top quartile **underperformed its bottom quartile in every window**; long portfolio underperformed the equal-weight benchmark in every window; observed spread at/below the **5th percentile of random in 4 of 5 windows**. See `docs/RESEARCH_REGISTER.md` D11 |
 | Real data in the store | `GET /api/status` on the running server | **514,018 bars, 372 symbols**, 1995-07-20 → 2026-10-09 (was 89,580 / 60 before the 2026-10-12 fetch) |
 | Every browser tab | Playwright, clicking through all **11** tabs | **0 console errors** |
 | Ranking on real data | `POST /api/rank` against the 372-symbol universe | 369 ranked / 3 excluded with reasons; **0 of 369 had contributions that did not sum to the score**; 8 flagged as incomplete |

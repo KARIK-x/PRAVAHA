@@ -288,6 +288,91 @@ def test_rank_weight_override_changes_score(client):
         assert abs(sum(entry["contributions"].values()) - entry["score"]) < 0.01
 
 
+# --------------------------------------------------------------- walk-forward
+
+
+@pytest.fixture
+def wf_client(tmp_path, monkeypatch):
+    """Six symbols over ~100 business days, so a walk-forward has real periods.
+
+    The price path is the same three-segment construction as
+    ``tests/test_walkforward.py``: a ramp, then two flat segments whose returns
+    are known round numbers, so the expected spreads are hand-derivable.
+    """
+    store = MarketStore(tmp_path / "market.duckdb")
+    dates = pd.bdate_range("2024-09-02", periods=100)
+    period_a = {0: -0.10, 1: -0.05, 2: 0.0, 3: 0.02, 4: 0.05, 5: 0.10}
+    period_b = {0: 0.01, 1: 0.02, 2: 0.03, 3: 0.04, 4: 0.05, 5: 0.06}
+    for i in range(6):
+        a = 0.001 * (i + 1)
+        closes = []
+        for d in range(100):
+            if d <= 64:
+                closes.append(100.0 * (1.0 + a * d))
+            elif d <= 86:
+                closes.append(100.0 * (1.0 + a * 64) * (1.0 + period_a[i]))
+            else:
+                closes.append(100.0 * (1.0 + a * 64) * (1.0 + period_a[i]) * (1.0 + period_b[i]))
+        store.upsert_bars(
+            pd.DataFrame(
+                {
+                    "symbol": f"S{i}",
+                    "trading_date": dates,
+                    "open": closes,
+                    "high": closes,
+                    "low": closes,
+                    "close": closes,
+                    "volume": [1_000] * 100,
+                    "source": "SYNTHETIC-TEST-FIXTURE",
+                    "retrieved_at": RETRIEVED,
+                    "validation_status": "valid",
+                }
+            )
+        )
+    app = create_app(store=store)
+    with TestClient(app) as c:
+        yield c
+    store.close()
+
+
+def test_walk_forward_reports_the_historical_spread(wf_client):
+    d = wf_client.post("/api/walk-forward", json={"frequency": "M"}).json()
+    assert d["summary"]["periods_used"] == 2
+    # Hand-derived: long {S5,S4} mean 0.075, short {S1,S0} mean -0.075.
+    assert d["periods"][0]["long_symbols"] == ["S5", "S4"]
+    assert d["periods"][0]["spread"] == pytest.approx(0.15, abs=1e-9)
+    assert d["summary"]["mean_spread"] == pytest.approx(0.095, abs=1e-9)
+
+
+def test_walk_forward_always_carries_its_caveats(wf_client):
+    d = wf_client.post("/api/walk-forward", json={}).json()
+    assert any("SURVIVORSHIP BIAS" in c for c in d["caveats"])
+    assert any("NO TRANSACTION COSTS" in c for c in d["caveats"])
+    assert "disclaimer" in d
+    assert "not" in d["disclaimer"].lower()
+
+
+def test_walk_forward_rejects_a_bad_frequency(wf_client):
+    r = wf_client.post("/api/walk-forward", json={"frequency": "D"})
+    assert r.status_code == 400
+
+
+def test_walk_forward_rejects_a_tail_larger_than_half(wf_client):
+    # 0.7 exceeds the le=0.5 schema bound, so Pydantic rejects it (422) before
+    # the handler runs. Either way it must not be accepted.
+    r = wf_client.post("/api/walk-forward", json={"top_quantile": 0.7})
+    assert r.status_code in (400, 422)
+
+
+def test_walk_forward_404s_on_an_empty_store(tmp_path, monkeypatch):
+    store = MarketStore(tmp_path / "empty.duckdb")
+    app = create_app(store=store)
+    with TestClient(app) as c:
+        r = c.post("/api/walk-forward", json={})
+    store.close()
+    assert r.status_code == 404
+
+
 # --------------------------------------------------------------- fundamentals
 
 
