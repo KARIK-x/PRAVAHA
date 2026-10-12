@@ -20,8 +20,8 @@ Statuses reflect what was actually executed and observed, not what was hoped for
 | Type | Third-party GitHub repository (community-maintained) |
 | URL | https://github.com/Aabishkar2/nepse-data |
 | Symbols available | 372 |
-| Symbols imported | 60 |
-| Rows stored | 89,580 daily OHLCV bars |
+| Symbols imported | **372 (all)** — full fetch 2026-10-12 |
+| Rows stored | **514,018** daily OHLCV bars |
 | Coverage | 1995-07-20 → 2026-10-09 |
 | Licence | **No LICENSE file published.** Treated as personal local use only, with per-row attribution. `data/` is git-ignored so nothing is redistributed. |
 | Update frequency | Unknown; `retrieved_at` is stored per row |
