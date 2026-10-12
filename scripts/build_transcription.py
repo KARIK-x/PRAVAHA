@@ -231,11 +231,12 @@ def write_csvs(manifest: list[dict[str, Any]]) -> dict[str, int]:
     # CSV is a deliverable other tools read, so structured values are written
     # as JSON rather than Python repr — ``{'buy': True}`` is not parseable
     # outside Python, and ``None`` means "not read" so it becomes an empty
-    # cell rather than the text "None".
+    # cell rather than the text "None". Booleans go through the same path so
+    # ``net_matches_written_totals`` is ``true``, not ``True``.
     def _csv_value(v: Any) -> Any:
         if v is None:
             return ""
-        if isinstance(v, (list, dict)):
+        if isinstance(v, (list, dict, bool)):
             return json.dumps(v, ensure_ascii=False)
         return v
 
