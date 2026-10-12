@@ -385,6 +385,119 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--log-level", default="warning")
     v.set_defaults(func=_cmd_serve)
 
+    # ------------------------------------------------------------- written pdf
+    def _cmd_pdf_import(args: argparse.Namespace) -> int:
+        import json
+        from datetime import date
+
+        from megatool.written_pdf import (
+            ExtractedRecord,
+            ExtractionConfidence,
+            RecordType,
+            ReviewStatus,
+            import_records,
+        )
+
+        path = Path(args.file)
+        if not path.exists():
+            print(f"error: no such file: {path}", file=sys.stderr)
+            return 1
+        data = json.loads(path.read_text(encoding="utf-8"))
+        records = []
+        for d in data:
+            records.append(
+                ExtractedRecord(
+                    record_type=RecordType(d["record_type"]),
+                    page=d["page"],
+                    source_ref=d.get("source_ref", ""),
+                    raw_text=d.get("raw_text", ""),
+                    value=d.get("value"),
+                    field_name=d.get("field_name", ""),
+                    symbol=d.get("symbol"),
+                    record_date=date.fromisoformat(d["record_date"])
+                    if d.get("record_date")
+                    else None,
+                    unit=d.get("unit"),
+                    confidence=ExtractionConfidence(d.get("confidence", "uncertain")),
+                    review_status=ReviewStatus(d.get("review_status", "unreviewed")),
+                    note=d.get("note", ""),
+                )
+            )
+        out = import_records(records, args.pdf)
+        print(f"PDF import from {args.pdf}")
+        _print_indented("records:", out["records_total"])
+        _print_indented("inserted:", out["records_inserted"])
+        _print_indented("updated:", out["records_updated"])
+        _print_indented("reviewed:", out["reviewed"])
+        _print_indented("unreviewed:", out["unreviewed"])
+        if out["unreviewed"]:
+            print("\nUnreviewed records are stored but NOT safe for financial use.")
+            print("Review them in the web UI or with: megatool pdf list --reviewed")
+        return 0
+
+    def _cmd_pdf_summary(args: argparse.Namespace) -> int:
+        from megatool.written_pdf import RecordType, ReviewStatus, query_records
+
+        rows = query_records(
+            symbol=args.symbol,
+            record_type=RecordType(args.type) if args.type else None,
+            page=args.page,
+            review_status=ReviewStatus.REVIEWED if args.reviewed else None,
+        )
+        if not rows:
+            print("No extracted records match.")
+            print("Import some with: megatool pdf import FILE.json")
+            return 0
+        # Count by type and review status
+        by_type: dict[str, int] = {}
+        by_review: dict[str, int] = {}
+        for r in rows:
+            by_type[r["record_type"]] = by_type.get(r["record_type"], 0) + 1
+            by_review[r["review_status"]] = by_review.get(r["review_status"], 0) + 1
+        scope = []
+        if args.symbol:
+            scope.append(f"symbol {args.symbol.upper()}")
+        if args.type:
+            scope.append(f"type {args.type}")
+        if args.page:
+            scope.append(f"page {args.page}")
+        if args.reviewed:
+            scope.append("reviewed only")
+        print(f"PDF extraction summary ({', '.join(scope) if scope else 'all records'})")
+        _print_indented("total records:", len(rows))
+        print("\nBy type:")
+        for k, v in sorted(by_type.items()):
+            print(f"  {k:<14} {v:>6}")
+        print("\nBy review status:")
+        for k, v in sorted(by_review.items()):
+            print(f"  {k:<14} {v:>6}")
+        return 0
+
+    def _cmd_pdf_list(args: argparse.Namespace) -> int:
+        from megatool.written_pdf import RecordType, query_records
+
+        rows = query_records(
+            symbol=args.symbol,
+            record_type=RecordType(args.type) if args.type else None,
+            page=args.page,
+        )
+        if not rows:
+            print("No extracted records match.")
+            return 0
+        rows = rows[: args.limit]
+        print(
+            f"{'PAGE':>4} {'TYPE':<12} {'SYMBOL':<10} {'FIELD':<14} {'VALUE':<12} {'CONF':<10} {'REVIEW':<10}"
+        )
+        for r in rows:
+            val = r.get("value")
+            val_str = str(val)[:12] if val is not None else ""
+            print(
+                f"{r['page']:>4} {r['record_type']:<12} {r.get('symbol', ''):<10} "
+                f"{r.get('field_name', ''):<14} {val_str:<12} "
+                f"{r.get('confidence', ''):<10} {r.get('review_status', ''):<10}"
+            )
+        return 0
+
     fl = sub.add_parser(
         "floor",
         help="import and analyse a NEPSE floor sheet (there is no floor-sheet "
@@ -404,6 +517,32 @@ def build_parser() -> argparse.ArgumentParser:
     fls.add_argument("--top", type=int, default=10, help="rows per table (default 10)")
     fls.add_argument("--sessions", action="store_true", help="list imported sessions instead")
     fls.set_defaults(func=_cmd_floor_summary)
+
+    # ------------------------------------------------------------- written pdf
+    wp = sub.add_parser(
+        "pdf",
+        help="import / inspect records extracted from Written Data.pdf",
+    )
+    wpsub = wp.add_subparsers(dest="pdf_command", required=True)
+
+    wpi = wpsub.add_parser("import", help="import extracted records from a JSON file")
+    wpi.add_argument("file", help="JSON file with extracted records")
+    wpi.add_argument("--pdf", default="WRITTENdata.pdf", help="source PDF (for provenance)")
+    wpi.set_defaults(func=_cmd_pdf_import)
+
+    wps = wpsub.add_parser("summary", help="show extracted record statistics")
+    wps.add_argument("--symbol", help="filter by symbol")
+    wps.add_argument("--type", help="filter by record type")
+    wps.add_argument("--page", type=int, help="filter by page")
+    wps.add_argument("--reviewed", action="store_true", help="only reviewed records")
+    wps.set_defaults(func=_cmd_pdf_summary)
+
+    wpl = wpsub.add_parser("list", help="list extracted records")
+    wpl.add_argument("--symbol", help="filter by symbol")
+    wpl.add_argument("--type", help="filter by record type")
+    wpl.add_argument("--page", type=int, help="filter by page")
+    wpl.add_argument("--limit", type=int, default=50, help="max rows (default 50)")
+    wpl.set_defaults(func=_cmd_pdf_list)
 
     return p
 
