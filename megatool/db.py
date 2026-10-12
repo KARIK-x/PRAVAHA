@@ -20,7 +20,7 @@ from typing import Any
 
 from megatool.config import PATHS, ensure_dirs
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -213,6 +213,29 @@ CREATE TABLE IF NOT EXISTS pdf_records (
 CREATE INDEX IF NOT EXISTS idx_pdf_records_symbol ON pdf_records (symbol);
 CREATE INDEX IF NOT EXISTS idx_pdf_records_page ON pdf_records (page);
 CREATE INDEX IF NOT EXISTS idx_pdf_records_review ON pdf_records (review_status);
+
+-- Fundamentals, each with its reporting period, unit and source.
+-- period_end stores '' when the vintage is unknown (SQLite treats NULLs as
+-- distinct in UNIQUE constraints, which would let unknown-period rows
+-- duplicate on re-import). Python maps '' back to None.
+CREATE TABLE IF NOT EXISTS fundamentals (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol        TEXT NOT NULL,
+    field         TEXT NOT NULL,
+    value         REAL NOT NULL,
+    unit          TEXT NOT NULL,
+    period_end    TEXT NOT NULL DEFAULT '',  -- ISO date, or '' = unknown vintage
+    period_label  TEXT NOT NULL DEFAULT '',  -- as reported, e.g. 'FY2081/82 Q3'
+    source        TEXT NOT NULL,             -- provenance, required
+    source_ref    TEXT NOT NULL DEFAULT '',  -- file / URL / page
+    retrieved_at  TEXT NOT NULL,
+    verification  TEXT NOT NULL DEFAULT 'extracted', -- extracted | reviewed | verified
+    notes         TEXT NOT NULL DEFAULT '',
+    UNIQUE (symbol, field, period_end, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fundamentals_symbol ON fundamentals (symbol);
+CREATE INDEX IF NOT EXISTS idx_fundamentals_field ON fundamentals (field);
 """
 
 

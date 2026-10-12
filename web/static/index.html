@@ -32,6 +32,7 @@
   <button data-view="portfolio">Portfolio</button>
   <button data-view="journal">Journal</button>
   <button data-view="pdf">PDF Journal</button>
+  <button data-view="fundamentals">Fundamentals</button>
   <span class="nav-spacer"></span>
   <span class="nav-note">Not financial advice · historical data only</span>
 </nav>
@@ -534,6 +535,46 @@
     <div class="card">
       <h2>Extracted records</h2>
       <div id="pdf-records" class="tablewrap"></div>
+    </div>
+  </section>
+
+  <!-- -------------------------------------------------------- FUNDAMENTALS -->
+  <section id="view-fundamentals" class="view">
+    <div class="card">
+      <h2>Fundamentals store</h2>
+      <div class="stat-row" id="fund-summary"></div>
+      <p class="hint" id="fund-note"></p>
+    </div>
+
+    <div class="card">
+      <h2>Look up a symbol</h2>
+      <div class="controls">
+        <label>Symbol
+          <input id="fund-symbol" list="symbol-list" placeholder="NABIL" />
+        </label>
+        <button id="fund-load">Load</button>
+      </div>
+      <div id="fund-records" class="tablewrap"></div>
+    </div>
+
+    <div class="card">
+      <h2>Import CSV</h2>
+      <p class="hint">
+        This tool never fetches fundamentals from the web. Paste or choose a CSV
+        with columns <code>symbol, field, value, source</code> and optionally
+        <code>period_end, period_label, unit, verification, notes</code>.
+        Required columns: <code>symbol</code>, <code>field</code>,
+        <code>value</code>, <code>source</code>.
+      </p>
+      <div class="controls">
+        <input type="file" id="fund-file" accept=".csv,text/csv" />
+        <button id="fund-dryrun" class="ghost">Validate only</button>
+        <button id="fund-import" class="primary">Import</button>
+      </div>
+      <textarea id="fund-csv" rows="8" spellcheck="false"
+        placeholder="symbol,field,value,period_end,source&#10;NABIL,eps,25.4,2026-03-31,my-file.csv"></textarea>
+      <div id="fund-result" class="hint"></div>
+      <div id="fund-error" class="error"></div>
     </div>
   </section>
 </main>

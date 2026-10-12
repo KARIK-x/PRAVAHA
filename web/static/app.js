@@ -108,6 +108,8 @@ function viewShown(name) {
   } else if (name === "floorsheet") {
     loadFsSessions();
     loadFloorSheet();
+  } else if (name === "fundamentals") {
+    loadFundSummary();
   }
 }
 
@@ -526,6 +528,94 @@ async function runRank() {
       $("#rank-hint").textContent =
         r.disclaimer + " " + r.notes.join(" ");
     }
+  } catch (e) {
+    errEl.textContent = e.message;
+  }
+}
+
+/* ----------------------------------------------------------- fundamentals */
+async function loadFundSummary() {
+  try {
+    const s = await api("/api/fundamentals/summary");
+    $("#fund-summary").innerHTML = [
+      ["Records", fmtInt(s.total)],
+      ["Symbols", fmtInt(s.symbols)],
+      ["No period stated", fmtInt(s.without_period)],
+      ["Verified", fmtInt((s.by_verification || {}).verified || 0)],
+      ["Extracted only", fmtInt((s.by_verification || {}).extracted || 0)],
+    ]
+      .map(
+        ([k, v]) =>
+          `<div class="stat"><div class="k">${k}</div><div class="v" style="font-size:15px">${esc(v)}</div></div>`
+      )
+      .join("");
+    $("#fund-note").textContent = s.note || "";
+  } catch (e) {
+    $("#fund-summary").innerHTML = `<span class="down">${esc(e.message)}</span>`;
+  }
+}
+
+async function loadFundSymbol() {
+  const sym = ($("#fund-symbol").value || "").trim().toUpperCase();
+  const out = $("#fund-records");
+  if (!sym) {
+    out.innerHTML = `<div class="error">Enter a symbol first.</div>`;
+    return;
+  }
+  try {
+    const d = await api(`/api/fundamentals/${encodeURIComponent(sym)}`);
+    if (!d.records.length) {
+      out.innerHTML = `<div class="error">No stored fundamentals for ${esc(sym)}. Import a CSV below.</div>`;
+      return;
+    }
+    const rows = d.records.map((r) => [
+      { html: `<code>${esc(r.field)}</code>` },
+      { html: `<b>${esc(String(r.value))}</b> ${esc(r.unit)}` },
+      {
+        html: r.period_known
+          ? esc(r.period_end)
+          : `<span class="pill pill-info">unknown period</span>`,
+      },
+      { html: esc(r.period_label || "—") },
+      { html: esc(r.source) },
+      {
+        html:
+          r.verification === "verified"
+            ? `<span class="pill pass">verified</span>`
+            : r.verification === "reviewed"
+              ? `<span class="pill pill-info">reviewed</span>`
+              : `<span class="pill pill-review">extracted</span>`,
+      },
+    ]);
+    out.innerHTML = table(
+      ["Field", "Value", "Period end", "Period label", "Source", "Verification"],
+      rows
+    );
+  } catch (e) {
+    out.innerHTML = `<div class="error">${esc(e.message)}</div>`;
+  }
+}
+
+async function importFundamentals(dryRun) {
+  const errEl = $("#fund-error");
+  const resEl = $("#fund-result");
+  errEl.textContent = "";
+  resEl.textContent = "";
+  const content = $("#fund-csv").value;
+  if (!content.trim()) {
+    errEl.textContent = "Paste or choose a CSV file first.";
+    return;
+  }
+  try {
+    const d = await api("/api/fundamentals/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content, dry_run: !!dryRun }),
+    });
+    resEl.textContent = d.dry_run
+      ? `Valid: ${d.accepted} rows across ${d.symbols} symbol(s) — nothing written.`
+      : `Imported ${d.written} record(s): ${d.inserted} new, ${d.updated} updated, across ${d.symbols} symbol(s).`;
+    if (!d.dry_run) loadFundSummary();
   } catch (e) {
     errEl.textContent = e.message;
   }
@@ -1622,6 +1712,18 @@ function boot() {
   $("#preset").addEventListener("change", () => updatePresetDesc());
   $("#run-rank").addEventListener("click", runRank);
   $("#rank-asof").addEventListener("keydown", (e) => { if (e.key === "Enter") runRank(); });
+  $("#fund-load").addEventListener("click", loadFundSymbol);
+  $("#fund-symbol").addEventListener("keydown", (e) => { if (e.key === "Enter") loadFundSymbol(); });
+  $("#fund-dryrun").addEventListener("click", () => importFundamentals(true));
+  $("#fund-import").addEventListener("click", () => importFundamentals(false));
+  $("#fund-file").addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => { $("#fund-csv").value = String(reader.result || ""); };
+    reader.onerror = () => { $("#fund-error").textContent = "Could not read that file."; };
+    reader.readAsText(file);
+  });
   $("#export-screen").addEventListener("click", () => {
     if (!currentScreenTree) return;
     const url = `/api/screen/export.csv?tree=${encodeURIComponent(JSON.stringify(currentScreenTree))}`;

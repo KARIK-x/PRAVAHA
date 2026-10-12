@@ -52,6 +52,22 @@ from megatool.forecast import (
     naive_drift_check,
     run_forecast,
 )
+from megatool.fundamentals import (
+    FundamentalError,
+    records_from_rows,
+)
+from megatool.fundamentals import (
+    fundamentals_summary as fundamentals_counts,
+)
+from megatool.fundamentals import (
+    import_records as fundamentals_import,
+)
+from megatool.fundamentals import (
+    query_symbol as fundamentals_query,
+)
+from megatool.fundamentals import (
+    read_csv as fundamentals_read_csv,
+)
 from megatool.journal import (
     JournalError,
     journal_stats,
@@ -147,6 +163,17 @@ class PydanticRankRequest(BaseModel):
     max_missing_fraction: float = Field(0.5, ge=0.0, le=1.0)
     weights: dict[str, float] | None = None
     top: int = Field(50, ge=1, le=1000)
+
+
+class PydanticFundamentalsImport(BaseModel):
+    """CSV payload for the Fundamentals Lab.
+
+    ``format='csv'`` means ``content`` is a full CSV document with a header
+    row. Nothing here reaches the network: the caller supplies the file.
+    """
+
+    content: str = Field(..., description="CSV text with a header row")
+    dry_run: bool = Field(False, description="Validate and report counts without writing anything")
 
 
 class PydanticBacktestRequest(BaseModel):
@@ -567,6 +594,58 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
             "not indicate expected profit."
         )
         return payload
+
+    # ----------------------------------------------------------- fundamentals
+    @app.get("/api/fundamentals/summary")
+    def fundamentals_summary_endpoint() -> dict[str, Any]:
+        with get_conn() as conn:
+            return fundamentals_counts(conn)
+
+    @app.get("/api/fundamentals/{symbol}")
+    def fundamentals_for_symbol(symbol: str) -> dict[str, Any]:
+        with get_conn() as conn:
+            rows = fundamentals_query(conn, symbol)
+        return {
+            "symbol": symbol.upper(),
+            "count": len(rows),
+            "records": rows,
+            "note": (
+                "Each row carries its reporting period, unit, source and "
+                "verification level. A value marked 'extracted' has not been "
+                "checked and must not be treated as a current figure."
+            ),
+        }
+
+    @app.post("/api/fundamentals/import")
+    def fundamentals_import_endpoint(req: PydanticFundamentalsImport) -> dict[str, Any]:
+        """Validate and store a CSV of fundamentals supplied by the caller."""
+        try:
+            rows = fundamentals_read_csv(req.content)
+            records = records_from_rows(rows)
+        except FundamentalError as exc:
+            raise HTTPException(400, f"rejected: {exc}") from exc
+
+        summary = {
+            "accepted": len(records),
+            "symbols": len({r.symbol for r in records}),
+            "fields": sorted({r.field for r in records}),
+            "without_period": sum(1 for r in records if r.period_end is None),
+            "by_verification": {
+                level: sum(1 for r in records if r.verification == level)
+                for level in ("extracted", "reviewed", "verified")
+            },
+            "dry_run": req.dry_run,
+        }
+        if req.dry_run:
+            summary["written"] = 0
+            return summary
+
+        with get_conn() as conn:
+            result = fundamentals_import(records, conn)
+        summary["written"] = result["total"]
+        summary["inserted"] = result["inserted"]
+        summary["updated"] = result["updated"]
+        return summary
 
     @app.get("/api/screen/export.csv")
     def screen_export(tree: str) -> str:

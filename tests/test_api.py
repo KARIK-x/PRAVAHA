@@ -288,6 +288,82 @@ def test_rank_weight_override_changes_score(client):
         assert abs(sum(entry["contributions"].values()) - entry["score"]) < 0.01
 
 
+# --------------------------------------------------------------- fundamentals
+
+
+FUND_CSV = (
+    "symbol,field,value,period_end,source,verification,period_label\n"
+    "NABIL,eps,25.4,2026-03-31,unit-test.csv,verified,FY2082/83 Q3\n"
+    "NABIL,net_worth_per_share,226.0,2026-03-31,unit-test.csv,verified,FY2082/83 Q3\n"
+    "NABIL,dps,12.5,,unit-test.csv,extracted,\n"
+)
+
+
+def test_fundamentals_summary_starts_clean(client):
+    d = client.get("/api/fundamentals/summary").json()
+    assert d["total"] == 0
+    assert "extracted" in d["verification_levels"]
+    assert "trustworthy" in d["note"]
+
+
+def test_fundamentals_import_and_query(client):
+    r = client.post("/api/fundamentals/import", json={"content": FUND_CSV})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["accepted"] == 3
+    assert d["symbols"] == 1
+    assert d["without_period"] == 1
+    assert d["by_verification"]["verified"] == 2
+
+    got = client.get("/api/fundamentals/NABIL").json()
+    assert got["count"] == 3
+    for row in got["records"]:
+        assert row["source"] == "unit-test.csv"
+        assert row["unit"]
+        assert row["verification"] in ("extracted", "reviewed", "verified")
+    # Period-less rows are flagged rather than presented as current.
+    assert any(not r2["period_known"] for r2 in got["records"])
+    assert "must not be treated as a current figure" in got["note"]
+
+
+def test_fundamentals_reimport_is_idempotent(client):
+    client.post("/api/fundamentals/import", json={"content": FUND_CSV})
+    client.post("/api/fundamentals/import", json={"content": FUND_CSV})
+    assert client.get("/api/fundamentals/NABIL").json()["count"] == 3
+
+
+def test_fundamentals_rejects_malformed_csv(client):
+    r = client.post(
+        "/api/fundamentals/import",
+        json={"content": "symbol,field\nNABIL,eps\n"},
+    )
+    assert r.status_code == 400
+    assert "rejected" in r.json()["detail"]
+
+
+def test_fundamentals_rejects_unknown_field_without_unit(client):
+    r = client.post(
+        "/api/fundamentals/import",
+        json={"content": "symbol,field,value,source\nNABIL,mystery,1,s.csv\n"},
+    )
+    assert r.status_code == 400
+    assert "explicit unit" in r.json()["detail"]
+
+
+def test_fundamentals_dry_run_writes_nothing(client):
+    r = client.post("/api/fundamentals/import", json={"content": FUND_CSV, "dry_run": True})
+    assert r.status_code == 200
+    assert r.json()["dry_run"] is True
+    assert r.json()["written"] == 0
+    assert client.get("/api/fundamentals/NABIL").json()["count"] == 0
+
+
+def test_fundamentals_unknown_symbol_returns_empty(client):
+    d = client.get("/api/fundamentals/NOSUCH").json()
+    assert d["count"] == 0
+    assert d["records"] == []
+
+
 def test_quality_endpoint_reports_flags(client):
     d = client.get("/api/quality", params={"symbol": "TEST1"}).json()
     assert d["symbols_checked"] == 1
