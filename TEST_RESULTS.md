@@ -1,6 +1,6 @@
 # Test results
 
-**Last run:** 2026-10-12 · **707 passed, 0 failed, 0 skipped** · 67.84 s · exit 0
+**Last run:** 2026-10-12 · **709 passed, 0 failed, 0 skipped** · 44.93 s · exit 0
 **Lint:** `ruff check` clean · `ruff format --check` clean (53 files)
 **Front end:** `node --check web/static/app.js` clean
 
@@ -26,7 +26,7 @@ node --check web/static/app.js
 | `test_indicators.py` | 132 |
 | `test_api.py` | 90 |
 | `test_fundamentals.py` | 56 |
-| `test_written_transcribe.py` | 55 **(new)** |
+| `test_written_transcribe.py` | 57 **(new)** |
 | `test_audit_a_fixes.py` | 45 |
 | `test_written_pdf.py` | 39 |
 | `test_financial_integrity.py` | 35 |
@@ -40,15 +40,15 @@ node --check web/static/app.js
 | `test_scanner.py` | 21 |
 | `test_planning.py` | 21 |
 | `test_cli_floor.py` | 9 |
-| **Total (17 files)** | **707** |
+| **Total (17 files)** | **709** |
 
-Progression: 511 (13 files) → 602 → 650 → **707** (17 files).
+Progression: 511 (13 files) → 602 → 650 → 707 → **709** (17 files).
 
 ---
 
 ## What the new tests cover
 
-### `test_written_transcribe.py` (55, new) — handwriting reader
+### `test_written_transcribe.py` (57, new) — handwriting reader
 
 Four of these assert against text quoted **verbatim** from the Apple Vision
 output of real pages, so they pin the reader's behaviour on the page's own words
@@ -65,7 +65,10 @@ only that it is read, refused, or kept as the page and the rules say.
 | Provenance | `label_raw` keeps the verbatim reading even when wrong; `unplaced` keeps figures whose column marker OCR could not read |
 | Page 21, by eye | all four blocks read, `65550.337` refused, `Paid` note used instead, day numbers excluded, block reconciles |
 | Pages 19 & 23, by eye | 8C's 1.00 sell shortfall and 8.03 receipt gap recorded as source facts, 8E's superseded readings kept, 9E/9F close exactly |
-| Uniform record shape | all 9 visually read settlements share one key set (page 21's `net` column was briefly empty when two shapes collided) |
+| Page 30, by eye | 12D/12E/12F read; un-resolvable red Received/Paid clouds become `None`, never a plausible number; 12D's 0.01 buy gap recorded not closed; 12F's sell components left **empty** rather than filled with a figure that would balance |
+| Page 28, by eye | 12A/12B close exactly; **12C does not** — `77793.55 − 68832.46 = 8961.09` vs a written `8963.09`. All three figures stored unchanged, gap reported, no cause assigned, `settled` withheld |
+| Inspection ≠ transcription | page 20 is in `VISUALLY_INSPECTED_PAGES` but in no read page — a page that was opened but yielded no record must not be counted as transcribed |
+| Uniform record shape | all **15** visually read settlements share one key set (page 21's `net` column was briefly empty when two shapes collided) |
 
 ### `test_financial_integrity.py` (35) — Phase 2 of the completion audit
 

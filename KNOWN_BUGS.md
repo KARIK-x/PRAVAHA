@@ -301,6 +301,17 @@ An edge column of boxed figures (27, 28, 29, 15, 11.5, 16) sits beside the four
 blocks and is **not transcribed**. This is why `page_fully_transcribed` is false
 for page 21 despite all four settlements being read and verified.
 
+### S-06 — Page 28, 12C: read three ways and still 2.00 apart
+
+As read, `77,793.55 − 68,832.46 = 8,961.09` against a written net of
+**8,963.09**. Arithmetic proves one of the three readings is wrong — a 3/5 swap
+in the buy or a 1/3 in the net produces exactly this — but cannot say which.
+All three figures are therefore stored exactly as written, the gap sits in
+`source_discrepancies`, `net_matches_written_totals` is `False`, and **no cause
+is assigned**: this is an unresolved reading, not a proven mistake in the
+notebook. The red Paid cloud is left `None` because it cannot be trusted while
+the block is in doubt. Needs a re-read at higher magnification.
+
 ---
 
 ## Limitations (inherent, not defects)

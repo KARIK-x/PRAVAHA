@@ -25,7 +25,7 @@ uv run megatool serve        # start the web terminal at http://127.0.0.1:8710
 Run the test suite:
 
 ```bash
-uv run pytest                # 707 tests, ~68s
+uv run pytest                # 709 tests, ~45s
 ```
 
 Stop the server with `Ctrl-C`.

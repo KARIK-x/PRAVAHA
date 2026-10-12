@@ -15,7 +15,7 @@ uv sync                     # dependencies into ./.venv (Python 3.12.3)
 uv run megatool init        # create/upgrade the local databases
 uv run megatool fetch       # download real NEPSE history (network)
 uv run megatool serve       # web terminal at http://127.0.0.1:8710
-uv run pytest               # 707 tests, ~68 s
+uv run pytest               # 709 tests, ~45 s
 ```
 
 The server binds `127.0.0.1` only. Nothing listens on the network interface.
@@ -29,7 +29,7 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | Analysis | `scanner.py`, `backtest.py`, `forecast.py`, `research.py`, `floorsheet.py` |
 | Personal state | `portfolio.py` (ledger-derived), `journal.py`, `planning.py` |
 | Interface | `api.py` (FastAPI, 45 routes), `cli.py` (incl. `megatool floor import|summary`), `web/static/` (11 tabs) |
-| Tests | `tests/` — 707 tests across 17 files |
+| Tests | `tests/` — 709 tests across 17 files |
 | Docs | `docs/ARCHITECTURE.md`, `DATA_SOURCES.md`, `TECH_STACK_DECISIONS.md`, `RESEARCH_REGISTER.md`, `PROJECT_STATUS.md`, `TESTING.md`, `SOURCES.md`, `DECISIONS.md`, `KNOWN_BUGS.md`, `TEST_RESULTS.md`, `TASK_QUEUE.md`, this file |
 
 ### Data actually in the store
@@ -70,8 +70,10 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
     concentration, sessions and imports.
   - Research assistant — includes *reviewed* PDF records as cited findings.
   - 24 tests in `tests/test_written_pdf.py`.
-- 64 sample records imported as **unreviewed**; nothing enters the portfolio or
-  journal without explicit validated entry.
+- The **real store holds 0** `pdf_records` — nothing was imported. The
+  64-record `extracted_sample.json` is a git-ignored preliminary artifact of
+  the superseded Tesseract pass and is not a data source; nothing enters the
+  portfolio or journal without explicit validated entry.
 - Docs: `docs/WRITTEN_DATA_PDF_AUDIT.md` (page inventory),
   `WRITTEN_DATA_DICTIONARY.md`, `WRITTEN_DATA_VALIDATION_REPORT.md`,
   `WRITTEN_DATA_IMPORT_GUIDE.md`.
@@ -279,18 +281,22 @@ problem.
 13. **The third-party dataset licence is unresolved.**
 14. **PDF transcription is the open work** — the extraction infrastructure is
     complete and tested (render → transcribe → validate → import → review), and
-    Apple Vision now reads all 52 pages as a first pass. What remains is human
-    verification: 46 of 52 pages have never been transcribed and every one of the
-    64 sample records is still `unreviewed`. Only page 21's four settlements are
-    visually verified.
-    transcribed visually. 64 sample records are imported as unreviewed. See
-    `docs/WRITTEN_DATA_PDF_AUDIT.md`. The benchmark now gives a practical route:
-    Apple Vision as a first pass, arithmetic checks to flag disagreements, human
-    review of only the flagged rows.
+    Apple Vision now reads all 52 pages as a first pass (**94.6% numeric**,
+    versus Tesseract's 4.3%). Human verification is what remains: **6 of 52**
+    pages have been opened by eye (19, 20, 21, 23, 28, 30), **5 of 52** have a
+    settlement transcribed from them, **15 settlements** are `verified`, and
+    **0 of 52 pages are fully transcribed**. Page 20 was inspected and yielded
+    no record; its sample records were never imported — the real store holds
+    **0** `pdf_records`. Two read blocks disagree with themselves (pages 19 and
+    28) and are recorded as written rather than repaired. See
+    `docs/WRITTEN_DATA_VALIDATION_REPORT.md` and the S-01…S-06 findings in
+    `KNOWN_BUGS.md`. The benchmark gives the practical route: Apple Vision as a
+    first pass, arithmetic checks to flag disagreements, human reading of the
+    page itself before anything is called verified.
 
 ## 7. Verification evidence
 
-- `uv run pytest` — **707 passed, 0 failed** (2026-10-12), 17 test files.
+- `uv run pytest` — **709 passed, 0 failed** (2026-10-12), 17 test files.
 - `ruff check` and `ruff format` — clean.
 - All **ten** web tabs exercised in a real browser (Playwright) with **0 console errors**;
   the refusal path, the oversell rejection, the empty-journal "—" and the PDF tab's

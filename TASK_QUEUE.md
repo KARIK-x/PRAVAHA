@@ -11,17 +11,17 @@ fact or a human decision), **NEXT**, **BACKLOG**.
 
 | ID | Task | Evidence |
 |---|---|---|
-| T-A1 | Reconcile state: code, DB, tests, git | Clean tree before changes; 602 → **650** tests then → **707** (17 files), exit 0; real store row counts (journal/portfolio/pdf/fundamentals) all **0** after runs; PDF untouched (SHA `d7ea6fe4…`, mtime 08:33). |
+| T-A1 | Reconcile state: code, DB, tests, git | Clean tree before changes; 602 → **650** tests then → **709** (17 files), exit 0; real store row counts (journal/portfolio/pdf/fundamentals) all **0** after runs; PDF untouched (SHA `d7ea6fe4…`, mtime 08:33). |
 | T-A2 | Verify the ranking claims independently | 372 → **369 ranked + 3 excluded** (CFL 41, CMB 14, SLBBLP 50 bars, all < `min_bars=60`); accounting balances; weights sum to 1.0; dense ranks; scores descending; 0 unavailable factors in contributions or effective weight. |
 | T-A3 | Investigate median-substitution bias | **Confirmed not neutral.** 8 gap symbols; removing them changes 361/361 scores and **284/361 ranks**, max 0.61 pts. Recorded as **L-05**, behaviour pinned by test, not silently "fixed". |
 | T-A4 | Audit Fundamentals Lab guards | Real store honestly reports **0**. Three defects found and fixed: **B-13** lakh parser, **B-14** field/unit validation, **B-15** opt-in staleness guard. |
-| T-A5 | PDF manifest for all 52 pages | **Done, regenerated honestly.** Manifest covers all 52 pages: 51 with machine text, **4 opened by eye** (19/20/21/23), **3 with a settlement read by eye**, **9 settlements verified**, **0/52 pages fully transcribed**, 52/52 still needing review, **0 records in the real store**. The earlier "46 of 52 never transcribed / 64 records" figure was the superseded Tesseract pass. Full manifest in `docs/WRITTEN_DATA_VALIDATION_REPORT.md`. |
+| T-A5 | PDF manifest for all 52 pages | **Done, regenerated honestly.** Manifest covers all 52 pages: 51 with machine text, **6 opened by eye** (19/20/21/23/28/30), **5 with a settlement read by eye**, **15 settlements verified** (of 19 candidate blocks the parser found), **0/52 pages fully transcribed**, 52/52 still needing review, **0 records in the real store**. The earlier "46 of 52 never transcribed / 64 records" figure was the superseded Tesseract pass. Full manifest in `docs/WRITTEN_DATA_VALIDATION_REPORT.md`. |
 | T-A6 | Correct settlement 9A | **REVERSED.** The task said `177,609.76` → `186,129.76`, but `186,129.76` was invented to make an equation balance. Re-reading page 21 by eye showed the page says **Buy 77,609.76 / Sell 12,059.43 / Net 65,550.33**, which balance exactly. The 8,520 NPR discrepancy this task was written for **never existed**. `186,129.76` is withdrawn everywhere and guarded by a test. See B-02 (reversed). |
 | T-A7 | Classify data sources | Distinguished **verified usable** (GitHub dataset — proven by 514,018 ingested rows) from **merely reachable** (ShareSansar, nrb.org.np) and **blocked** (official NEPSE 401, nepsealpha 403). |
 | T-A8 | Inspect Ollama, no changes made | See T-10 below. Nothing upgraded, nothing pulled (412 refused before download; model list unchanged at 2). |
 | T-A9 | Phase 2 financial-correctness tests | New `tests/test_financial_integrity.py` (**33 tests**, all hand-computed fixtures) + **15** added to fundamentals/written_pdf. |
 
-**Test count: 602 → 650, later 650 → 707 (17 files).** Defects: **B-13, B-14,
+**Test count: 602 → 650, later 650 → 709 (17 files).** Defects: **B-13, B-14,
 B-15 fixed**; B-16..B-18 opened; L-05, L-06 documented. **B-01 and B-02 were
 reversed by visual reads of pages 19/21/23** — the "bugs" were in the earlier
 audit's readings, not the notebook.
@@ -42,12 +42,14 @@ how to validate it, and what needs an owner decision.
   handwriting and **no page is fully transcribed**.
 * **Progress (2026-10-12):** all 52 pages OCR'd with Apple Vision +
   orientation detection (**94.6% numeric**, was 4.3% on Tesseract). Pages
-  **19, 20, 21, 23** opened by eye; settlements on **19, 21, 23** transcribed
-  and visually verified — **9 records**. Page 20 inspected, nothing transcribed
+  **19, 20, 21, 23, 28, 30** opened by eye; settlements on **19, 21, 23, 28,
+  30** transcribed and visually verified — **15 records** out of the 19
+  candidate blocks the parser found. Page 20 inspected, nothing transcribed
   from it, but its circled labels independently corroborate page 19's block
-  grouping. **0 of 52 pages fully transcribed.**
-* **Remaining:** pages 20/22/24–33 (the other settlement and transaction
-  pages), then the fundamentals pages 1–18 and 34–52.
+  grouping. One read block (page 28, 12C) does not reconcile and is recorded
+  as-is. **0 of 52 pages fully transcribed.**
+* **Remaining:** pages 22/24/26/27/29/31/32/33 (the other settlement and
+  transaction pages), then the fundamentals pages 1–18 and 34–52.
 * **Technical dependency:** `scripts/run_vision_ocr.py` +
   `scripts/vision_ocr_batch.swift`, `megatool/written_transcribe.py`
   (`extract_settlements`, `parse_money`), `scripts/build_transcription.py`.

@@ -177,9 +177,9 @@ disk at build time — not transcribed by hand into this document.
 | Pages Apple Vision OCR **attempted** on | 52 | `data/written_pdf/raw_ocr/` |
 | …succeeded | **52** | 0 failed; resumable and idempotent |
 | Pages with machine text | **51 of 52** | page 10 came back 60 chars of gibberish |
-| Pages **opened and inspected by eye** | **4 of 52** | pages 19, 20, 21, 23 |
-| Pages with a **settlement read by eye** | **3 of 52** | pages 19, 21, 23 |
-| Settlement records **read by eye** | **9** | the only `verified` figures in the corpus |
+| Pages **opened and inspected by eye** | **6 of 52** | pages 19, 20, 21, 23, 28, 30 |
+| Pages with a **settlement read by eye** | **5 of 52** | pages 19, 21, 23, 28, 30 |
+| Settlement records **read by eye** | **15** | the only `verified` figures in the corpus; the parser found 19 candidate blocks, 15 have been read |
 | Pages **fully transcribed** | **0 of 52** | every page carries untranscribed content |
 | Pages still needing review | **52 of 52** | — |
 | Settlement blocks detected (candidate) | 19 | parser output, never a data source |

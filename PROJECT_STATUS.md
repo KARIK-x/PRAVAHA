@@ -11,7 +11,7 @@ marked working because the code exists. The labels mean:
 | `NOT-IMPLEMENTED` | Deliberately not built. The reason is stated |
 | `NOT-TESTED` | Code exists but has not been executed/observed |
 
-Test suite: **707 passed, 0 failed** (17 files, `uv run pytest`, 2026-10-12).
+Test suite: **709 passed, 0 failed** (17 files, `uv run pytest`, 2026-10-12).
 `ruff check` and `ruff format` clean. Live server verified in a real browser
 via Playwright.
 
@@ -36,7 +36,7 @@ via Playwright.
 | 13 | **Trading Journal** | `TESTED-PASS` | CRUD, win rate, R multiples, plan adherence, per-strategy breakdown; trades without a complete plan are counted in win rate but excluded from R stats **and both are reported**. 30 unit + 5 API tests |
 | 14 | **Floor-sheet Intelligence** | `PARTIAL` | Import, validation and analysis are **implemented and tested** (25 unit + 5 API + 9 CLI tests). Reachable three ways: `megatool floor import FILE --date YYYY-MM-DD` / `megatool floor summary`, `POST /api/floorsheet/import`, and the **Floor Sheet web tab** (paste-and-import, session/symbol/Top-N filters, all seven panels). Verified end-to-end against an **isolated** database (second server instance and a throwaway `MEGATOOL_DATA_DIR`) with a synthetic 5-row sheet — totals, HHI and the symbol filter each recomputed by hand — so the owner's store stayed clean. It has **never been run on a real floor sheet** — only on synthetic CSVs |
 | 15 | **Bounded Research Agent** | `NOT-IMPLEMENTED` | The web-search tool failed on every attempt this session (register B1–B3). No autonomous agent loop was built; the deterministic Research Assistant (#8) is what exists instead |
-| 16 | **PDF records (Written Data.pdf)** | `PARTIAL` | Extraction infrastructure is complete and tested: `megatool/written_pdf.py` (rendering, `ExtractedRecord` provenance, validation, idempotent import, **review workflow**), schema v3 (`pdf_imports`/`pdf_records`), CLI (`megatool pdf import\|summary\|list`), API (`/api/written-pdf/*` incl. `POST /review`), a **PDF Journal tab** with per-row review/reject buttons, and 28 tests. Automated OCR **failed on 42 of 52 pages** (tesseract vs handwriting), so records are transcribed visually; all 52 pages inspected and inventoried (`docs/WRITTEN_DATA_PDF_AUDIT.md`). 64 sample records imported as **unreviewed**. It has **never been run on a fully transcribed sheet**, and no record has entered the portfolio or journal |
+| 16 | **PDF records (Written Data.pdf)** | `PARTIAL` | Extraction infrastructure is complete and tested: `megatool/written_pdf.py` (rendering, `ExtractedRecord` provenance, validation, idempotent import, **review workflow**), schema v5 (`pdf_imports`/`pdf_records` + provenance columns), CLI (`megatool pdf import\|summary\|list`), API (`/api/written-pdf/*` incl. `POST /review`), a **PDF Journal tab** with per-row review/reject buttons, and 39 + 57 tests. All 52 pages are rendered and OCR'd by **Apple Vision with orientation detection (94.6% numeric)**; the earlier Tesseract pass failed on 42 of 52 and is superseded. **6 of 52 pages opened by eye, 5 with a settlement transcribed, 15 settlements `verified`, 0/52 fully transcribed.** The real store holds **0** records — nothing imported. It has **never been run on a fully transcribed sheet**, and no record has entered the portfolio or journal |
 
 ## 2. Web UI
 
@@ -141,7 +141,7 @@ Evidence, not assertions. Everything below was executed and observed.
 
 | What | How | Result |
 | --- | --- | --- |
-| Full test suite | `uv run pytest` | **707 passed, 0 failed**, ~68 s (was 650) |
+| Full test suite | `uv run pytest` | **709 passed, 0 failed**, ~45 s (was 650) |
 | Lint / format | `ruff check megatool/ tests/ scripts/`, `ruff format --check` | clean (53 files) |
 | Front end | `node --check web/static/app.js` | clean |
 | Real data in the store | `GET /api/status` on the running server | **514,018 bars, 372 symbols**, 1995-07-20 → 2026-10-09 (was 89,580 / 60 before the 2026-10-12 fetch) |
