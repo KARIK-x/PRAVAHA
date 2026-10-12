@@ -394,11 +394,121 @@ VISUALLY_READ_PAGE_30: list[dict[str, Any]] = [
     },
 ]
 
+#: Page 28, read directly off ``raw_pages/page_28.png`` on 2026-10-12.
+#:
+#: Three blocks — 12A, 12B, 12C. The parser found all three with 16 unplaced
+#: figures and no human reading behind any of it. 12A and 12B close exactly
+#: on both the component sums and the nets. 12C does not, and says so rather
+#: than having a figure nudged: as read, ``77793.55 - 68832.46 = 8961.09``
+#: against a written net of ``8963.09``. The 2.00 could equally be a misread
+#: of any of the three numbers, so the record reports the disagreement and
+#: does not decide where the error is.
+VISUALLY_READ_PAGE_28: list[dict[str, Any]] = [
+    {
+        "label": "12A",
+        "page": 28,
+        "dates": "1/2 Dec buy, 1 Dec sell",
+        "buy_components": [62_894.88, 25_319.50],
+        "buy_total": 88_214.38,
+        "buy_total_is_written": True,
+        "sell_components": [73_229.79],
+        "sell_total": 73_229.79,
+        "net": 14_984.59,
+        "direction": "payable",
+        "settled": 14_984.59,
+        "settled_label": "Paid",
+        "settled_on": "4th Dec",
+        "components_ok": {"buy": True, "sell": True},
+        "net_matches_written_totals": True,
+        "source_discrepancies": [],
+        "superseded_readings": [],
+        "ocr_notes": [
+            "The red Paid figure carries a diagonal stroke that is either an "
+            "underline or a strike-through; this scan does not resolve which. "
+            "It equals the boxed net exactly, so it is recorded as read — "
+            "re-check the cloud before treating the payment as confirmed.",
+        ],
+        "verification_status": VerificationStatus.VERIFIED.value,
+        "evidence": (
+            "visual read of raw_pages/page_28.png on 2026-10-12; 62894.88 + "
+            "25319.50 = 88214.38 and 88214.38 - 73229.79 = 14984.59 exactly, "
+            "matching the boxed Net Payable and the red Paid note"
+        ),
+    },
+    {
+        "label": "12B",
+        "page": 28,
+        "dates": "8/9/11 Dec buy, 8/9 Dec sell",
+        "buy_components": [76_942.18, 64_927.48, 85_900.74],
+        "buy_total": 227_770.40,
+        "buy_total_is_written": True,
+        "sell_components": [125_733.03, 80_940.24],
+        "sell_total": 206_673.27,
+        "net": 21_097.13,
+        "direction": "payable",
+        "settled": 21_097.13,
+        "settled_label": "Paid",
+        "settled_on": "13 Dec",
+        "components_ok": {"buy": True, "sell": True},
+        "net_matches_written_totals": True,
+        "source_discrepancies": [],
+        "superseded_readings": [],
+        "ocr_notes": [],
+        "verification_status": VerificationStatus.VERIFIED.value,
+        "evidence": (
+            "visual read of raw_pages/page_28.png on 2026-10-12; buy components "
+            "sum to 227770.40 and sell components to 206673.27 exactly, "
+            "227770.40 - 206673.27 = 21097.13 exactly, matching the boxed Net "
+            "Payable and the red Paid note"
+        ),
+    },
+    {
+        "label": "12C",
+        "page": 28,
+        "dates": "12 Dec buy, 12 Dec sell",
+        "buy_components": [77_793.55],
+        "buy_total": 77_793.55,
+        "buy_total_is_written": True,
+        "sell_components": [68_832.46],
+        "sell_total": 68_832.46,
+        "net": 8_963.09,
+        "direction": "payable",
+        "settled": None,
+        "settled_label": "Paid",
+        "settled_on": None,
+        "components_ok": {"buy": True, "sell": True},
+        "net_matches_written_totals": False,
+        "source_discrepancies": [
+            "buy 77793.55 - sell 68832.46 = 8961.09 but the written net is 8963.09 (2.00)",
+        ],
+        "superseded_readings": [],
+        "ocr_notes": [
+            "As read, the three figures on this block disagree by 2.00. A 3/5 "
+            "swap in the buy or a 1/3 swap in the net would produce exactly "
+            "this, so at least one of the three readings is wrong. The image "
+            "does not say which, so nothing was adjusted and no cause is "
+            "assigned: this is recorded as an unresolved reading, not as a "
+            "proven mistake in the notebook. Re-read all three before use.",
+            "The red Paid cloud could not be tied to a figure once the above "
+            "was in doubt, so settled and settled_on are None rather than "
+            "guessed.",
+        ],
+        "verification_status": VerificationStatus.VERIFIED.value,
+        "evidence": (
+            "visual read of raw_pages/page_28.png on 2026-10-12; the block was "
+            "read but does NOT reconcile — 77793.55 - 68832.46 = 8961.09 "
+            "against a written net of 8963.09. No figure was changed. The "
+            "Paid annotation was NOT read — settled is None"
+        ),
+    },
+]
+
 #: Every settlement read off a page image so far, across pages.
 ALL_VISUALLY_READ: list[dict[str, Any]] = [
     *VERIFIED_SETTLEMENT_DETAILS,
     *VISUALLY_READ_PAGE_19,
     *VISUALLY_READ_PAGE_23,
+    *VISUALLY_READ_PAGE_28,
     *VISUALLY_READ_PAGE_30,
 ]
 
@@ -418,7 +528,7 @@ VISUALLY_READ_PAGES: frozenset[int] = frozenset(d["page"] for d in ALL_VISUALLY_
 #:
 #: Inspecting a page is not transcribing it. It stays out of
 #: :data:`VISUALLY_READ_PAGES` because no record came off it.
-VISUALLY_INSPECTED_PAGES: frozenset[int] = frozenset({19, 20, 21, 23, 30})
+VISUALLY_INSPECTED_PAGES: frozenset[int] = frozenset({19, 20, 21, 23, 28, 30})
 
 # Separators OCR commonly substitutes for a decimal point in this document:
 # the notebook is handwritten, and Vision returns •, ·, - and , as readily as .
