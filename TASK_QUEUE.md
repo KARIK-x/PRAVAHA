@@ -5,68 +5,154 @@ fact or a human decision), **NEXT**, **BACKLOG**.
 
 ---
 
-## Completed this session (2026-10-12)
+## Completed
+
+### Evidence-based completion audit (2026-10-12, this session)
 
 | ID | Task | Evidence |
 |---|---|---|
-| T-01 | Verify the report's claim that "64 PDF records" were OCR output | **Refuted.** 64 = rows in git-ignored `data/written_pdf/extracted_sample.json`, a *visual transcription* sample. The real store has **0** PDF records. `raw_ocr/` holds 52 files, 24 non-empty, all gibberish. |
-| T-02 | Benchmark handwriting extraction on 5 pages | **Done.** Apple Vision 90.2% numeric vs Tesseract 4.3%. Report's "Apple Vision cannot read handwriting — Confirmed" is **refuted for this document**. |
-| T-03 | Diagnose the web-search failure | **Diagnosed.** 3/3 attempts → `unknown: "Web search cancelled"`. Not an auth error, not "tool not found". Environment limitation. |
-| T-04 | Investigate the HTTP 401 | **Confirmed** as 401 with body `WARNING: UNAUTHORIZED ACCESS`. The report's `setTLSVerification(False)` fix rejected — measured `ssl_verify_result 0`, no certificate error. |
-| T-05 | Test recommended data sources | ShareSansar 200, nepsedata.com 200, ShareSansar Scraper 200, nrb.org.np 200, nepsealpha 403. Bulk workbook `Data/combined_excel.xlsx` verified: HTTP 200, ~41 MB, last-modified 2026-10-11. |
-| T-06 | Multi-factor ranking (report §8) | **DONE.** `megatool/ranking.py` + `POST /api/rank` + UI panel. 27 unit + 10 API tests. |
-| T-07 | Fundamentals Lab (report §7) | **DONE (mechanism).** `megatool/fundamentals.py`, schema v4, 3 endpoints, 11th tab. 44 unit + 7 API tests. |
-| T-08 | Fix settlement sign defect | **DONE.** See `KNOWN_BUGS.md` B-01. |
+| T-A1 | Reconcile state: code, DB, tests, git | Clean tree before changes; 602 → **650** tests, exit 0; real store row counts (journal/portfolio/pdf/fundamentals) all **0** after runs; PDF untouched (SHA `d7ea6fe4…`, mtime 08:33). |
+| T-A2 | Verify the ranking claims independently | 372 → **369 ranked + 3 excluded** (CFL 41, CMB 14, SLBBLP 50 bars, all < `min_bars=60`); accounting balances; weights sum to 1.0; dense ranks; scores descending; 0 unavailable factors in contributions or effective weight. |
+| T-A3 | Investigate median-substitution bias | **Confirmed not neutral.** 8 gap symbols; removing them changes 361/361 scores and **284/361 ranks**, max 0.61 pts. Recorded as **L-05**, behaviour pinned by test, not silently "fixed". |
+| T-A4 | Audit Fundamentals Lab guards | Real store honestly reports **0**. Three defects found and fixed: **B-13** lakh parser, **B-14** field/unit validation, **B-15** opt-in staleness guard. |
+| T-A5 | PDF manifest for all 52 pages | **46 of 52 pages never transcribed**; 64 records all `unreviewed`; 0 in real store. Full manifest in `docs/WRITTEN_DATA_VALIDATION_REPORT.md`. |
+| T-A6 | Correct settlement 9A | `177,609.76` → **`186,129.76`** in the validation report, with the correction history and an explicit *arithmetic-reconciled, visually unconfirmed* label. |
+| T-A7 | Classify data sources | Distinguished **verified usable** (GitHub dataset — proven by 514,018 ingested rows) from **merely reachable** (ShareSansar, nrb.org.np) and **blocked** (official NEPSE 401, nepsealpha 403). |
+| T-A8 | Inspect Ollama, no changes made | See T-10 below. Nothing upgraded, nothing pulled (412 refused before download; model list unchanged at 2). |
+| T-A9 | Phase 2 financial-correctness tests | New `tests/test_financial_integrity.py` (**33 tests**, all hand-computed fixtures) + **15** added to fundamentals/written_pdf. |
 
-Test count: 511 → **602**. Two commits: `092ce95`, `2806181`.
+**Test count: 602 → 650.** Defects: **B-13, B-14, B-15 fixed**; B-16..B-18
+opened; L-05, L-06 documented.
 
 ---
 
 ## NEXT — highest value first
 
-### T-09 · Re-verify the PDF transcription page by page
-B-02 proved a real 8,520 NPR transcription error existed in the earlier audit
-and was only caught by arithmetic. The audit document still carries the old
-number.
+Each blocker below is recorded with user impact, dependencies, the safe path,
+how to validate it, and what needs an owner decision.
 
-*Approach:* re-run `scripts/score_benchmark.py`'s method across all 52 pages —
-Apple Vision as first pass, then arithmetic self-checks (`buy − sell = net`,
-totals vs. line items) to flag disagreements, then visual review of only the
-flagged rows.
-*Acceptance:* every settlement/total on every transcribed page either
-reconciles or is marked unreconcilable with a reason.
+### T-09 · Re-verify the PDF transcription page by page — **NEXT**
 
-### T-10 · Owner decision: Ollama upgrade
-Local VLM benchmarking is the one part of Priority 2 left undone. Ollama 0.5.7
-rejects every vision model with `412`. Latest is v0.40.3.
-*Needs the owner* — updating an installed application is a machine change
-(Rule 8). If approved: pull a small vision model (≈2 GB, fits 8 GB RAM with a
-3B variant, not a 7B), benchmark against the same five pages, compare with
-Apple Vision before adopting anything.
+* **User impact:** highest. B-02 proved an **8,520 NPR** transcription error
+  survived in an earlier audit and was caught only by arithmetic. 46 of 52
+  pages have never been transcribed at all, and all 64 existing records are
+  `unreviewed`.
+* **Technical dependency:** `scripts/vision_ocr.swift` (Apple Vision, 90.2%
+  numeric recall) + `validate_settlement_reconciliation` + `parse_nepse_number`
+  (lakh bug now fixed).
+* **Data dependency:** `WRITTENdata.pdf` only. Never uploaded, never modified.
+* **Safe path:** Apple Vision as *first pass* → arithmetic self-checks
+  (`buy − sell = net`, totals vs line items) to **flag** disagreements →
+  visual review of flagged rows only → record the review state per row.
+  Start with pages **18–33** (settlements, highest self-check yield).
+* **Validation:** every settlement/total on every transcribed page either
+  reconciles or is marked unreconcilable **with a reason**; counts move out of
+  `unreviewed`; page 21's 9A is visually confirmed or the arithmetic is
+  refuted.
+* **Owner decision:** none to start. Review of flagged rows *is* the owner's
+  job — that is the point of the review state.
 
-### T-11 · Owner decision: sector data
-`security_master.sector` is NULL for all 372 symbols (B-07), which blocks
-sector-relative ranking and peer comparison. Two legitimate routes:
-1. Owner supplies a CSV mapping symbol → sector (preferred — import path
-   already exists in principle for fundamentals, would need a small sibling).
-2. Owner authorises ShareSansar collection; the field is present in that
-   site's public company-page HTML.
+### T-12 · Verify NEPSE cost, tax and settlement assumptions — **BLOCKED**
 
-### T-12 · Verify NEPSE cost, tax and settlement assumptions
-The backtest fee rate is a labelled PLACEHOLDER (B-11). The report quotes
-0.24–0.36% commission + 0.015% SEBON + Rs 25 DP charge, 7.5%/10% capital gains
-tax, T+2 settlement — **none verified this session**, and web search is
-unavailable. Do not hard-code any of them.
-*Needs:* an authoritative source (SEBON / NEPSE / broker notice) and ideally
-the owner's own contract note as ground truth. Then make them named,
-configurable presets with a source and date attached.
+* **User impact:** every backtest's net return is currently unverifiable; a
+  wrong cost figure silently changes whether a strategy looks profitable.
+* **Technical dependency:** none — `BacktestConfig.fee_rate` is already a
+  configurable, labelled PLACEHOLDER, and `_assumptions()` already surfaces it.
+* **Data dependency:** an **authoritative** source (SEBON / NEPSE / broker
+  circular) with an effective date, ideally cross-checked against one of the
+  owner's own contract notes.
+* **Safe path:** when a source exists, make the figures **named presets**,
+  each carrying `{source, retrieved_at, effective_from}`; keep the default
+  explicitly `UNVERIFIED`.
+* **Validation:** a test asserting that no preset without a `source` and a
+  date can be selected; a contract-note figure reproduces to the paisa.
+* **Owner decision:** **required** — web search is unavailable in this
+  environment (B-12), so I cannot verify these myself. **Do not let me
+  hard-code the report's numbers.**
 
-### T-13 · Import a real floor sheet
-Floor-sheet analysis has only ever run on synthetic CSVs. Import one real
-published sheet and check the summary against the published page.
-*Acceptance:* row counts and totals match the source; discrepancies explained.
+### T-11 · Owner decision: sector data — **BLOCKED**
 
-### T-14 · Re-check the official NEPSE API
+* **User impact:** blocks sector-relative ranking, peer comparison, and the
+  `sector_percentile` factor (currently declared `unavailable` at zero weight —
+  honestly, not faked). 372 of 372 symbols have `sector = NULL`.
+* **Technical dependency:** a small `symbol → sector` importer as a sibling of
+  the fundamentals importer; both already have proven import/idempotency patterns.
+* **Data dependency:** a symbol→sector mapping with provenance.
+* **Safe path:** **preferred — owner supplies a CSV.** Validated format:
+
+  ```csv
+  symbol,sector,source,retrieved_at,observed_date
+  NABIL,Banks & Finance,owner-manual,2026-10-12,2026-10-12
+  NICA,Banks & Finance,owner-manual,2026-10-12,2026-10-12
+  ```
+  * `symbol` — uppercase, must already exist in `security_master` (rejected otherwise)
+  * `sector` — free text, non-empty; trimmed; case preserved
+  * `source` — **required**, free text, stored as provenance
+  * `retrieved_at` — **required**, ISO-8601 (when the owner obtained it)
+  * `observed_date` — **required**, ISO-8601 (the date the classification describes)
+  * duplicate `(symbol, observed_date, source)` → last one wins, reported as `updated`
+* **Validation:** row count matches accepted + rejected; every accepted symbol
+  exists; re-import is idempotent; `sector_percentile` flips from
+  `unavailable` to available **only** when coverage exceeds a stated threshold.
+* **Owner decision:** **required.** Alternative — authorise ShareSansar
+  collection (field is in that site's public HTML). That is still **scraping**
+  and needs explicit permission plus a terms check (no LICENSE on the archive
+  either). I will not do it unprompted.
+
+### T-10 · Owner decision: Ollama upgrade for a local vision benchmark — **BLOCKED**
+
+**Inspection result (read-only, nothing changed):**
+
+| Item | Value |
+|---|---|
+| CLI `/usr/local/bin/ollama` | **0.5.7** |
+| Running daemon `/api/version` | **0.5.7** |
+| `/Applications/Ollama.app` `CFBundleShortVersionString` | **0.33.3** (stale metadata — disagrees with the daemon) |
+| Installed models | **2** — `llama3.2:3.2B` (text-only), `nomic-embed-text:137M` |
+| Vision-capable model present | **No** |
+| RAM / free disk | 8 GB / 16 Gi free |
+| Latest upstream | v0.40.3 (per the error message itself) |
+
+**The HTTP 412 explained.** `POST /api/pull {"name":"qwen2.5vl:3b"}` returns
+HTTP 500 wrapping the real status:
+
+```
+pull model manifest: 412: The model you are attempting to pull requires a
+newer version of Ollama. Please download the latest version at:
+https://ollama.com/download
+```
+
+`412 Precondition Failed` is Ollama's own **model-registry gate**: the server
+reads the manifest, compares the manifest's minimum-client requirement against
+its own version, and refuses **before downloading a single byte of weights**.
+It is not a network, auth, disk, or RAM error — it is a client-version
+mismatch. Nothing was installed (model list verified unchanged at 2).
+
+* **User impact:** low for the product; it blocks only the *optional* VLM
+  comparison. Apple Vision already benchmarks at 90.2% numeric recall.
+* **Technical dependency:** an Ollama ≥ 0.40.3 install; then a vision model
+  ≤ 3B (8 GB RAM ⇒ 3B is the ceiling; a 7B will swap).
+* **Data dependency:** the same 5 benchmark pages + ground truth.
+* **Safe path:** owner upgrades → `ollama pull qwen2.5vl:3b` (~2 GB) →
+  `scripts/score_benchmark.py` on the same five pages → compare against
+  Apple Vision's 90.2% / 71.7% / 33-of-46 → **adopt only if it wins**.
+* **Validation:** same scorer, same ground truth, same pages; report exact,
+  numeric and symbol recall side by side.
+* **Owner decision:** **required** — upgrading an installed application is a
+  machine change (Rule 8). I have not upgraded anything and will not without
+  approval.
+
+### T-13 · Import a real floor sheet — **NEXT**
+
+* **User impact:** floor-sheet analysis has only ever run on synthetic CSVs.
+* **Safe path:** import one genuinely published sheet; compare row counts and
+  totals against the published page.
+* **Validation:** totals match source; any discrepancy is explained, not
+  absorbed.
+* **Owner decision:** none. Needs a real sheet the owner chooses to provide.
+
+### T-14 · Re-check the official NEPSE API — **BACKLOG**
+
 `uv run megatool probe` re-tests the 401. Never work around it; never store
 credentials.
 
@@ -76,12 +162,17 @@ credentials.
 
 | ID | Task | Note |
 |---|---|---|
-| T-15 | ShareSansar Scraper bulk import as a second price source | Workbook verified reachable (~41 MB). Needs a licensing decision first — no LICENSE on the archive either. Would give a cross-check against the GitHub dataset. |
+| T-15 | ShareSansar Scraper bulk import as a second price source | Workbook verified reachable (~41 MB). Needs a **licensing decision first** — no LICENSE on the archive either. Would give a cross-check against the GitHub dataset. |
 | T-16 | Walk-forward validation of the ranking (report §8.5) | Rank monthly using only data up to that month, form top/bottom quartiles, measure next-month spread. Chronological only; no look-ahead. Label as research, not evidence of profit. |
 | T-17 | Relative-strength factor | Blocked on an index series (B-10). Declared unavailable today. |
 | T-18 | News / Events and multi-factor *fundamental* ranking | Both blocked on T-11/T-12. |
 | T-19 | Transcribe PDF pages 18–33 | Settlement arithmetic self-checks make these the highest-yield pages (T-09). |
-| T-20 | `TASK_QUEUE.md` / `KNOWN_BUGS.md` upkeep | Created this session; update with every fix. |
+| T-20 | `TASK_QUEUE.md` / `KNOWN_BUGS.md` upkeep | Update with every fix. |
+| T-21 | Decide on L-05 (median substitution) | Computing percentiles over **observed values only** is methodologically cleaner but changes every score. Owner's call. |
+| T-22 | Decide on B-17 (`invalid` bars in the read path) | Options: filter `invalid` out of `get_bars`; or expose a `include_flagged` switch defaulting to off; or leave and document. 124 invalid + 13,093 suspect rows are currently consumed by indicator maths. |
+| T-23 | Decide on B-18 (renamed-PDF re-import duplication) | Dedupe on `content_hash` alone, or filter `query_records` to the newest `import_id`. |
+| T-24 | Store `extraction_method` and an append-only correction history | Both missing from `pdf_records` (manifest, field-provenance table). |
+| T-25 | Populate the Fundamentals Lab | Import path is complete and tested; waiting on a permitted source. |
 
 ---
 
@@ -92,3 +183,5 @@ credentials.
 * Scraping ShareSansar without the owner's authorisation.
 * Uploading `WRITTENdata.pdf` to any external service.
 * Autonomous live trading, broker/Mero Share credentials, invented trading APIs.
+* Upgrading Ollama without approval (T-10).
+* Hard-coding Nepal tax/fee figures that have not been verified (T-12).

@@ -157,6 +157,45 @@ def test_parse_nepse_number_lakh_multiplier():
     assert parse_nepse_number("18L") == 1_800_000.0
 
 
+def test_parse_nepse_number_lakh_word_multiplier():
+    """lakh (the word) must multiply by 100,000.
+
+    The branch used to look for "lac" (with a c) and a digit followed by an
+    uppercase L, so "2 lakh" returned 2.0 - a 100,000x understatement of a real
+    Nepali amount. Every spelling that appears in Nepali financial documents
+    is pinned here against a hand-written expected value.
+    """
+    cases = [
+        ("2 lakh", 200_000.0),
+        ("2 Lakh", 200_000.0),
+        ("2 LAKH", 200_000.0),
+        ("2 lakh.", 200_000.0),
+        ("Rs 2.5 lakh", 250_000.0),
+        ("2 lac", 200_000.0),
+        ("2L", 200_000.0),
+        ("2l", 200_000.0),
+        ("2 L", 200_000.0),
+        ("15L", 1_500_000.0),
+        ("0.75 lakh", 75_000.0),
+    ]
+    for text, expected in cases:
+        assert parse_nepse_number(text) == pytest.approx(expected), text
+
+
+def test_parse_nepse_number_crore_still_wins_when_both_present():
+    # crore is checked first; a value must not be scaled twice.
+    assert parse_nepse_number("2 crore") == 20_000_000.0
+    assert parse_nepse_number("2.5 cr") == 25_000_000.0
+
+
+def test_parse_nepse_number_does_not_multiply_plain_amounts():
+    # No unit word -> no multiplier. An ordinary rupee figure must be exact.
+    for text in ("1,00,000", "1000", "Rs. 1,000", "NPR 500", "1,23,456.78"):
+        assert parse_nepse_number(text) == float(
+            text.replace(",", "").replace("Rs.", "").replace("NPR", "").strip()
+        )
+
+
 def test_parse_nepse_number_rejects_garbage():
     with pytest.raises(PdfValidationError):
         parse_nepse_number("")

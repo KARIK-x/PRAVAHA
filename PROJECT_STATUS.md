@@ -11,7 +11,7 @@ marked working because the code exists. The labels mean:
 | `NOT-IMPLEMENTED` | Deliberately not built. The reason is stated |
 | `NOT-TESTED` | Code exists but has not been executed/observed |
 
-Test suite: **602 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check` and
+Test suite: **650 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check` and
 `ruff format` clean. Live server verified in a real browser via Playwright.
 
 ---
@@ -136,7 +136,7 @@ Evidence, not assertions. Everything below was executed and observed.
 
 | What | How | Result |
 | --- | --- | --- |
-| Full test suite | `uv run pytest` | **602 passed, 0 failed**, ~19 s (was 511) |
+| Full test suite | `uv run pytest` | **650 passed, 0 failed**, ~34 s (was 602) |
 | Lint / format | `ruff check megatool/ tests/ scripts/`, `ruff format --check` | clean (48 files) |
 | Front end | `node --check web/static/app.js` | clean |
 | Real data in the store | `GET /api/status` on the running server | **514,018 bars, 372 symbols**, 1995-07-20 → 2026-10-09 (was 89,580 / 60 before the 2026-10-12 fetch) |

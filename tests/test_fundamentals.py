@@ -25,6 +25,11 @@ from megatool.fundamentals import (
 )
 
 PERIOD = date(2026, 3, 31)
+#: price_as_of is now REQUIRED on every ratio, so a ratio can never be computed
+#: without saying which date the price belongs to. Without it the staleness
+#: guard was skipped entirely and a 2015 EPS divided cleanly into a current
+#: price. 2026-03-31 -> 2026-10-12 is 195 days, inside the 400-day limit.
+PRICE_DATE = date(2026, 10, 12)
 
 
 def rec(**kw) -> FundamentalRecord:
@@ -276,51 +281,51 @@ def test_summary_counts(conn):
 
 def test_pe_is_price_over_eps():
     eps = rec(field="eps", value=25.0)
-    assert ratio_pe(500.0, eps) == pytest.approx(20.0)
+    assert ratio_pe(500.0, eps, price_as_of=PRICE_DATE) == pytest.approx(20.0)
 
 
 def test_pe_refuses_zero_eps():
     with pytest.raises(FundamentalError, match="not positive"):
-        ratio_pe(500.0, rec(value=0.0))
+        ratio_pe(500.0, rec(value=0.0), price_as_of=PRICE_DATE)
 
 
 def test_pe_refuses_negative_eps():
     with pytest.raises(FundamentalError, match="not positive"):
-        ratio_pe(500.0, rec(value=-4.0))
+        ratio_pe(500.0, rec(value=-4.0), price_as_of=PRICE_DATE)
 
 
 def test_pe_refuses_unreviewed_eps():
     with pytest.raises(FundamentalError, match="not reviewed"):
-        ratio_pe(500.0, rec(verification="extracted"))
+        ratio_pe(500.0, rec(verification="extracted"), price_as_of=PRICE_DATE)
 
 
 def test_pe_refuses_unknown_period():
     with pytest.raises(FundamentalError, match="reporting period"):
-        ratio_pe(500.0, rec(period_end=None))
+        ratio_pe(500.0, rec(period_end=None), price_as_of=PRICE_DATE)
 
 
 def test_pe_refuses_mismatched_periods():
     eps = rec(period_end=date(2026, 3, 31))
     price = rec(field="price", period_end=date(2024, 3, 31), value=500.0)
     with pytest.raises(FundamentalError, match="differ by"):
-        ratio_pe(price, eps)
+        ratio_pe(price, eps, price_as_of=PRICE_DATE)
 
 
 def test_pe_refuses_stale_input_when_price_date_given():
     eps = rec(period_end=date(2020, 3, 31))
     with pytest.raises(FundamentalError, match="stale"):
-        ratio_pe(500.0, eps, price_as_of=date(2026, 10, 12))
+        ratio_pe(500.0, eps, price_as_of=PRICE_DATE)
 
 
 def test_pe_accepts_compatible_periods():
     eps = rec(period_end=date(2026, 3, 31))
     price = rec(field="price", period_end=date(2026, 2, 28), value=500.0)
-    assert ratio_pe(price, eps) == pytest.approx(20.0)
+    assert ratio_pe(price, eps, price_as_of=PRICE_DATE) == pytest.approx(20.0)
 
 
 def test_pe_refuses_zero_denominator():
     with pytest.raises(FundamentalError, match="not positive"):
-        ratio_pe(500.0, rec(value=0.0))
+        ratio_pe(500.0, rec(value=0.0), price_as_of=PRICE_DATE)
 
 
 # ------------------------------------------------------------------ other ratios
@@ -328,32 +333,34 @@ def test_pe_refuses_zero_denominator():
 
 def test_pb_is_price_over_net_worth():
     nw = rec(field="net_worth_per_share", value=250.0)
-    assert ratio_pb(500.0, nw) == pytest.approx(2.0)
+    assert ratio_pb(500.0, nw, price_as_of=PRICE_DATE) == pytest.approx(2.0)
 
 
 def test_pb_refuses_non_positive_net_worth():
     with pytest.raises(FundamentalError, match="not positive"):
-        ratio_pb(500.0, rec(field="net_worth_per_share", value=-10.0))
+        ratio_pb(500.0, rec(field="net_worth_per_share", value=-10.0), price_as_of=PRICE_DATE)
 
 
 def test_dividend_yield_is_percentage():
     dps = rec(field="dps", value=12.5)
-    assert ratio_dividend_yield(dps, 250.0) == pytest.approx(5.0)
+    assert ratio_dividend_yield(dps, 250.0, price_as_of=PRICE_DATE) == pytest.approx(5.0)
 
 
 def test_dividend_yield_refuses_unreviewed():
     with pytest.raises(FundamentalError, match="not reviewed"):
-        ratio_dividend_yield(rec(field="dps", verification="extracted"), 250.0)
+        ratio_dividend_yield(
+            rec(field="dps", verification="extracted"), 250.0, price_as_of=PRICE_DATE
+        )
 
 
 def test_dividend_yield_refuses_negative_dps():
     with pytest.raises(FundamentalError, match="negative"):
-        ratio_dividend_yield(rec(field="dps", value=-1.0), 250.0)
+        ratio_dividend_yield(rec(field="dps", value=-1.0), 250.0, price_as_of=PRICE_DATE)
 
 
 def test_dividend_yield_refuses_non_positive_price():
     with pytest.raises(FundamentalError, match="not positive"):
-        ratio_dividend_yield(rec(field="dps"), 0.0)
+        ratio_dividend_yield(rec(field="dps"), 0.0, price_as_of=PRICE_DATE)
 
 
 def test_ratio_never_returns_nan_or_inf():
@@ -361,5 +368,91 @@ def test_ratio_never_returns_nan_or_inf():
         (ratio_pe, (500.0, rec(value=1e-9))),
         (ratio_pb, (500.0, rec(field="net_worth_per_share", value=1e-9))),
     ):
-        out = fn(*args)
+        out = fn(*args, price_as_of=PRICE_DATE)
         assert out == out and out not in (float("inf"), float("-inf"))
+
+
+# -------------------------------------------------- price_as_of is not optional
+# Regression tests for the bypass: price_as_of used to default to None, which
+# disabled the staleness guard and returned P/E = 20.00 for a 2015 EPS against
+# a 2026 price. The argument is now mandatory on all three ratios.
+
+
+@pytest.mark.parametrize("fn,args", [("ratio_pe", (500.0,)), ("ratio_pb", (500.0,))])
+def test_ratio_refuses_to_run_without_a_price_date(fn, args):
+    fn_mod = ratio_pe if fn == "ratio_pe" else ratio_pb
+    operand = rec(value=25.0) if fn == "ratio_pe" else rec(field="net_worth_per_share", value=250.0)
+    with pytest.raises(TypeError):
+        fn_mod(*args, operand)  # no price_as_of
+
+
+def test_yield_refuses_to_run_without_a_price_date():
+    with pytest.raises(TypeError):
+        ratio_dividend_yield(rec(field="dps"), 250.0)
+
+
+def test_omitting_price_date_cannot_reproduce_the_old_bypass():
+    """The exact reproduction from the audit: 2015 EPS into a current price."""
+    stale = rec(period_end=date(2015, 3, 31), value=25.0)
+    # With the date given, the stale EPS is refused (this is the whole point).
+    with pytest.raises(FundamentalError, match="stale"):
+        ratio_pe(500.0, stale, price_as_of=date(2026, 10, 12))
+    # And there is no way to ask for the old behaviour: omitting the date is a
+    # TypeError, not a silent pass-through of 20.00.
+    with pytest.raises(TypeError):
+        ratio_pe(500.0, stale)
+
+
+def test_dividend_yield_refuses_a_stale_dps():
+    stale = rec(field="dps", value=12.5, period_end=date(2018, 3, 31))
+    with pytest.raises(FundamentalError, match="stale"):
+        ratio_dividend_yield(stale, 250.0, price_as_of=PRICE_DATE)
+
+
+def test_dividend_yield_refuses_a_dps_of_unknown_vintage():
+    with pytest.raises(FundamentalError, match="reporting period"):
+        ratio_dividend_yield(rec(field="dps", period_end=None), 250.0, price_as_of=PRICE_DATE)
+
+
+# ------------------------------------------------- operands must be the right field
+# KNOWN_FIELDS stores a unit per field "so a ratio can refuse to divide
+# mismatched quantities". These pin that promise. Before it was enforced,
+# ratio_pe(500.0, revenue_record) returned 0.1000 and was presented as a P/E.
+
+
+def test_pe_refuses_a_record_that_is_not_eps():
+    for field in ("revenue", "profit", "dps", "net_worth_per_share", "total_shares"):
+        with pytest.raises(FundamentalError, match="requires eps"):
+            ratio_pe(500.0, rec(field=field), price_as_of=PRICE_DATE)
+
+
+def test_pe_refuses_an_eps_measured_in_the_wrong_unit():
+    for unit in ("shares", "crore", "lakh", "ratio"):
+        with pytest.raises(FundamentalError, match="requires 'NPR'"):
+            ratio_pe(500.0, rec(unit=unit), price_as_of=PRICE_DATE)
+
+
+def test_pb_refuses_a_record_that_is_not_book_value():
+    for field in ("eps", "revenue", "dps", "paid_up_capital"):
+        with pytest.raises(FundamentalError, match="requires net_worth_per_share"):
+            ratio_pb(500.0, rec(field=field), price_as_of=PRICE_DATE)
+
+
+def test_pb_accepts_either_book_value_field():
+    for field in ("net_worth_per_share", "book_value_per_share"):
+        assert ratio_pb(500.0, rec(field=field, value=250.0), price_as_of=PRICE_DATE) == (
+            pytest.approx(2.0)
+        )
+
+
+def test_yield_refuses_a_record_that_is_not_dps():
+    for field in ("eps", "profit", "net_worth_per_share"):
+        with pytest.raises(FundamentalError, match="requires dps"):
+            ratio_dividend_yield(rec(field=field), 250.0, price_as_of=PRICE_DATE)
+
+
+def test_ratio_cannot_present_revenue_divided_by_price_as_pe():
+    """The exact nonsense the audit found, asserted as impossible."""
+    revenue = rec(field="revenue", value=5000.0)
+    with pytest.raises(FundamentalError):
+        ratio_pe(500.0, revenue, price_as_of=PRICE_DATE)

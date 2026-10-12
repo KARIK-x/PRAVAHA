@@ -281,9 +281,56 @@ def _refuse_unknown_period(rec: FundamentalRecord, name: str) -> None:
         )
 
 
+def _refuse_wrong_field(rec: FundamentalRecord, allowed: tuple[str, ...], name: str) -> None:
+    """Refuse an operand that is not the field the ratio actually needs.
+
+    Without this, ``ratio_pe(500.0, revenue_record)`` returned ``0.1`` and was
+    presented as a P/E - a plausible-looking number with no meaning. Python
+    does not enforce the ``eps: FundamentalRecord`` annotation, so the check
+    has to be real.
+    """
+    if rec.field not in allowed:
+        need = " or ".join(allowed)
+        raise FundamentalError(
+            f"{name}: {rec.symbol} supplied field {rec.field!r}, but this ratio requires {need}"
+        )
+
+
+def _refuse_wrong_unit(rec: FundamentalRecord, unit: str, name: str) -> None:
+    """Refuse a value measured in something other than the expected unit.
+
+    ``KNOWN_FIELDS`` stores a unit per field precisely so a ratio can refuse to
+    divide mismatched quantities; that promise is only kept if it is enforced.
+    """
+    if rec.unit != unit:
+        raise FundamentalError(
+            f"{name}: {rec.symbol} field {rec.field!r} is in {rec.unit!r}, "
+            f"but this ratio requires {unit!r}"
+        )
+
+
 def _period_gap_days(a: FundamentalRecord, b: FundamentalRecord) -> int:
     assert a.period_end is not None and b.period_end is not None
     return abs((a.period_end - b.period_end).days)
+
+
+def _refuse_stale(rec: FundamentalRecord, price_as_of: date, name: str) -> None:
+    """Refuse a figure whose reporting period is too old for ``price_as_of``.
+
+    ``price_as_of`` is a *required* argument of every ratio in this module so
+    the check cannot be skipped by omission: leaving it out previously defaulted
+    to ``None``, which silently disabled this guard and let an EPS from 2015 be
+    divided into a current price. Nothing in the app computes a ratio yet, so
+    making it mandatory costs no caller anything.
+    """
+    if rec.period_end is None:
+        return  # already refused by _refuse_unknown_period upstream
+    age = (price_as_of - rec.period_end).days
+    if age > STALE_AFTER_DAYS:
+        raise FundamentalError(
+            f"{name}: the reporting period ended {age} days before the price "
+            f"date; refusing a stale figure (limit {STALE_AFTER_DAYS} days)"
+        )
 
 
 def _as_record(x: FundamentalRecord | float, name: str) -> FundamentalRecord | None:
@@ -298,14 +345,18 @@ def _combine(
     numerator: FundamentalRecord | float,
     denominator: FundamentalRecord | float,
     label: str,
-    price_as_of: date | None = None,
+    price_as_of: date,
 ) -> float:
     """Shared guard: every operand must be usable and periods compatible.
 
     Either operand may be a plain number (a price taken from the market store,
     which carries its own date) or a stored :class:`FundamentalRecord`. Any
-    record operand must be reviewed, carry a reporting period, and - when a
-    price date is supplied - not be stale relative to it.
+    record operand must be reviewed, carry a reporting period, and not be stale
+    relative to ``price_as_of``.
+
+    ``price_as_of`` is mandatory: without a price date there is no way to know
+    whether a vintage is current, and an omitted date must not mean "skip the
+    freshness check".
     """
     top_rec = _as_record(numerator, "numerator")
     bot_rec = _as_record(denominator, "denominator")
@@ -326,16 +377,10 @@ def _combine(
                 "be combined"
             )
 
-    # Staleness only makes sense against an explicit price date.
-    if price_as_of is not None:
-        for rec in (top_rec, bot_rec):
-            if rec is not None and rec.period_end is not None:
-                age = (price_as_of - rec.period_end).days
-                if age > STALE_AFTER_DAYS:
-                    raise FundamentalError(
-                        f"{label}: the reporting period ended {age} days before the "
-                        f"price date; refusing a stale figure (limit {STALE_AFTER_DAYS} days)"
-                    )
+    # Staleness is always checked; price_as_of is mandatory (see _refuse_stale).
+    for rec, name in ((top_rec, "numerator"), (bot_rec, "denominator")):
+        if rec is not None:
+            _refuse_stale(rec, price_as_of, f"{label} ({name})")
 
     top = float(numerator.value) if top_rec is not None else float(numerator)
     bottom = float(denominator.value) if bot_rec is not None else float(denominator)
@@ -351,14 +396,20 @@ def _combine(
 def ratio_pe(
     price: FundamentalRecord | float,
     eps: FundamentalRecord,
-    price_as_of: date | None = None,
+    *,
+    price_as_of: date,
 ) -> float:
     """Price-to-earnings = price / EPS.
 
     Requires a reviewed/verified EPS with a known reporting period. A
     non-positive EPS makes the ratio meaningless rather than merely negative,
     so it is refused with the actual value in the message.
+
+    ``price_as_of`` is required so the staleness check below cannot be
+    bypassed by omitting it.
     """
+    _refuse_wrong_field(eps, ("eps",), "P/E")
+    _refuse_wrong_unit(eps, "NPR", "P/E (EPS)")
     if eps.value <= 0:
         raise FundamentalError(f"P/E refused: EPS is {eps.value}, which is not positive")
     return _combine(price, eps, "P/E", price_as_of)
@@ -367,9 +418,12 @@ def ratio_pe(
 def ratio_pb(
     price: FundamentalRecord | float,
     net_worth: FundamentalRecord,
-    price_as_of: date | None = None,
+    *,
+    price_as_of: date,
 ) -> float:
     """Price-to-book = price / net worth per share. Same guards as P/E."""
+    _refuse_wrong_field(net_worth, ("net_worth_per_share", "book_value_per_share"), "P/B")
+    _refuse_wrong_unit(net_worth, "NPR", "P/B (book value per share)")
     if net_worth.value <= 0:
         raise FundamentalError(
             f"P/B refused: net worth per share is {net_worth.value}, which is not positive"
@@ -377,13 +431,26 @@ def ratio_pb(
     return _combine(price, net_worth, "P/B", price_as_of)
 
 
-def ratio_dividend_yield(dps: FundamentalRecord, price: float) -> float:
-    """Dividend yield as a percentage. DPS must be non-negative and reviewed."""
+def ratio_dividend_yield(
+    dps: FundamentalRecord,
+    price: float,
+    *,
+    price_as_of: date,
+) -> float:
+    """Dividend yield as a percentage. DPS must be non-negative and reviewed.
+
+    ``price_as_of`` is required here too: a DPS of unknown vintage, or one too
+    old for the price date, would otherwise produce a yield that looks current.
+    """
+    _refuse_wrong_field(dps, ("dps",), "dividend yield")
+    _refuse_wrong_unit(dps, "NPR", "dividend yield (DPS)")
     if dps.value < 0:
         raise FundamentalError(f"yield refused: DPS is {dps.value}, which is negative")
     if price <= 0:
         raise FundamentalError(f"yield refused: price is {price}, which is not positive")
     _refuse_unverified(dps, "dividend yield")
+    _refuse_unknown_period(dps, "dividend yield")
+    _refuse_stale(dps, price_as_of, "dividend yield")
     return float(dps.value) / float(price) * 100.0
 
 

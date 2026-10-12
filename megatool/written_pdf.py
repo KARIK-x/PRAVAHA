@@ -364,10 +364,16 @@ def parse_nepse_number(raw: str) -> float:
     if negative:
         value = -value
 
-    # Apply unit multipliers from the original string
-    if "(cr)" in raw.lower().replace(" ", "") or "cr" in raw.lower():
+    # Apply unit multipliers from the original string. The letters are removed
+    # by the ``[^\d.,-]`` strip above, so the unit has to be read from ``raw``.
+    # "lakh" contains no "c", so it must be matched as a word in its own right;
+    # "2l"/"2L" has no word boundary before the "l", so a digit lookbehind is
+    # also needed. Missing this returned 2.0 for "2 lakh" - a 100,000x
+    # understatement of a real Nepali amount.
+    lower = raw.lower()
+    if "(cr)" in lower.replace(" ", "") or "cr" in lower:
         value *= 10_000_000
-    elif "lac" in raw.lower() or re.search(r"\dL\b", raw):
+    elif re.search(r"(?i)\b(?:lakh?|lac|l)\b|(?<=\d)l\b", raw):
         value *= 100_000
 
     return value

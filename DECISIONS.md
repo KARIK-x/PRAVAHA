@@ -88,6 +88,65 @@ and incompatible periods rather than producing a plausible number.
 
 ---
 
+## 2026-10-12 — Evidence-based completion audit
+
+### Decision: report findings as measured, and fix only what the evidence supports
+
+The audit's job was to reconcile reported progress against the repository, not
+to add features. Three defects were found by measuring rather than reading, and
+all three were fixed because each is small, contained, and has **no live caller**
+(verified by grep across the repo):
+
+| Defect | Measured before the fix | Fix |
+|---|---|---|
+| **B-13** lakh parser | 6 of 15 spellings wrong; `"2 lakh"` → `2.0` (**100,000×**) | match `\b(?:lakh?|lac|l)\b` or a digit + `l` |
+| **B-14** ratio operands | `ratio_pe(500, revenue_record)` → `0.1000` presented as P/E | `_refuse_wrong_field` / `_refuse_wrong_unit` on all three ratios |
+| **B-15** staleness guard | `ratio_pe(500, eps_from_2015)` → `20.00`, no complaint | `price_as_of` made **required**; omission is a `TypeError` |
+
+Not fixed, because each changes observable behaviour and is the owner's call:
+**L-05** (median substitution moves 284 of 369 ranks), **L-06** (inverted
+factors never reach 100), **B-17** (`invalid` bars reach indicator maths),
+**B-18** (renamed-PDF re-import duplicates). Each is documented and pinned by a
+test so it cannot regress unnoticed.
+
+### Decision: the ranking's "reproducible by hand" claim is qualified, not repeated
+
+Measured on the real universe: contributions reproduce the score to a **maximum
+of 2.0e-4** (median 7.1e-15), because contributions are rounded to 4 decimals
+while the score is rounded once from unrounded parts. That is a rounding
+artifact, not an error, and it never changes a displayed value — but the honest
+statement is "reproduces to 4-decimal rounding", not "sums exactly".
+
+### Decision: arithmetic reconciliation is labelled separately from verification
+
+Settlement 9A's corrected figure (`186,129.76`) is established **by arithmetic
+alone**: it is the only value of the three that makes `buy − sell = net`. That
+is a self-check of one page against itself. It is *not* independent confirmation
+of the digits against the source document, and the validation report now says
+so explicitly until T-09 re-reads page 21.
+
+### Decision: data sources are classified by what they delivered, not by HTTP status
+
+* **Verified usable** — `github.com/Aabishkar2/nepse-data`: 514,018 rows,
+  372/372 symbols, per-row `source`/`source_url`/`retrieved_at`, and an
+  ingestion log with UTC run times, coverage and a `synthetic` flag.
+* **Merely reachable** — ShareSansar, nepsedata.com, nrb.org.np return 200.
+  A 200 proves nothing about completeness, permission, or usefulness; no field
+  of theirs has been ingested.
+* **Blocked** — official NEPSE (401, by policy), nepsealpha (403).
+
+Reachability is recorded as reachability.
+
+### Decision: no Ollama change without approval
+
+Inspected read-only: CLI and daemon **0.5.7**, app bundle metadata **0.33.3**,
+2 installed models (neither vision-capable), 8 GB RAM. The 412 is Ollama's
+own registry gate — it refuses at the manifest **before downloading any
+weights** — reproduced without installing anything and with the model list
+verified unchanged. Upgrading an installed application is a machine change.
+
+---
+
 ## Standing decisions (from earlier sessions)
 
 | # | Decision | Reason |

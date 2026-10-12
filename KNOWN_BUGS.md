@@ -137,6 +137,99 @@ documentation rests on a web search.
 
 ---
 
+## Found by the evidence-based completion audit (2026-10-12)
+
+### B-13 — `parse_nepse_number` returned `2.0` for `"2 lakh"` — **FIXED**
+
+The unit branch tested `"lac"` (with a **c**) and `r"\dL\b"` (uppercase **L**
+only). The word `lakh` contains neither, so a real Nepali amount scaled by
+nothing: `"2 lakh"` → `2.0`, a **100,000×** understatement. `"Rs 2.5 lakh"` →
+`2.5`. `"2l"` and `"2 L"` failed for the same reason.
+
+Measured before the fix — 6 of 15 spellings wrong:
+
+| input | correct | returned |
+|---|---|---|
+| `2 lakh` | 200,000 | **2.0** |
+| `Rs 2.5 lakh` | 250,000 | **2.5** |
+| `2 lac` | 200,000 | 200,000 ✓ |
+| `2L` | 200,000 | 200,000 ✓ |
+| `15L` | 1,500,000 | 1,500,000 ✓ |
+| `2.2cr` | 22,000,000 | 22,000,000 ✓ |
+
+**Exposure:** none live — the function has no caller outside `tests/`
+(verified by grep across the repo). Latent, but it is the parser the OCR
+pipeline will use.
+
+**Fix:** match `\b(?:lakh?|lac|l)\b` or a digit followed by `l`. Regression
+tests pin 11 spellings plus the crore case and the no-unit case.
+
+### B-14 — A ratio could be computed from the wrong field or unit — **FIXED**
+
+`KNOWN_FIELDS` documents *"Units are stored explicitly so a ratio can refuse
+to divide mismatched quantities."* Nothing enforced it. Measured before the
+fix:
+
+```
+ratio_pe(500.0, revenue_record)  -> 0.1000   presented as a P/E
+ratio_pe(500.0, rec(unit="shares")) -> 20.0
+ratio_pe(500.0, dps_record)      -> 20.0
+```
+
+A plausible-looking number with no meaning, and Python does not enforce the
+`eps: FundamentalRecord` annotation.
+
+**Exposure:** none live — no endpoint or CLI computes a ratio. **Fix:**
+`_refuse_wrong_field` / `_refuse_wrong_unit` on all three ratios; P/E accepts
+only `eps`, P/B only `net_worth_per_share`/`book_value_per_share`, yield only
+`dps`, all in `NPR`.
+
+### B-15 — The staleness guard was opt-in — **FIXED**
+
+`price_as_of` defaulted to `None`, and the age check only ran `if
+price_as_of is not None`. So:
+
+```
+ratio_pe(500.0, eps_from_2015)  ->  20.00     (no complaint)
+```
+
+**Exposure:** none live (no caller). **Fix:** `price_as_of` is now a required
+keyword argument on `ratio_pe`, `ratio_pb` and `ratio_dividend_yield`; omitting
+it is a `TypeError`, not a silent pass-through. Dividend yield gained the
+staleness and unknown-period checks it never had.
+
+### B-16 — `docs/WRITTEN_DATA_VALIDATION_REPORT.md` still shows the wrong 9A figure — **OPEN (T-09)**
+
+Line 30 still reads `177,609.76`. The correct value is `186,129.76`. Every
+other document was corrected; this one was not, because correcting it requires
+re-reading page 21 (T-09) rather than trusting arithmetic.
+
+### B-17 — Bars marked `invalid` are not filtered from the read path — **OPEN**
+
+`get_bars` has no `validation_status` predicate, so flagged rows flow into
+every indicator, scan, backtest and forecast. The real store holds:
+
+| status | rows |
+|---|---|
+| `valid` | 500,801 |
+| `suspect` | 13,093 |
+| `invalid` | 124 |
+
+including **115 `high_low_inverted`** rows and 555 rows whose close is outside
+`[low, high]`. The status is stored per row and surfaced by the API, but it is
+informational only. Pinned by `test_invalid_bars_are_still_returned_by_the_read_path`
+so the limitation cannot be forgotten.
+
+### B-18 — Re-importing the PDF under a different filename duplicates records — **OPEN**
+
+`import_records` dedupes on `(source_file, content_hash)`. Re-importing the
+same path is idempotent (verified: `0 inserted, 2 updated`), but a **renamed
+copy of identical bytes** creates a second `import_id`, and `query_records`
+filters by no import — so `SELECT *` returns both copies (verified: 4 rows
+across 2 imports).
+
+---
+
 ## Limitations (inherent, not defects)
 
 ### L-01 — Apple Vision drops digits on large figures
@@ -167,3 +260,36 @@ with per-row attribution and is used for private research only.
 42 of 52 pages produced empty output; the 24 non-empty files are gibberish.
 Not fixable by preprocessing — handwriting has no character boundaries for a
 glyph-segmentation engine.
+
+### L-05 — Median substitution is not ranking-neutral
+
+A symbol missing a factor gets the cross-sectional median, and that synthetic
+value is then included in the distribution every percentile is computed from.
+Measured on the real 372-symbol universe: 8 symbols lack `momentum_6m`
+(70–119 bars, below the >120 that `return_120d` needs). Removing them changes
+**361 of 361 scores** and **284 of 361 ranks**, largest score shift 0.61
+points, top-10 membership unchanged (one adjacent pair swaps).
+
+On a small universe the effect is much larger — the audit's 5-symbol fixture
+moves a complete symbol's score by 4.875 points, bounded by that one factor's
+weight (0.25 × 100).
+
+**Disclosure is present** (`complete=False`, note `median-substituted for: …`),
+and the behaviour is pinned by `test_substitution_moves_other_symbols_scores`.
+**Not fixed:** computing percentiles only over observed values would be the
+methodologically cleaner choice, but it changes every score, so it is the
+owner's call.
+
+### L-06 — Inverted factors never reach the 100th percentile
+
+Directionality is applied as `100 - p` rather than a true reverse rank
+`(n + 1 - r) / n × 100`. Every inverted percentile is therefore understated by
+exactly `100/n`. Order on that factor is unaffected (the shift is a constant
+for all symbols), so **ranks do not change**, but the factor's contribution is
+depressed by `weight × 100/n` for everyone:
+
+* n = 4 (test fixture): best volatility scores **75**, not 100 — worth 3.75
+  score points against a true reverse rank.
+* n = 369 (real store): 0.27 percentile points → **0.04** score points.
+
+Pinned by `test_inverted_factor_never_reaches_100_for_the_best_symbol`.

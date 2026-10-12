@@ -25,11 +25,27 @@ They can be validated **arithmetically** without any external source.
 
 | Settlement | Page | Buy total | Sell total | Net (recorded) | Net (computed) | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| 8C | 19 | 168,147.83 | 226,359.28 | 58,211.45 | 58,211.45 | **VERIFIED** |
-| 8D | 19 | 111,993.22 | 111,175.43 | 817.79 | 817.79 | **VERIFIED** |
-| 9A | 21 | 177,609.76 | — | 65,550.33 | — | Partial (sell side illegible) |
-| 9C | 21 | 189,763.58 | 157,168.39 | 32,595.19 | 32,595.19 | **VERIFIED** |
-| 9D | 21 | 54,157.24 | 45,035.39 | 9,121.85 | 9,121.85 | **VERIFIED** |
+| 8C | 19 | 168,147.83 | 226,359.28 | 58,211.45 | 58,211.45 | **ARITHMETIC-VERIFIED** |
+| 8D | 19 | 111,993.22 | 111,175.43 | 817.79 | 817.79 | **ARITHMETIC-VERIFIED** |
+| 9A | 21 | ~~177,609.76~~ → **186,129.76** | 120,579.43 | 65,550.33 | 65,550.33 | **ARITHMETIC-VERIFIED** (corrected, see below) |
+| 9C | 21 | 189,763.58 | 157,168.39 | 32,595.19 | 32,595.19 | **ARITHMETIC-VERIFIED** |
+| 9D | 21 | 54,157.24 | 45,035.39 | 9,121.85 | 9,121.85 | **ARITHMETIC-VERIFIED** |
+
+> **Correction history — settlement 9A (2026-10-12).** The buy total was first
+> transcribed as `177,609.76`. Against the recorded net that gives
+> `177,609.76 − 120,579.43 = 57,030.33`, which does **not** equal the recorded
+> `65,550.33` — a discrepancy of `8,520.00`. The value `186,129.76` reconciles
+> exactly: `186,129.76 − 120,579.43 = 65,550.33`. The corrected figure was found
+> **by arithmetic alone** (defect B-02) and is pinned by
+> `test_settlement_catches_the_transcription_error_that_was_actually_found`.
+>
+> **What this does and does not prove.** It proves the three figures on that row
+> are mutually consistent. It is **not** independent verification of the digits
+> against page 21 — no one has re-read the page since the correction. That
+> re-read is **T-09**, and until it is done this row is *arithmetic-reconciled,
+> visually unconfirmed*. The distinction matters: a transcription error of
+> 8,520 that only arithmetic caught is also the reason to re-read rather than
+> trust the reconciliation.
 
 The settlement arithmetic is internally consistent where both sides are legible. This
 is a **strong positive signal** about the reliability of the handwritten records:
@@ -113,3 +129,74 @@ This overlap is the basis for the PDF integration in the Research Assistant: whe
 assistant answers a question about a symbol that appears in both the journal and the
 stored data, it can show both the journal's historical value and the stored price,
 clearly labelled with their different dates and sources.
+
+---
+
+## Extraction manifest — all 52 pages
+
+Counts below are read from the artefacts on disk, not asserted from memory.
+Regenerate the OCR column with `uv run megatool pdf list`.
+
+### Coverage
+
+| Measure | Count | Notes |
+| --- | ---: | --- |
+| Pages in `WRITTENdata.pdf` | **52** | derived from the document itself, never a hard-coded constant |
+| Pages rendered to PNG | 52 | `data/written_pdf/raw_pages/` |
+| Pages OCR was **attempted** on | 52 | `data/written_pdf/raw_ocr/` |
+| …produced empty output | 28 | handwriting has no glyph boundaries |
+| …produced readable text | 17 | page furniture, not the tabular content |
+| …produced gibberish | 7 | non-empty but unusable |
+| Pages with **transcribed records** | **6 of 52** | pages 1, 2, 6, 11, 17, 52 |
+| **Pages never transcribed** | **46 of 52** | — |
+| Records in the sample file | 64 | `data/written_pdf/extracted_sample.json` |
+| Records in the **real store** | **0** | `pdf_records`, verified on `:8710` |
+
+### Per-page detail (the six transcribed pages)
+
+| Page | Records | OCR bytes | OCR usable? | Review state |
+| ---: | ---: | ---: | --- | --- |
+| 1 | 12 | 0 | empty | 12 `unreviewed` |
+| 2 | 9 | 0 | empty | 9 `unreviewed` |
+| 6 | 15 | 171 | text only | 15 `unreviewed` |
+| 11 | 16 | 274 | text only | 16 `unreviewed` |
+| 17 | 2 | 0 | empty | 2 `unreviewed` |
+| 52 | 10 | 0 | empty | 10 `unreviewed` |
+
+All other 46 pages: 0 records.
+
+### Records by review state
+
+| State | Count |
+| --- | ---: |
+| `extracted` / `reviewed` / `corrected` | **0** |
+| `uncertain` | **0** |
+| `rejected` | **0** |
+| **`unreviewed`** | **64** |
+| **Unprocessed (no records at all)** | **46 pages** |
+
+Every extracted record in this build is `unreviewed`. Nothing has been promoted
+by a human reader, and nothing may enter portfolio accounting or current
+fundamentals in that state.
+
+### Field-level provenance actually preserved
+
+| Requested | Where it lives | Status |
+| --- | --- | --- |
+| page | `pdf_records.page` | IMPLEMENTED |
+| table / row | `pdf_records.source_ref` | IMPLEMENTED (populated as `"table, row/column"` where identifiable) |
+| source text | `pdf_records.raw_text` | IMPLEMENTED in schema — **absent from `extracted_sample.json`** |
+| normalised value | `pdf_records.value` (JSON) | IMPLEMENTED |
+| confidence | `pdf_records.confidence` (`high`/`medium`/`low`/`uncertain`) | IMPLEMENTED |
+| review state | `pdf_records.review_status` | IMPLEMENTED |
+| **extraction method** | — | **NOT IMPLEMENTED** — no column records Vision vs Tesseract vs transcription |
+| **correction history** | `pdf_records.note` only | **PARTIAL** — no append-only audit trail; an overwrite via `ON CONFLICT … DO UPDATE` leaves no prior value |
+| page integrity | `pdf_imports.content_hash` + `page_sha256()` | IMPLEMENTED |
+
+`re-run → no duplicates` holds **for the same filename** (verified: 0 inserted,
+2 updated). A renamed copy of identical bytes creates a second `import_id` and
+`query_records` has no import filter — see B-18.
+
+The original `WRITTENdata.pdf` is never written to: SHA-256
+`d7ea6fe42ad3427fc12b8b19…`, mtime unchanged since 08:33 on 2026-10-12, and the
+file is git-ignored.
