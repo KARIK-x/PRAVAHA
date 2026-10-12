@@ -441,7 +441,9 @@ def test_the_unpriced_entry_does_not_inflate_the_denominator(client):
         assert client.post("/api/journal", json=payload).status_code in (200, 201)
     body = client.get("/api/journal/stats").json()
     assert body["closed"] == 3
-    assert body["comparable"] == 2 if "comparable" in body else True
+    # Assert equality, not truthiness: `if body["comparable"]` would pass on a
+    # missing key (None), which is exactly how the first draft hid this bug.
+    assert body["comparable"] == 2
     assert body["win_rate_pct"] == 50.0  # 1 win from 2 COMPARABLE, not from 3
 
 

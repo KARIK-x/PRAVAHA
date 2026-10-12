@@ -334,6 +334,9 @@ def journal_stats(db_path=None) -> dict[str, Any]:
         "wins": len(wins),
         "losses": len(losses),
         "breakeven": len(comparable) - len(wins) - len(losses),
+        # `comparable` is the win-rate denominator. Exposing it stops the rate
+        # being quoted without the sample it rests on.
+        "comparable": len(comparable),
         "win_rate_pct": round(100.0 * len(wins) / len(comparable), 2) if comparable else None,
         "closed_without_entry_price": unpriced,
         "avg_r": round(sum(r_values) / len(r_values), 4) if r_values else None,
