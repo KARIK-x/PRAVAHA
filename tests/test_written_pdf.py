@@ -372,3 +372,56 @@ def test_review_status_reports_missing_ids(db):
 def test_review_status_requires_ids(db):
     with pytest.raises(PdfValidationError, match="no record ids"):
         set_review_status([], ReviewStatus.REVIEWED, db_path=db)
+
+
+# ------------------------------------------------------------------ pdf CLI
+def _cli_records() -> None:
+    """Load the synthetic sample into the same store the CLI writes to."""
+    import_records(_sample_records(), "WRITTENdata.pdf")
+
+
+def test_pdf_review_cli_marks_a_record_reviewed(capsys):
+    from megatool.cli import main
+
+    _cli_records()
+    assert main(["pdf", "review", "--ids", "1", "--status", "reviewed"]) == 0
+    assert "Set 1 record(s) to reviewed" in capsys.readouterr().out
+    assert len(query_records(review_status=ReviewStatus.REVIEWED)) == 1
+
+
+def test_pdf_review_cli_rejects_an_unknown_status(capsys):
+    from megatool.cli import main
+
+    _cli_records()
+    assert main(["pdf", "review", "--ids", "1", "--status", "maybe"]) == 1
+    err = capsys.readouterr().err
+    assert "unknown status" in err
+    assert "reviewed" in err
+    # nothing was changed
+    assert len(query_records(review_status=ReviewStatus.UNREVIEWED)) == len(_sample_records())
+
+
+def test_pdf_review_cli_refuses_sending_a_record_back_to_unreviewed(capsys):
+    from megatool.cli import main
+
+    _cli_records()
+    assert main(["pdf", "review", "--ids", "1", "--status", "unreviewed"]) == 1
+    assert "unreviewed" in capsys.readouterr().err
+
+
+def test_pdf_review_cli_refuses_a_non_numeric_id(capsys):
+    from megatool.cli import main
+
+    _cli_records()
+    assert main(["pdf", "review", "--ids", "abc", "--status", "reviewed"]) == 1
+    assert "not a record id" in capsys.readouterr().err
+
+
+def test_pdf_review_cli_reports_ids_that_do_not_exist(capsys):
+    from megatool.cli import main
+
+    _cli_records()
+    assert main(["pdf", "review", "--ids", "9999", "--status", "reviewed"]) == 1
+    captured = capsys.readouterr()
+    assert "not found: 1" in captured.err
+    assert "Set 0 record(s)" in captured.out

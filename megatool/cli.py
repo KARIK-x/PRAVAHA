@@ -432,7 +432,9 @@ def build_parser() -> argparse.ArgumentParser:
         _print_indented("unreviewed:", out["unreviewed"])
         if out["unreviewed"]:
             print("\nUnreviewed records are stored but NOT safe for financial use.")
-            print("Review them in the web UI or with: megatool pdf list --reviewed")
+            print(
+                "Review them in the web UI, or by id with: megatool pdf review --ids 1 --status reviewed"
+            )
         return 0
 
     def _cmd_pdf_summary(args: argparse.Namespace) -> int:
@@ -498,6 +500,41 @@ def build_parser() -> argparse.ArgumentParser:
             )
         return 0
 
+    def _cmd_pdf_review(args: argparse.Namespace) -> int:
+        from megatool.written_pdf import PdfValidationError, ReviewStatus, set_review_status
+
+        try:
+            status = ReviewStatus(args.status)
+        except ValueError:
+            print(
+                f"error: unknown status {args.status!r}. "
+                f"Valid: {', '.join(s.value for s in ReviewStatus)}",
+                file=sys.stderr,
+            )
+            return 1
+        ids = []
+        for part in args.ids.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if not part.isdigit():
+                print(f"error: {part!r} is not a record id (use: --ids 1,2,3)", file=sys.stderr)
+                return 1
+            ids.append(int(part))
+        if not ids:
+            print("error: no record ids given (use: --ids 1,2,3)", file=sys.stderr)
+            return 1
+        try:
+            out = set_review_status(ids, status)
+        except PdfValidationError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"Set {out['updated']} record(s) to {out['status']}", flush=True)
+        if out["not_found"]:
+            print(f"  not found: {out['not_found']} (ids that do not exist)", file=sys.stderr)
+            return 1
+        return 0
+
     fl = sub.add_parser(
         "floor",
         help="import and analyse a NEPSE floor sheet (there is no floor-sheet "
@@ -543,6 +580,18 @@ def build_parser() -> argparse.ArgumentParser:
     wpl.add_argument("--page", type=int, help="filter by page")
     wpl.add_argument("--limit", type=int, default=50, help="max rows (default 50)")
     wpl.set_defaults(func=_cmd_pdf_list)
+
+    wpr = wpsub.add_parser(
+        "review",
+        help="mark specific records reviewed/corrected/rejected (the human step)",
+    )
+    wpr.add_argument("--ids", required=True, help="comma-separated record ids, e.g. 1,2,3")
+    wpr.add_argument(
+        "--status",
+        required=True,
+        help="reviewed | corrected | rejected (not 'unreviewed')",
+    )
+    wpr.set_defaults(func=_cmd_pdf_review)
 
     return p
 

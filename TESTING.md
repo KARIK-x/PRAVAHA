@@ -87,3 +87,9 @@ it pins down so a future reader can tell what it protects against.
 | `test_audit_a_fixes.py::test_a_bad_journal_edit_is_a_400_with_the_reason_not_a_500` | Bad edit returned 500 instead of 400 |
 | `test_audit_a_fixes.py::test_notes_sent_as_an_edit_is_saved_instead_of_discarded` | `notes` alias discarded on PATCH |
 | `test_audit_a_fixes.py::test_a_position_priced_on_an_older_day_is_flagged_and_dated` | Valuation mixed prices from different dates |
+| `test_written_pdf.py::test_import_records_stores_the_real_page_count` | The PDF's page count was a hardcoded magic `52` (Audit B) |
+| `test_written_pdf.py::test_min_confidence_filter_includes_that_level_and_above` | `min_confidence=high` also returned medium records (Audit B) |
+| `test_api.py::test_written_pdf_record_type_is_validated_not_a_500` | `?record_type=` returned 500 instead of 400 (Audit B) |
+| `test_written_pdf.py::test_review_status_refuses_returning_to_unreviewed` | A checked record could be sent back to `unreviewed`, hiding that it was once reviewed |
+| `test_research.py::test_journal_only_answer_survives_a_missing_pdf_table` | A store with no `pdf_records` table raised `sqlite3.OperationalError` instead of answering |
+| `test_api.py::test_research_ask_still_404s_when_there_is_nothing_to_answer` | The journal-only fallback must not turn "no data at all" into a 200 |

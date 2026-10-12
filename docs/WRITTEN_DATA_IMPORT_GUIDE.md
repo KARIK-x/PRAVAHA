@@ -77,14 +77,26 @@ curl http://127.0.0.1:8710/api/written-pdf/summary
 
 ## Step 4 — review
 
-Only after a human confirms a record is it safe for analytical use:
+Only after a human confirms a record is it safe for analytical use. Review is
+a deliberate, one-way step — there are three ways to do it:
 
-- Mark `review_status` to `reviewed` (or `corrected`) and re-import.
-- Re-import is **idempotent**: the same `(source_file, content_hash)`
-  with the same `(page, source_ref, field_name, symbol)` updates the
-  existing row instead of creating a duplicate.
-- Query reviewed-only records with `--reviewed` or
-  `?reviewed_only=true`.
+| Surface | How |
+| --- | --- |
+| CLI | `megatool pdf review --ids 1,2,3 --status reviewed` (also `corrected`, `rejected`) |
+| Web | the **PDF Journal** tab → a row's **✓ review** / **✕ reject** button |
+| API | `POST /api/written-pdf/review` with `{"ids": [1,2,3], "status": "reviewed"}` |
+
+- Start from `megatool pdf list` to see the ids and what each record claims.
+- `--status unreviewed` is **refused**: a record that was once checked cannot be
+  sent back to unreviewed to hide that fact.
+- An id that does not exist is reported, never silently ignored.
+- Re-importing the same `(source_file, content_hash)` with the same
+  `(page, source_ref, field_name, symbol)` updates the existing row instead of
+  creating a duplicate — so a *corrected* value can also be pushed by fixing the
+  JSON and re-importing.
+- Query reviewed-only records with `--reviewed` or `?reviewed_only=true`.
+
+Only reviewed records are ever surfaced by the Research Assistant.
 
 ## What the import validates
 
