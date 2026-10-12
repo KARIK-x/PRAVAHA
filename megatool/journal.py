@@ -11,7 +11,8 @@ All state lives in SQLite (``journal_entries``); no market data is written here.
 
 from __future__ import annotations
 
-from datetime import datetime
+import math
+from datetime import UTC, datetime
 from typing import Any
 
 from megatool.db import get_conn, now_iso
@@ -28,13 +29,20 @@ def _parse_ts(value: Any, field_name: str) -> str | None:
     if value in (None, ""):
         return None
     try:
-        datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError as exc:
         raise JournalError(f"{field_name} is not an ISO timestamp: {value!r}") from exc
-    return str(value)
+    # Store UTC. Comparisons in this module are lexicographic, so a timestamp
+    # written with a local offset ("+05:45") would sort against a UTC one by
+    # its wall-clock text rather than by when it happened - and a trade that
+    # really closed before it opened could pass the closed-at check.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)  # naive means UTC, as now_iso() writes
+    return dt.astimezone(UTC).isoformat(timespec="seconds")
 
 
 def _clean(data: dict[str, Any]) -> dict[str, Any]:
+    _reject_unknown_fields(data)
     out: dict[str, Any] = {}
     out["symbol"] = str(data["symbol"]).strip().upper() if data.get("symbol") else None
     out["strategy"] = data.get("strategy")
@@ -54,6 +62,11 @@ def _clean(data: dict[str, Any]) -> dict[str, Any]:
             value = float(raw)
         except (TypeError, ValueError) as exc:
             raise JournalError(f"{name} must be a number") from exc
+        if not math.isfinite(value):
+            # `NaN <= 0` is False, so NaN passes the comparisons below and is
+            # then stored by SQLite as NULL: the entry looks saved and has
+            # silently lost its prices.
+            raise JournalError(f"{name} must be a finite number")
         if (
             name in ("entry_price", "exit_price", "planned_target", "planned_invalidation")
             and value <= 0
@@ -87,12 +100,14 @@ def _clean(data: dict[str, Any]) -> dict[str, Any]:
         out["followed_plan"] = int(fp)
     else:
         try:
-            v = int(fp)
+            v = float(fp)
         except (TypeError, ValueError) as exc:
             raise JournalError("followed_plan must be 1, 0 or null") from exc
-        if v not in (0, 1):
+        # int(1.7) == 1, so truncating would record a definite "followed the
+        # plan" for a value that is neither 1 nor 0.
+        if not math.isfinite(v) or v not in (0.0, 1.0):
             raise JournalError("followed_plan must be 1, 0 or null")
-        out["followed_plan"] = v
+        out["followed_plan"] = int(v)
 
     out["opened_at"] = _parse_ts(data.get("opened_at"), "opened_at")
     out["closed_at"] = _parse_ts(data.get("closed_at"), "closed_at")
@@ -117,8 +132,36 @@ _COLUMNS = (
 )
 
 
-def create_entry(data: dict[str, Any], db_path=None) -> int:
-    clean = _clean(data)
+def _reject_unknown_fields(data: dict[str, Any]) -> None:
+    """Reject keys this module does not read, rather than dropping them.
+
+    A silently ignored field is the failure mode this whole module is built to
+    avoid: a caller sending ``entry_prc`` (a typo for ``entry_price``) would
+    otherwise get HTTP 200 and lose their entry price with no signal that
+    anything went wrong. Failing loudly costs one round-trip; silently
+    discarding a trader's recorded number costs them their journal.
+
+    Derived from ``_COLUMNS`` plus the one documented alias, so the two
+    definitions cannot drift apart.
+    """
+    known = set(_COLUMNS) | {"notes"}  # `notes` is the alias for outcome_notes
+    unknown = set(data) - known
+    if unknown:
+        raise JournalError(
+            f"unknown field(s): {', '.join(sorted(unknown))}. These would be "
+            f"ignored, and ignoring them silently is how a trader loses data. "
+            f"Accepted fields: {', '.join(sorted(known))}."
+        )
+
+
+def _validate(clean: dict[str, Any]) -> None:
+    """Cross-field rules every write must satisfy, create *and* update.
+
+    Keeping this separate from ``create_entry`` matters: an update that skips
+    it can close a trade without an exit price, and the stats then report an
+    entry that is neither open nor closed - silently under-counting the sample
+    every win rate in this module is built on.
+    """
     if clean["entry_price"] is None and clean["thesis"] is None:
         raise JournalError("an entry needs at least a thesis or an entry price")
     if clean["closed_at"] and clean["exit_price"] is None:
@@ -130,6 +173,11 @@ def create_entry(data: dict[str, Any], db_path=None) -> int:
         and clean["closed_at"] < clean["opened_at"]
     ):
         raise JournalError("closed_at cannot be before opened_at")
+
+
+def create_entry(data: dict[str, Any], db_path=None) -> int:
+    clean = _clean(data)
+    _validate(clean)
     cols = ", ".join(_COLUMNS)
     marks = ", ".join("?" for _ in _COLUMNS)
     with get_conn(db_path) as conn:
@@ -146,7 +194,17 @@ def update_entry(entry_id: int, data: dict[str, Any], db_path=None) -> bool:
         existing = get_entry(entry_id, db_path)
     except JournalError:
         return False
+    # ``notes`` is an alias for ``outcome_notes``. On a merge the stored value
+    # would otherwise win over the incoming ``notes`` and the edit would be
+    # dropped with a 200 - the exact silent discard this alias exists to avoid.
+    if "outcome_notes" not in data and "notes" in data:
+        data = {**data, "outcome_notes": data["notes"]}
+    # `get_entry` returns the whole row, including bookkeeping columns the
+    # caller cannot set. Strip them so the unknown-field check reads the
+    # OWNER's keys, not the schema's.
+    existing = {k: v for k, v in existing.items() if k in _COLUMNS}
     clean = _clean({**existing, **data})
+    _validate(clean)
     sets = ", ".join(f"{c}=?" for c in _COLUMNS)
     with get_conn(db_path) as conn:
         cur = conn.execute(
@@ -215,8 +273,14 @@ def _r_multiple(e: dict[str, Any]) -> float | None:
 def journal_stats(db_path=None) -> dict[str, Any]:
     rows = list_entries(limit=100_000, db_path=db_path)
     closed = [e for e in rows if e["closed_at"] and e["exit_price"] is not None]
-    wins = [e for e in closed if e["exit_price"] > e["entry_price"]]
-    losses = [e for e in closed if e["exit_price"] < e["entry_price"]]
+    # An entry may be closed with an exit price and no entry price (a
+    # thesis-only trade is legal). Comparing exit to a missing entry raises
+    # TypeError and used to kill this whole endpoint with a 500, so such
+    # entries are counted and excluded from the win rate instead.
+    comparable = [e for e in closed if e["entry_price"] is not None]
+    unpriced = len(closed) - len(comparable)
+    wins = [e for e in comparable if e["exit_price"] > e["entry_price"]]
+    losses = [e for e in comparable if e["exit_price"] < e["entry_price"]]
 
     r_values = [r for r in (_r_multiple(e) for e in closed) if r is not None]
     adherence = [e["followed_plan"] for e in rows if e["followed_plan"] is not None]
@@ -225,11 +289,20 @@ def journal_stats(db_path=None) -> dict[str, Any]:
     for e in closed:
         key = e["strategy"] or "(no strategy recorded)"
         bucket = by_strategy.setdefault(
-            key, {"strategy": key, "closed": 0, "wins": 0, "r_values": []}
+            key,
+            {
+                "strategy": key,
+                "closed": 0,
+                "comparable": 0,
+                "wins": 0,
+                "r_values": [],
+            },
         )
         bucket["closed"] += 1
-        if e["exit_price"] > e["entry_price"]:
-            bucket["wins"] += 1
+        if e["entry_price"] is not None:
+            bucket["comparable"] += 1
+            if e["exit_price"] > e["entry_price"]:
+                bucket["wins"] += 1
         r = _r_multiple(e)
         if r is not None:
             bucket["r_values"].append(r)
@@ -241,9 +314,10 @@ def journal_stats(db_path=None) -> dict[str, Any]:
             {
                 "strategy": bucket["strategy"],
                 "closed": bucket["closed"],
+                "comparable": bucket["comparable"],
                 "wins": bucket["wins"],
-                "win_rate_pct": round(100.0 * bucket["wins"] / bucket["closed"], 2)
-                if bucket["closed"]
+                "win_rate_pct": round(100.0 * bucket["wins"] / bucket["comparable"], 2)
+                if bucket["comparable"]
                 else None,
                 "avg_r": round(sum(rs) / len(rs), 4) if rs else None,
                 "graded_r": len(rs),
@@ -259,8 +333,9 @@ def journal_stats(db_path=None) -> dict[str, Any]:
         "closed": len(closed),
         "wins": len(wins),
         "losses": len(losses),
-        "breakeven": len(closed) - len(wins) - len(losses),
-        "win_rate_pct": round(100.0 * len(wins) / len(closed), 2) if closed else None,
+        "breakeven": len(comparable) - len(wins) - len(losses),
+        "win_rate_pct": round(100.0 * len(wins) / len(comparable), 2) if comparable else None,
+        "closed_without_entry_price": unpriced,
         "avg_r": round(sum(r_values) / len(r_values), 4) if r_values else None,
         "graded_r": len(r_values),
         "plan_adherence_pct": round(100.0 * followed / total_planned, 2) if total_planned else None,
@@ -268,11 +343,11 @@ def journal_stats(db_path=None) -> dict[str, Any]:
         "by_strategy": strategies,
         "note": "Win rate and R are measurements of recorded trades only. A small "
         "sample says almost nothing, and nothing here predicts future results.",
-        "warnings": _warnings(len(closed), total_planned, len(r_values)),
+        "warnings": _warnings(len(closed), total_planned, len(r_values), unpriced),
     }
 
 
-def _warnings(closed: int, adherence: int, graded: int) -> list[str]:
+def _warnings(closed: int, adherence: int, graded: int, unpriced: int = 0) -> list[str]:
     out: list[str] = []
     if closed == 0:
         out.append("No closed trades yet, so no performance statistics are shown.")
@@ -290,6 +365,12 @@ def _warnings(closed: int, adherence: int, graded: int) -> list[str]:
         out.append(
             f"{closed - graded} closed trade(s) have no complete plan (entry, "
             "target, invalidation), so they are excluded from R statistics."
+        )
+    if unpriced:
+        out.append(
+            f"{unpriced} closed trade(s) recorded an exit price but no entry "
+            "price, so they cannot be counted as a win or a loss. The win rate "
+            f"is computed over the other {closed - unpriced}."
         )
     return out
 

@@ -18,7 +18,9 @@ There is no floor-sheet API to call (the aggregator sites publish pages, and
 the official API is auth-walled), so this module is deliberately **import
 based**: paste or upload the CSV for a session. Re-importing the same file is
 a no-op (`content_hash`), and the same trade arriving in two different files
-cannot be counted twice (per-row unique key).
+**for the same session** cannot be counted twice (per-row unique key). A file
+is not protected across sessions: importing identical bytes under a second
+`traded_at` stores them again and is reported as a warning.
 """
 
 from __future__ import annotations
@@ -26,7 +28,9 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from megatool.db import get_conn, init_app_db, now_iso
@@ -99,11 +103,32 @@ def _map_columns(fieldnames: list[str]) -> dict[str, str]:
 
 
 def _to_float(raw: str) -> float:
-    """Parse a number that may carry thousand separators or a currency sign."""
-    cleaned = "".join(ch for ch in raw if ch.isdigit() or ch in ".-")
-    if cleaned in ("", "-", "."):
+    """Parse a number that may carry thousand separators or a currency sign.
+
+    ``Rs. 1,000`` must become 1000, not 0.1. The old filter kept the "." of
+    "Rs." and dropped the "," and silently returned a rate one thousand times
+    too small - and a wrong rate flows into amount, turnover and HHI with no
+    warning anywhere.
+    """
+    text = raw.strip()
+    text = re.sub(r"(?i)\b(rs|npr|nrs|inr|usd|np)\b\.?", "", text)
+    text = re.sub(r"[^\d.,\-]", "", text)
+    negative = text.startswith("-")
+    text = text.replace("-", "")
+    if "," in text and "." in text:
+        # Both separators: the last one is the decimal point.
+        if text.rfind(",") > text.rfind("."):
+            text = text.replace(".", "").replace(",", ".")
+        else:
+            text = text.replace(",", "")
+    else:
+        text = text.replace(",", "")
+    if text.count(".") > 1:
         raise ValueError(f"not a number: {raw!r}")
-    return float(cleaned)
+    if text in ("", "."):
+        raise ValueError(f"not a number: {raw!r}")
+    value = float(text)
+    return -value if negative else value
 
 
 def parse_floorsheet(text: str) -> ParseResult:
@@ -135,17 +160,37 @@ def parse_floorsheet(text: str) -> ParseResult:
             symbol = (raw.get(mapping["symbol"]) or "").strip().upper()
             buyer = (raw.get(mapping["buyer"]) or "").strip()
             seller = (raw.get(mapping["seller"]) or "").strip()
-            quantity = int(round(_to_float(raw.get(mapping["quantity"]) or "")))
+            qty_raw = _to_float(raw.get(mapping["quantity"]) or "")
+            quantity = int(round(qty_raw))
             rate = _to_float(raw.get(mapping["rate"]) or "")
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, OverflowError) as exc:
+            # OverflowError: a quantity like 1e400 is a float, and int() of it
+            # has no SQLite representation. The row is skipped like any other
+            # bad row - it must not abort the whole session's import.
             out.skipped.append({"line": line_no, "reason": str(exc)})
             continue
+
+        if abs(qty_raw - quantity) > 1e-9:
+            # Fractional quantities are round-half-to-even, so 2.5 -> 2 and
+            # 3.5 -> 4. Odd lots are reported here rather than rounded away
+            # silently, exactly like a disagreeing amount.
+            out.warnings.append(
+                f"line {line_no}: quantity {qty_raw:g} is fractional; stored as {quantity}"
+            )
 
         if not symbol or not buyer or not seller:
             out.skipped.append({"line": line_no, "reason": "empty symbol, buyer or seller"})
             continue
         if quantity <= 0:
             out.skipped.append({"line": line_no, "reason": f"quantity {quantity} <= 0"})
+            continue
+        if quantity > 10**12:
+            # Well beyond any real NEPSE print, and beyond what SQLite's
+            # INTEGER column accepts without raising mid-INSERT - which would
+            # abort the whole session instead of skipping one corrupt line.
+            out.skipped.append(
+                {"line": line_no, "reason": f"quantity {quantity} is implausibly large"}
+            )
             continue
         if rate <= 0:
             out.skipped.append({"line": line_no, "reason": f"rate {rate} <= 0"})
@@ -208,10 +253,34 @@ def import_floorsheet(
     column in the file takes precedence for that individual row.
     """
     init_app_db(db_path)
+    try:
+        datetime.fromisoformat(str(traded_at).replace("Z", "+00:00"))
+    except ValueError as exc:
+        # A typo'd session date would otherwise be stored as a label and every
+        # summary would treat it as a real trading day.
+        raise FloorSheetError(
+            f"traded_at must be an ISO date or timestamp, got {traded_at!r}"
+        ) from exc
     parsed = parse_floorsheet(text)
     content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
 
     with get_conn(db_path) as conn:
+        elsewhere = conn.execute(
+            "SELECT DISTINCT traded_at FROM floorsheet_imports "
+            "WHERE content_hash = ? AND traded_at <> ?",
+            (content_hash, traded_at),
+        ).fetchall()
+        if elsewhere:
+            # A file is one session. If identical bytes arrive under a second
+            # label, both sessions now count the same prints - say so loudly
+            # rather than letting turnover and concentration be inflated.
+            other = ", ".join(r["traded_at"] for r in elsewhere)
+            parsed.warnings.append(
+                f"This exact file was already imported for session(s) {other}. "
+                f"Importing it again under {traded_at} stores the same prints a "
+                f"second time, so combined totals across those sessions will "
+                f"double-count."
+            )
         existing = conn.execute(
             "SELECT id, imported_at FROM floorsheet_imports "
             "WHERE content_hash = ? AND traded_at = ?",
@@ -269,6 +338,13 @@ def import_floorsheet(
             ),
         )
         import_id = int(cur.lastrowid or 0)
+        # ``stored_trades`` means the same thing in both return paths: how many
+        # trades the session holds in total. The duplicate-file branch already
+        # reported the session total, so this branch must too.
+        stored = conn.execute(
+            "SELECT COUNT(*) FROM floorsheet_trades WHERE traded_at = ?",
+            (traded_at,),
+        ).fetchone()[0]
 
     return {
         "already_imported": False,
@@ -277,7 +353,7 @@ def import_floorsheet(
         "rows_total": parsed.total_rows,
         "rows_imported": inserted,
         "rows_skipped": len(parsed.skipped),
-        "stored_trades": inserted,
+        "stored_trades": stored,
         "skipped": parsed.skipped[:50],
         "warnings": parsed.warnings[:50],
         "columns_found": parsed.columns_found,
@@ -288,10 +364,16 @@ def import_floorsheet(
     }
 
 
-def _shares(rows: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
-    """Rank one side of the sheet by quantity, with share of the total."""
-    total_quantity = sum(int(r[key + "_quantity"]) for r in rows)
-    total_amount = sum(float(r["amount"]) for r in rows)
+def _shares(
+    rows: list[dict[str, Any]], key: str, scope_quantity: int, scope_amount: float
+) -> list[dict[str, Any]]:
+    """Rank one side of the sheet, with each row's share of the SCOPE total.
+
+    The denominator must be the whole session (or filter), never the top-N
+    subset that survived the LIMIT: with the subset, ten brokers holding 84%
+    of the flow each report an inflated share and the listed shares sum to
+    exactly 100% while covering less than the session.
+    """
     out = []
     for r in rows:
         q = int(r[key + "_quantity"])
@@ -300,11 +382,11 @@ def _shares(rows: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
                 key: r[key],
                 "quantity": q,
                 "amount": round(float(r["amount"]), 2),
-                "share_of_quantity_pct": round(q / total_quantity * 100.0, 4)
-                if total_quantity
+                "share_of_quantity_pct": round(q / scope_quantity * 100.0, 4)
+                if scope_quantity
                 else None,
-                "share_of_amount_pct": round(float(r["amount"]) / total_amount * 100.0, 4)
-                if total_amount
+                "share_of_amount_pct": round(float(r["amount"]) / scope_amount * 100.0, 4)
+                if scope_amount
                 else None,
             }
         )
@@ -432,8 +514,18 @@ def summary(
             "quantity": int(total["quantity"] or 0),
             "amount": round(float(total["amount"] or 0), 2),
         },
-        "top_buyers": _shares([dict(r) for r in buys], "buyer"),
-        "top_sellers": _shares([dict(r) for r in sells], "seller"),
+        "top_buyers": _shares(
+            [dict(r) for r in buys],
+            "buyer",
+            int(total["quantity"] or 0),
+            float(total["amount"] or 0),
+        ),
+        "top_sellers": _shares(
+            [dict(r) for r in sells],
+            "seller",
+            int(total["quantity"] or 0),
+            float(total["amount"] or 0),
+        ),
         "top_symbols": [
             {
                 "symbol": r["symbol"],

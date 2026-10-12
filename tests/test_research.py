@@ -108,10 +108,10 @@ def test_trend_figures_match_hand_calculation():
     assert by["sma_20"] == pytest.approx(float(np.mean(closes[-20:])))  # 190.5
     assert by["price_vs_sma_20_pct"] == pytest.approx((200 / 190.5 - 1) * 100, abs=1e-3)
     assert by["sma_200"] == pytest.approx(100.5)
-    assert by["high_252"] == 200.0
-    assert by["low_252"] == 1.0
+    assert by["high_250s"] == 200.0
+    assert by["low_250s"] == 1.0
     assert by["position_in_52w_range_pct"] == 100.0
-    assert by["pct_off_252w_high"] == 0.0
+    assert by["pct_off_250s_high"] == 0.0
 
 
 def test_momentum_figures_match_hand_calculation():

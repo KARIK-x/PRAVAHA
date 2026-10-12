@@ -211,8 +211,17 @@ def run_forecast(
             f"{model}: unknown parameter(s) {sorted(unknown)}; allowed {sorted(spec['params'])}"
         )
 
-    series = np.asarray(values.to_numpy() if isinstance(values, pd.Series) else values, dtype=float)
-    series = series[np.isfinite(series)]
+    raw = np.asarray(values.to_numpy() if isinstance(values, pd.Series) else values, dtype=float)
+    # Non-finite points are dropped, so the dates must be dropped with them.
+    # Filtering the series alone silently shifts every hold-out row onto the
+    # wrong date, which is worse than showing nothing: it misdates evidence.
+    finite = np.isfinite(raw)
+    series = raw[finite]
+    date_list = None if dates is None else [str(d) for d in dates]
+    if date_list is not None:
+        if len(date_list) != len(raw):
+            raise ForecastError(f"dates has {len(date_list)} entries but the series has {len(raw)}")
+        date_list = [d for d, keep in zip(date_list, finite, strict=True) if keep]
     horizon = int(horizon)
     if horizon < 1:
         raise ForecastError("horizon must be >= 1")
@@ -277,8 +286,9 @@ def run_forecast(
             "single sample that could be luck."
         )
 
-    if dates is None:
-        dates = [str(i) for i in range(len(series))]
+    if date_list is None:
+        date_list = [str(i) for i in range(len(series))]
+    dates = date_list
     holdout_start = len(series) - holdout_n
 
     residuals = test - predicted
@@ -321,7 +331,11 @@ def run_forecast(
             "rmse": round(model_err, 6),
             "mape": None if mape(test, predicted) is None else round(mape(test, predicted), 6),
             "smape": None if smape(test, predicted) is None else round(smape(test, predicted), 6),
-            "directional_accuracy_pct": None
+            # Measured AGAINST the naive baseline's direction, not against a
+            # zero move: it counts days where (actual - baseline) and
+            # (predicted - baseline) agree in sign. The name carries the
+            # qualifier so no UI can present it as a plain direction hit-rate.
+            "directional_accuracy_vs_naive_pct": None
             if directional_accuracy(test, predicted, baseline) is None
             else round(directional_accuracy(test, predicted, baseline), 4),
             "naive_rmse": round(naive_err, 6),

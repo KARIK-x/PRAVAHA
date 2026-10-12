@@ -10,6 +10,7 @@ so the front end can never display a number without its source.
 from __future__ import annotations
 
 import json
+import re
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from typing import Any
@@ -310,11 +311,14 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
 
     # ------------------------------------------------------------- securities
     @app.get("/api/securities")
-    def securities(q: str | None = None, limit: int = Query(200, le=2000)) -> dict[str, Any]:
+    def securities(q: str | None = None, limit: int = Query(200, ge=1, le=2000)) -> dict[str, Any]:
         store = get_store()
         df = store.coverage()
         if q:
-            mask = df["symbol"].str.contains(q.upper().strip(), case=False, na=False)
+            # ``q`` is user input reaching a regular expression. Unescaped, a
+            # stray "(" raises (a 500), and a "." silently matches more than
+            # the trader typed ("A.C" matching "ABC").
+            mask = df["symbol"].str.contains(re.escape(q.upper().strip()), case=False, na=False)
             df = df[mask]
         df = df.head(limit)
         return {
@@ -338,7 +342,7 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
         symbol: str,
         start: date | None = None,
         end: date | None = None,
-        limit: int | None = Query(None, le=5000),
+        limit: int | None = Query(None, ge=1, le=5000),
     ) -> dict[str, Any]:
         store = get_store()
         df = store.get_bars(symbol.upper(), start=start, end=end, limit=limit)
@@ -777,7 +781,14 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
 
     @app.patch("/api/journal/{entry_id}")
     def journal_patch(entry_id: int, req: PydanticJournalRequest) -> dict[str, Any]:
-        if not journal_update(entry_id, req.model_dump(exclude_unset=True)):
+        # A bad edit (a negative price, a close with no exit) is the owner's
+        # input, not a server fault: it must arrive as a 400 with the reason,
+        # never as a bare 500.
+        try:
+            updated = journal_update(entry_id, req.model_dump(exclude_unset=True))
+        except JournalError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if not updated:
             raise HTTPException(404, f"no journal entry with id {entry_id}")
         return journal_get(entry_id)
 
@@ -841,7 +852,7 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
             raise HTTPException(400, str(exc)) from exc
 
     @app.get("/api/dashboard")
-    def dashboard(top: int = Query(10, le=50)) -> dict[str, Any]:
+    def dashboard(top: int = Query(10, ge=1, le=50)) -> dict[str, Any]:
         """Market snapshot from the most recent stored bar per symbol.
 
         This is NOT a live market summary. Breadth and movers are computed from

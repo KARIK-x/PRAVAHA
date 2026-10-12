@@ -217,8 +217,8 @@ def build_report(
 
     year = closes[-min(250, len(closes)) :]
     hi52, lo52 = float(year.max()), float(year.min())
-    add(Finding("trend", "high_252", round(hi52, 4), "price", "last 250 sessions", src()))
-    add(Finding("trend", "low_252", round(lo52, 4), "price", "last 250 sessions", src()))
+    add(Finding("trend", "high_250s", round(hi52, 4), "price", "last 250 sessions", src()))
+    add(Finding("trend", "low_250s", round(lo52, 4), "price", "last 250 sessions", src()))
     span = hi52 - lo52
     add(
         Finding(
@@ -233,7 +233,7 @@ def build_report(
     add(
         Finding(
             "trend",
-            "pct_off_252w_high",
+            "pct_off_250s_high",
             round(float((last / hi52 - 1.0) * 100.0), 4),
             "%",
             "last 250 sessions",

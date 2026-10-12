@@ -10,6 +10,7 @@ so short plans are rejected rather than silently supported.
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -46,6 +47,9 @@ class PositionSizing:
     actual_risk_pct: float
     remainder_cash: float
     rounded_down: bool
+    #: Set when the risk budget cannot even buy one unit: the honest reading
+    #: is "do not take this trade at this size", not "buy zero".
+    warning: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -100,6 +104,10 @@ def position_size(
         price = float(price)
     except (TypeError, ValueError) as exc:
         raise PlanError("capital, risk_pct, risk_per_share and price must be numbers") from exc
+    if not all(math.isfinite(v) for v in (capital, risk_pct, risk_per_share, price)):
+        # NaN/inf are numbers, and `NaN <= 0` is False, so without this they
+        # reach int() below and explode as a plain ValueError (a 500).
+        raise PlanError("capital, risk_pct, risk_per_share and price must be finite numbers")
     if capital <= 0:
         raise PlanError("capital must be > 0")
     if not 0 < risk_pct <= 100:
@@ -111,10 +119,32 @@ def position_size(
 
     budget = capital * risk_pct / 100.0
     raw_units = budget / risk_per_share
+    # NOTE: this affordability cap deliberately IGNORES broker/sebon fees and
+    # taxes, so the real cash needed for `units` is slightly above cash_used.
     affordable = capital / price
     units = int(min(raw_units, affordable))
     cash_used = units * price
     actual_risk = units * risk_per_share
+    # Which limit actually binds? Comparing against `raw_units` would be wrong:
+    # it is itself capped by cash, so any truncated size would look cash-limited.
+    capped_by_cash = units > 0 and affordable < raw_units
+    if units == 0:
+        # The honest reading is "this trade is not sizeable", never "buy zero".
+        warning = (
+            f"Your risk budget (NPR {budget:,.2f}) cannot buy a single unit at "
+            f"NPR {price:,.2f}. Do not take this trade at these settings: either "
+            f"the stop is too tight for the price, or the size is too small for "
+            f"your capital."
+        )
+    elif capped_by_cash:
+        warning = (
+            "Sizing is limited by the cash you have, not by your risk budget: "
+            "the full capital buys only this many units. This figure EXCLUDES "
+            "broker and sebon fees and taxes, so the real order costs slightly "
+            "more than cash_used."
+        )
+    else:
+        warning = None
     return PositionSizing(
         capital=capital,
         risk_pct=risk_pct,
@@ -125,6 +155,7 @@ def position_size(
         actual_risk_pct=round(actual_risk / capital * 100.0, 4),
         remainder_cash=round(capital - cash_used, 2),
         rounded_down=units < raw_units,
+        warning=warning,
     )
 
 
@@ -132,6 +163,10 @@ def plan_outcome(entry: float, stop: float, target: float, exit_price: float) ->
     """Grade a finished trade against the plan it was supposed to follow."""
     plan = make_plan(entry, stop, target)
     exit_price = float(exit_price)
+    if not math.isfinite(exit_price):
+        raise PlanError("exit_price must be a finite number")
+    if exit_price <= 0:
+        raise PlanError(f"exit_price must be > 0, got {exit_price}")
     r = (exit_price - entry) / plan.risk_per_share
     if exit_price >= target:
         result = "target"

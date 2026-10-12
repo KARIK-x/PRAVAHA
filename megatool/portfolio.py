@@ -12,6 +12,7 @@ valued in terms of invested positions only, which is stated in the API output.
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -49,10 +50,17 @@ class Position:
     first_traded_at: str | None = None
     last_traded_at: str | None = None
     buy_value: float = 0.0
+    #: Lifetime spend on this symbol (every buy's quantity x price + fees).
+    #: It never decreases when you sell, so it is NOT the cost basis - that is
+    #: ``avg_cost * quantity``. Kept because it shows how much cash went in.
     origin: str = "transactions"
     notes: str | None = None
     #: filled in during valuation
     last_price: float | None = None
+    #: the trading date of ``last_price``. A portfolio whose positions carry
+    #: different dates is a portfolio mixing old and new prices, so the date
+    #: travels with the number instead of being summarised far away.
+    price_as_of: str | None = None
     market_value: float | None = None
     unrealized_pnl: float | None = None
     unrealized_pct: float | None = None
@@ -86,19 +94,34 @@ def _normalise(tx: dict[str, Any]) -> dict[str, Any]:
         price = float(tx.get("price"))
     except (TypeError, ValueError) as exc:
         raise PortfolioError("price must be a number") from exc
+    if not math.isfinite(price):
+        # NaN and +/-inf are numbers in Python, and `NaN <= 0` is False, so
+        # without this check they sail through the comparison below. NaN then
+        # hits SQLite's NOT NULL as a 500; inf is STORED and poisons every
+        # derived figure (a 1e999 from a browser parses as Infinity).
+        raise PortfolioError("price must be a finite number")
     if price <= 0:
         raise PortfolioError("price must be > 0")
     try:
         fees = float(tx.get("fees") or 0.0)
     except (TypeError, ValueError) as exc:
         raise PortfolioError("fees must be a number") from exc
+    if not math.isfinite(fees):
+        raise PortfolioError("fees must be a finite number")
     if fees < 0:
         raise PortfolioError("fees cannot be negative")
     traded_at = tx.get("traded_at") or now_iso()
     try:
-        datetime.fromisoformat(str(traded_at).replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(str(traded_at).replace("Z", "+00:00"))
     except ValueError as exc:
         raise PortfolioError(f"traded_at is not an ISO timestamp: {traded_at!r}") from exc
+    # Store UTC. The ledger is replayed in ORDER BY traded_at, so two rows
+    # written with different offsets would otherwise be ordered by wall-clock
+    # text rather than by when they happened - and average cost and realised
+    # P&L depend on that order.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)  # naive means UTC, as now_iso() writes
+    traded_at = dt.astimezone(UTC).isoformat(timespec="seconds")
     return {
         "symbol": symbol,
         "side": side,
@@ -147,11 +170,14 @@ def add_transaction(tx: dict[str, Any], db_path=None) -> Transaction:
     clean = _normalise(tx)
     with get_conn(db_path) as conn:
         if clean["side"] == "sell":
-            held = _held_quantity(conn, clean["symbol"])
+            held = _held_quantity(conn, clean["symbol"], as_of=clean["traded_at"])
             if clean["quantity"] > held:
                 raise PortfolioError(
-                    f"cannot sell {clean['quantity']} of {clean['symbol']}: only "
-                    f"{held} held in the ledger"
+                    f"cannot sell {clean['quantity']} of {clean['symbol']} on "
+                    f"{clean['traded_at']}: only {held} held in the ledger as of "
+                    f"that date. A sale must be dated on or after the buys that "
+                    f"funded it, otherwise the realised P&L of both trades is "
+                    f"computed out of order."
                 )
         cur = conn.execute(
             """
@@ -180,12 +206,26 @@ def delete_transaction(tx_id: int, db_path=None) -> bool:
         return cur.rowcount > 0
 
 
-def _held_quantity(conn, symbol: str) -> int:
-    row = conn.execute(
-        "SELECT COALESCE(SUM(CASE WHEN side='buy' THEN quantity ELSE -quantity END),0) "
-        "AS q FROM portfolio_transactions WHERE symbol=?",
-        (symbol,),
-    ).fetchone()
+def _held_quantity(conn, symbol: str, as_of: str | None = None) -> int:
+    """Shares held, optionally only counting the ledger up to ``as_of``.
+
+    ``as_of`` matters when a sale is being validated: checking the net of the
+    WHOLE ledger lets a sale dated before the buys that funded it pass, and
+    the chronological derivation then computes a nonsense realised P&L (a
+    "-fees" loss on a profitable trade) that no warning explains.
+    """
+    if as_of is None:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(CASE WHEN side='buy' THEN quantity ELSE -quantity END),0) "
+            "AS q FROM portfolio_transactions WHERE symbol=?",
+            (symbol,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(CASE WHEN side='buy' THEN quantity ELSE -quantity END),0) "
+            "AS q FROM portfolio_transactions WHERE symbol=? AND traded_at <= ?",
+            (symbol, as_of),
+        ).fetchone()
     return int(row["q"])
 
 
@@ -256,6 +296,8 @@ def add_manual_position(
         raise PortfolioError("symbol is required")
     if quantity <= 0:
         raise PortfolioError("quantity must be > 0")
+    if not math.isfinite(avg_cost):
+        raise PortfolioError("avg_cost must be a finite number")
     if avg_cost <= 0:
         raise PortfolioError("avg_cost must be > 0")
     with get_conn(db_path) as conn:
@@ -293,6 +335,7 @@ def value_portfolio(store, db_path=None) -> dict[str, Any]:
     held = [p for p in positions if p.quantity > 0]
 
     prices: dict[str, float] = {}
+    price_dates: dict[str, str] = {}
     data_as_of: str | None = None
     if held:
         latest = store.latest_bars([p.symbol for p in held])
@@ -300,9 +343,11 @@ def value_portfolio(store, db_path=None) -> dict[str, Any]:
             for _, row in latest.iterrows():
                 close = row.get("close")
                 if close is not None and close == close:  # NaN check
-                    prices[str(row["symbol"])] = float(close)
+                    sym = str(row["symbol"])
+                    prices[sym] = float(close)
                     ts = row["trading_date"]
                     d = str(ts.date()) if hasattr(ts, "date") else str(ts)[:10]
+                    price_dates[sym] = d
                     if data_as_of is None or d > data_as_of:
                         data_as_of = d
 
@@ -312,6 +357,17 @@ def value_portfolio(store, db_path=None) -> dict[str, Any]:
         cost = p.avg_cost * p.quantity
         if p.symbol in prices:
             p.last_price = prices[p.symbol]
+            p.price_as_of = price_dates.get(p.symbol)
+            if p.price_as_of and data_as_of and p.price_as_of < data_as_of:
+                # Without this the summary would value one position at a
+                # today price and another at a two-year-old one, then present
+                # the combined market value and weights as if they were
+                # comparable. They are not, and the trader should be told.
+                p.flags.append(
+                    f"latest stored close is {p.price_as_of}, while the newest "
+                    f"data is {data_as_of}: this position is valued on an older "
+                    f"price than the rest"
+                )
             p.market_value = p.last_price * p.quantity
             p.unrealized_pnl = p.market_value - cost
             p.unrealized_pct = (p.unrealized_pnl / cost * 100.0) if cost else None
@@ -329,8 +385,9 @@ def value_portfolio(store, db_path=None) -> dict[str, Any]:
     unrealized = valued_total - cost_valued if cost_valued else 0.0
     weights = [p.weight_pct for p in held if p.weight_pct is not None]
     largest = max(weights) if weights else None
+    unvalued_count = sum(1 for p in held if p.market_value is None)
 
-    return {
+    out = {
         "positions": [p.to_dict() for p in positions],
         "summary": {
             "open_positions": len(held),
@@ -339,6 +396,7 @@ def value_portfolio(store, db_path=None) -> dict[str, Any]:
             "unrealized_pnl": round(unrealized, 2),
             "realized_pnl": round(realized, 2),
             "unvalued_cost": round(unvalued_cost, 2),
+            "unvalued_positions": unvalued_count,
             "largest_weight_pct": None if largest is None else round(largest, 2),
             "concentration_warning": bool(largest is not None and largest >= 40.0),
         },
@@ -346,8 +404,16 @@ def value_portfolio(store, db_path=None) -> dict[str, Any]:
         "live": False,
         "note": "Positions are derived from your transaction ledger. Valuation uses "
         "the latest STORED close (not a live quote); symbols without a stored "
-        "price are left unvalued. Cash balances are not modelled.",
+        "price are left unvalued. Cash balances are not modelled. Weights and "
+        "the concentration warning are shares of VALUED positions only: with an "
+        "unvalued position present, the real largest weight is smaller than "
+        "shown.",
     }
+
+    # Denominator disclosure (see unvalued_positions above): a partial
+    # valuation must say so, or a single missing price silently inflates every
+    # weight and can trip a concentration warning on a portfolio that isn't.
+    return out
 
 
 def portfolio_summary(db_path=None) -> dict[str, Any]:
