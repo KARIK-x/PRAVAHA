@@ -15,7 +15,7 @@ uv sync                     # dependencies into ./.venv (Python 3.12.3)
 uv run megatool init        # create/upgrade the local databases
 uv run megatool fetch       # download real NEPSE history (network)
 uv run megatool serve       # web terminal at http://127.0.0.1:8710
-uv run pytest               # 406 tests, ~20 s
+uv run pytest               # 466 tests, ~20 s
 ```
 
 The server binds `127.0.0.1` only. Nothing listens on the network interface.
@@ -29,8 +29,8 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | Analysis | `scanner.py`, `backtest.py`, `forecast.py`, `research.py`, `floorsheet.py` |
 | Personal state | `portfolio.py` (ledger-derived), `journal.py`, `planning.py` |
 | Interface | `api.py` (FastAPI, ~45 routes), `cli.py` (incl. `megatool floor import|summary`), `web/static/` (8 tabs) |
-| Tests | `tests/` — 421 tests across 11 files |
-| Docs | `docs/ARCHITECTURE.md`, `DATA_SOURCES.md`, `TECH_STACK_DECISIONS.md`, `RESEARCH_REGISTER.md`, `PROJECT_STATUS.md`, this file |
+| Tests | `tests/` — 466 tests across 12 files |
+| Docs | `docs/ARCHITECTURE.md`, `DATA_SOURCES.md`, `TECH_STACK_DECISIONS.md`, `RESEARCH_REGISTER.md`, `PROJECT_STATUS.md`, `TESTING.md`, `SOURCES.md`, this file |
 
 ### Data actually in the store
 
@@ -43,6 +43,15 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 - Quality sweep of the real rows: `open` outside the day range in ~15% of rows, `close`
   outside in 2 of 9,561, overall suspect rate 1.31%, AHPC has 9 `high_low_inverted` rows.
   Problems are **flagged, never deleted**.
+
+### The PDF
+
+- `WRITTENdata.pdf` (52 pages, 7.3 MB) sits in the project root. It was moved there
+  from `~/Downloads/AI Trading Nipsy/Written Data.pdf`.
+- It is a **handwritten, fully scanned** document with **no text layer** — OCR is required.
+- PyMuPDF renders pages; tesseract 5.5.0 with `eng`/`osd`/`snum` is installed.
+- It is git-ignored: it contains private trading records and must not be committed.
+- Extraction is **in progress**; see `docs/WRITTEN_DATA_PDF_AUDIT.md`.
 
 ## 3. Commits this session
 
@@ -57,6 +66,9 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | `e33680b` | Forecasting Lab and Research Assistant |
 | `e94baa0` | Floor-sheet import and analysis |
 | `f2e644f` | Web UI: Research, Portfolio and Journal tabs; two silent-data-loss fixes |
+| `12a2ec3` | `megatool floor` CLI (import / summary) |
+| `3e53cbd` | Fix every confirmed finding from Audit A and Audit B (2 CRITICAL, 4 HIGH, M/L items) |
+| `2446e6a` | Expose `comparable` (win-rate denominator) in journal stats; fix vacuous test |
 
 ## 4. Decisions worth not re-litigating
 
@@ -81,6 +93,37 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 
 ## 5. Defects found and fixed (all observed, not theorised)
 
+### From the two audits (2026-10-12)
+
+| # | Defect | How it surfaced | Fix |
+| --- | --- | --- | --- |
+| A1 | Forecast hold-out rows were misdated when a stored close was NaN | Audit A, re-verified by hand | dates masked with the same finite mask as values |
+| A2 | PATCH /api/journal/{id} with invalid data returned 500 | Audit A, executed | route catches `JournalError` → 400 |
+| A3 | NaN/infinity passed validation; inf was stored and poisoned derived figures | Audit A, executed | `math.isfinite` guards on price, fees, avg_cost, capital, journal numerics |
+| A4 | `notes` alias discarded on PATCH when `outcome_notes` already existed | Audit A, executed | alias resolved before the merge |
+| A5 | `update_entry` skipped the cross-field validation `create_entry` enforces | Audit A, executed | validation extracted to `_validate`, called by both |
+| A6 | Valuation mixed prices from different dates with no per-position date | Audit A, executed | `price_as_of` on each position + staleness flag |
+| A7 | `/api/securities?q=(` → 500; unescaped regex | Audit A, executed | `re.escape` |
+| A8 | One absurd quantity aborted a whole floor-sheet import | Audit A, executed | per-row skip + plausibility bound |
+| A9 | Same file re-imported under a different session label double-counted | Audit A, executed | loud warning |
+| A10 | `traded_at` on import was unvalidated free text | Audit A, executed | ISO validation → 400 |
+| A11 | `stored_trades` meant two different things | Audit A, executed | both paths return the session total |
+| A12 | Fractional CSV quantities silently rounded | Audit A, executed | per-row warning |
+| A13 | Negative `limit`/`top` silently dropped rows | Audit A, executed | `ge=1` bounds |
+| A14 | `followed_plan: 1.7` truncated to 1 | Audit A, executed | require exactly 0/1 |
+| A15 | `high_252`/`low_252` computed over 250 sessions | Audit A, executed | renamed to `high_250s`/`low_250s` |
+| A16 | `directional_accuracy_pct` measured against naive but not named so | Audit A, executed | renamed `directional_accuracy_vs_naive_pct` |
+| B1 | Journal stats crashed with 500 on a legal thesis-only entry | Audit B, re-verified | unpriced entries counted separately, excluded from win rate, explained |
+| B2 | Counterparty shares divided by the shown subset, not the session | Audit B, re-verified | denominator is the whole scope |
+| B3 | `Rs. 1,000` parsed as 0.1 | Audit B, re-verified | currency prefix stripped, validated |
+| B4 | Impossible exit (−5, NaN) graded as a real stop | Audit B, re-verified | validated → PlanError → 400 |
+| B5 | Backdated sell accepted, corrupting realised P&L | Audit B, re-verified | validated against holdings as of `traded_at` |
+| B6 | Typo'd journal field silently dropped | Audit B, re-verified | unknown fields rejected by name |
+| B7 | Sizing gave no signal when the budget cannot buy one unit | Audit B, re-verified | explicit warning |
+| B8 | Affordability cap did not disclose that fees are excluded | Audit B, re-verified | warning states it |
+
+### From earlier in the session
+
 | # | Defect | How it surfaced | Fix |
 | --- | --- | --- | --- |
 | 1 | A test helper omitted its `db_path`, so **14 synthetic journal rows were written into the owner's real database** during a normal test run | `test_journal.py` failures led to inspecting the real DB | Rows identified and deleted; the helper now requires the path; an autouse fixture makes the whole class of mistake impossible. A full suite run afterwards leaves the real DB empty — verified |
@@ -92,6 +135,14 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | 7 | The 3-month relative-strength figure was measured from each symbol's **first stored value**, silently turning it into a lifetime figure | research test | measured from the first valid value inside the window; regression test added |
 | 8 | `update_entry` raised on a missing id instead of returning `False` | journal test | returns `False`; the API maps it to 404 |
 | 9 | Backtest POST without a `Content-Type` returned a 422 that the UI rendered as `[object Object]` | browser | request sets the header; errors are flattened for display |
+| 10 | `megatool init` under a running server produced a raw DuckDB traceback | CLI test | friendly explanation, exit 1 |
+
+### My own bugs, caught by the audit process
+
+| # | Defect | How it surfaced |
+| --- | --- | --- |
+| M1 | My regression test asserted `body["comparable"] == 2 if "comparable" in body else True` — passes vacuously when the key is missing. The key **was** missing | Reading the module's actual return dict |
+| M2 | My first live re-check returned 500 and I nearly reported a defect | It was the stale server process running pre-fix code. Confirmed the fix was in source, restarted, re-ran |
 
 ## 6. Known gaps — the honest list
 
@@ -112,10 +163,12 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 7. **Prices are unadjusted** for bonus and rights issues, so every "return" in the
    forecast, research and scanner output is a price change, not a total return.
 8. **The third-party dataset licence is unresolved.**
+9. **PDF extraction is incomplete** — located and OCR-ready, not yet extracted. See
+   `docs/WRITTEN_DATA_PDF_AUDIT.md`.
 
 ## 7. Verification evidence
 
-- `uv run pytest` — **412 passed, 0 failed** (2026-10-12).
+- `uv run pytest` — **466 passed, 0 failed** (2026-10-12).
 - `ruff check` and `ruff format` — clean.
 - All eight web tabs exercised in a real browser (Playwright) with **0 console errors**;
   the refusal path, the oversell rejection and the empty-journal "—" were each read back
@@ -124,13 +177,18 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
   (second server instance), so the owner's store stayed clean.
 - Live endpoints exercised with `curl` against the running server. Full evidence table in
   `PROJECT_STATUS.md` §5.
+- Audit A and Audit B both executed; every confirmed finding re-verified before and after
+  the fix. 45 regression tests in `tests/test_audit_a_fixes.py`.
 
 ## 8. What the next session should do, in order
 
-1. Import a real floor sheet and check the analysis against the published page.
-2. Import fundamentals CSVs (SEBON quarterly statistics) and compute P/E, P/B, ROE and
+1. **Extract and validate the PDF.** See `docs/WRITTEN_DATA_PDF_AUDIT.md`. The document
+   is located, OCR-ready (PyMuPDF + tesseract), and git-ignored as private. No page has
+   been extracted yet. Build the page-by-page inventory first, then extract table by table.
+2. Import a real floor sheet and check the analysis against the published page.
+3. Import fundamentals CSVs (SEBON quarterly statistics) and compute P/E, P/B, ROE and
    dividend yield **with per-field provenance**.
-3. Widen coverage to all 372 symbols when disk/time allows (`uv run megatool fetch --all`).
-4. Add a normalised multi-factor score on top of the existing scanner filter tree.
-5. Re-check the official NEPSE API block with `probe()` occasionally — do not work around
+4. Widen coverage to all 372 symbols when disk/time allows (`uv run megatool fetch --all`).
+5. Add a normalised multi-factor score on top of the existing scanner filter tree.
+6. Re-check the official NEPSE API block with `probe()` occasionally — do not work around
    it, and never store credentials.

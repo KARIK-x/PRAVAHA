@@ -11,7 +11,7 @@ marked working because the code exists. The labels mean:
 | `NOT-IMPLEMENTED` | Deliberately not built. The reason is stated |
 | `NOT-TESTED` | Code exists but has not been executed/observed |
 
-Test suite: **412 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check` and
+Test suite: **466 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check` and
 `ruff format` clean. Live server verified in a real browser via Playwright.
 
 ---
@@ -23,18 +23,19 @@ Test suite: **412 passed, 0 failed** (`uv run pytest`, 2026-10-12). `ruff check`
 | 1 | **Data foundation** (ingest, canonical schema, provenance, quality flags) | `TESTED-PASS` | 9,561→**89,580 real rows / 60 symbols** stored; idempotent re-ingest inserts 0 duplicates; quality sweep flags (never deletes) 1.31% suspect rows; `open` outside the day range in ~15% of source rows, recorded not hidden |
 | 2 | **Market Dashboard** | `TESTED-PASS` | Breadth/movers/most-active render in the browser; the response carries `is_live: false` and shows **no index value** because no index source is available |
 | 3 | **Charting Terminal** | `TESTED-PASS` | Candles + volume + 28 indicators; verified in-browser against pandas (SMA 1014.485 / 877.87 matched exactly) |
-| 4 | **Stock Scanner** | `TESTED-PASS` | 19 metrics, 4 presets, filter-tree validation with plain-English 400s; 21 scanner tests + 58 API tests |
+| 4 | **Stock Scanner** | `TESTED-PASS` | 19 metrics, 4 presets, filter-tree validation with plain-English 400s; 21 scanner tests + 65 API tests |
 | 5 | **Multi-Factor Engine** | `PARTIAL` | The scanner's filter tree **is** the multi-factor engine (AND/OR composition, 19 metrics). A ranked/scored factor model with normalisation and weights is **not built** |
 | 6 | **Fundamentals Lab** | `NOT-IMPLEMENTED` | SEBON publishes fundamentals as publications, not an API (research register A5). Design is CSV/manual import with per-field provenance. **No fundamental data has ever been fetched**, so no ratio is computed anywhere |
 | 7 | **News / Events** | `NOT-IMPLEMENTED` | No machine-readable news source was found (A7/A8). Nothing is scraped |
 | 8 | **AI Research Assistant** | `TESTED-PASS` (as a rules engine) | **There is no LLM** — no key, and no local model fits 8 GB RAM. What ships is a deterministic rules engine that cites the window and definition behind every number, and **refuses** predictive/prescriptive questions. 28 unit + 6 API tests |
-| 9 | **Forecasting Lab** | `TESTED-PASS` | 6 models, all scored on an unseen hold-out against the naive baseline, with a plain-words verdict (`NO DEMONSTRATED SKILL` where true). 28 unit + 5 API tests |
+| 9 | **Forecasting Lab** | `TESTED-PASS` | 6 models, all scored on an unseen hold-out against the naive baseline, with a plain-words verdict (`NO DEMONSTRATED SKILL` where true). 29 unit + 5 API tests |
 | 10 | **Backtesting Lab** | `TESTED-PASS` | Long/flat engine, next-bar-open fills, shorting refused, fees+slippage, benchmark and assumptions in every response. 32 tests + a real-data run (ADBL sma_cross 20/50, 3,659 bars, +223.48% vs buy-and-hold +168.95%, maxDD −54.41%, Sharpe 0.43, 44 trades, 9 assumptions) |
 | 11 | **Portfolio Intelligence** | `TESTED-PASS` | Positions **derived from the transaction ledger** (the two can never disagree); manual holdings allowed only where no ledger exists; valuation marks to the latest *stored* close and leaves unpriced symbols unvalued and flagged. 29 unit + 8 API tests, plus a live smoke test |
 | 12 | **Trade Planning / Risk** | `TESTED-PASS` | R multiples, risk:reward, position size for a fixed fractional risk (rounded down, affordability-capped). A stop above the entry is rejected — NEPSE has no retail shorting. 21 unit + 4 API tests |
-| 13 | **Trading Journal** | `TESTED-PASS` | CRUD, win rate, R multiples, plan adherence, per-strategy breakdown; trades without a complete plan are counted in win rate but excluded from R stats **and both are reported**. 27 unit + 5 API tests |
+| 13 | **Trading Journal** | `TESTED-PASS` | CRUD, win rate, R multiples, plan adherence, per-strategy breakdown; trades without a complete plan are counted in win rate but excluded from R stats **and both are reported**. 30 unit + 5 API tests |
 | 14 | **Floor-sheet Intelligence** | `PARTIAL` | Import, validation and analysis are **implemented and tested** (25 unit + 5 API + 9 CLI tests). Reachable two ways: `megatool floor import FILE --date YYYY-MM-DD` / `megatool floor summary`, and `POST /api/floorsheet/import`. Verified end-to-end against an **isolated** database (second server instance and a throwaway `MEGATOOL_DATA_DIR`), so the owner's store stayed clean. It has **never been run on a real floor sheet** — only on synthetic CSVs — and there is **no web tab** for it yet |
 | 15 | **Bounded Research Agent** | `NOT-IMPLEMENTED` | The web-search tool failed on every attempt this session (register B1–B3). No autonomous agent loop was built; the deterministic Research Assistant (#8) is what exists instead |
+| 16 | **PDF records (Written Data.pdf)** | `PARTIAL` | The 52-page handwritten journal is located and OCR-ready (PyMuPDF + tesseract). Extraction is **in progress** — see `docs/WRITTEN_DATA_PDF_AUDIT.md`. No PDF record has yet been imported into the portfolio or journal |
 
 ## 2. Web UI
 
@@ -83,6 +84,9 @@ the owner's journal, ledger and floor-sheet tables are empty.
    and impact are not modelled.
 7. **The relative-strength ranking compares only the 60 locally stored symbols**, not
    NEPSE. The UI states this.
+8. **PDF extraction is incomplete.** The 52-page handwritten journal has been located
+   and is OCR-ready, but no page has been fully extracted and validated yet. See
+   `docs/WRITTEN_DATA_PDF_AUDIT.md`.
 
 ## 5. Verification log
 
@@ -90,7 +94,7 @@ Evidence, not assertions. Everything below was executed and observed.
 
 | What | How | Result |
 | --- | --- | --- |
-| Full test suite | `uv run pytest` | **412 passed, 0 failed**, ~17 s |
+| Full test suite | `uv run pytest` | **466 passed, 0 failed**, ~20 s |
 | Lint / format | `ruff check .`, `ruff format .` | clean |
 | Real data in the store | `GET /api/status` on the running server | 89,580 bars, 60 symbols, 1995-07-20 → 2026-10-09 |
 | Every browser tab | Playwright, clicking through all 8 tabs | **0 console errors** |
@@ -103,6 +107,12 @@ Evidence, not assertions. Everything below was executed and observed.
 | Floor-sheet analysis | Second server instance with `MEGATOOL_DATA_DIR` pointing at a throwaway directory | import 3 rows, re-import adds 0, HHI 5000.0 / 7222.22 **matching the hand calculation**, bad file → 400 naming the missing columns |
 | Database isolation | Inspected the real SQLite after every test run and every browser session | journal, ledger, positions and floor-sheet tables all empty |
 | CLI under a running server | `megatool init` while `serve` holds the DuckDB lock | friendly explanation instead of a traceback, exit code 1 |
+| Journal stats on a legal thesis-only entry | POST then GET /api/journal/stats | **200** with `closed_without_entry_price` and an explanatory warning (was HTTP 500) |
+| Counterparty share denominator | 12 buyers × 100 + one × 700, top=10 | BIG reads **36.84%** (was 43.75%); shown shares sum to 84.21%, not a forced 100% |
+| Currency-prefixed rate | `Rs. 1,000` in a floor-sheet CSV | parsed as 1000, amount 100,000 (was 0.1 → 10,000) |
+| Impossible exit | exit_price −5 and NaN | 400 naming the field (was graded as a real stop) |
+| Backdated sell | sell dated before its funding buy | 400 with the reason (was accepted, corrupting realised P&L) |
+| Typo'd journal field | `entry_prc` | 400 listing the unknown field (was 200, data silently dropped) |
 
 ## 6. How to run it
 
@@ -112,5 +122,5 @@ uv sync
 uv run megatool init      # create the databases
 uv run megatool fetch     # download real history (network)
 uv run megatool serve     # http://127.0.0.1:8710
-uv run pytest             # 376 tests
+uv run pytest             # 466 tests
 ```

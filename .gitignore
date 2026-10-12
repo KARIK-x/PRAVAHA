@@ -40,3 +40,14 @@ Thumbs.db
 models/*.pkl
 models/*.joblib
 experiments/runs/
+
+# --- Personal trading records (private; never commit) ---
+# WRITTENdata.pdf is a 7.3 MB handwritten personal trading journal. It is a data
+# SOURCE for local analysis only. Its contents are private, so neither the PDF
+# nor anything extracted from it is committed.
+WRITTENdata.pdf
+Written Data.pdf
+data/written_pdf/
+docs/written_pdf_raw/
+extraction/
+*.ocr.txt
