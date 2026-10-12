@@ -30,6 +30,7 @@
   <button data-view="research">Research</button>
   <button data-view="portfolio">Portfolio</button>
   <button data-view="journal">Journal</button>
+  <button data-view="pdf">PDF Journal</button>
   <span class="nav-spacer"></span>
   <span class="nav-note">Not financial advice · historical data only</span>
 </nav>
@@ -383,6 +384,48 @@
     <div class="card">
       <h2>Per-strategy breakdown (closed entries)</h2>
       <div id="jr-by-strategy" class="tablewrap"></div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------- PDF JOURNAL -->
+  <section id="view-pdf" class="view">
+    <div class="card">
+      <h2>Written Data.pdf — extracted records</h2>
+      <p class="note">
+        Records transcribed from a 52-page handwritten journal. Automated OCR
+        failed on 42 of 52 pages, so these were transcribed visually. Every
+        value carries its source page and extraction confidence.
+        <b>Unreviewed records are descriptive only — never verified market data.</b>
+      </p>
+      <div id="pdf-summary" class="stat-row"></div>
+      <ul id="pdf-warnings" class="list"></ul>
+    </div>
+    <div class="controls">
+      <label>Symbol
+        <input id="pdf-symbol" placeholder="ADBL" />
+      </label>
+      <label>Type
+        <select id="pdf-type">
+          <option value="">All types</option>
+          <option value="fundamental">fundamental</option>
+          <option value="price">price</option>
+          <option value="trade">trade</option>
+          <option value="settlement">settlement</option>
+          <option value="accumulation">accumulation</option>
+          <option value="note">note</option>
+        </select>
+      </label>
+      <label>Page
+        <input id="pdf-page" type="number" min="1" max="52" placeholder="any" />
+      </label>
+      <label class="check">
+        <input id="pdf-reviewed" type="checkbox" /> reviewed only
+      </label>
+      <button id="pdf-load" class="primary">Load records</button>
+    </div>
+    <div class="card">
+      <h2>Extracted records</h2>
+      <div id="pdf-records" class="tablewrap"></div>
     </div>
   </section>
 </main>

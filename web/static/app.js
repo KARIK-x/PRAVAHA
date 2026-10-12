@@ -102,6 +102,9 @@ function viewShown(name) {
     loadPortfolio();
   } else if (name === "journal") {
     loadJournal();
+  } else if (name === "pdf") {
+    loadPdfSummary();
+    loadPdfRecords();
   }
 }
 
@@ -999,6 +1002,74 @@ async function loadJournal() {
   }
 }
 
+/* ------------------------------------------------------------- PDF journal */
+async function loadPdfSummary() {
+  try {
+    const s = await api("/api/written-pdf/summary");
+    const cells = [
+      { k: "records", v: s.total },
+      { k: "types", v: Object.keys(s.by_type || {}).length },
+      { k: "pages covered", v: s.pages_covered },
+      { k: "reviewed", v: (s.by_review_status || {}).reviewed || 0 },
+      { k: "unreviewed", v: (s.by_review_status || {}).unreviewed || 0 },
+    ];
+    $("#pdf-summary").innerHTML = cells
+      .map((c) => `<div class="stat"><div class="k">${esc(c.k)}</div><div class="v">${c.v}</div></div>`)
+      .join("");
+    const warns = [];
+    if ((s.by_review_status || {}).unreviewed) {
+      warns.push("All records are unreviewed. They are descriptive, not verified market data.");
+    }
+    if (!s.total) {
+      warns.push("No records extracted yet. Import with: megatool pdf import FILE.json");
+    }
+    $("#pdf-warnings").innerHTML = warns.map((w) => `<li>${esc(w)}</li>`).join("");
+  } catch (e) {
+    $("#pdf-summary").innerHTML = `<span class="down">${esc(e.message)}</span>`;
+  }
+}
+
+async function loadPdfRecords() {
+  const symbol = ($("#pdf-symbol").value || "").trim();
+  const type = $("#pdf-type").value;
+  const page = $("#pdf-page").value;
+  const reviewed = $("#pdf-reviewed").checked;
+  const params = new URLSearchParams();
+  if (symbol) params.set("symbol", symbol);
+  if (type) params.set("record_type", type);
+  if (page) params.set("page", page);
+  if (reviewed) params.set("reviewed_only", "true");
+  try {
+    const r = await api(`/api/written-pdf/records?${params.toString()}`);
+    renderPdfRecords(r.records || []);
+  } catch (e) {
+    $("#pdf-records").innerHTML = `<div class="error">${esc(e.message)}</div>`;
+  }
+}
+
+function renderPdfRecords(records) {
+  if (!records.length) {
+    $("#pdf-records").innerHTML =
+      `<div class="empty">No records match. Import or review records first.</div>`;
+    return;
+  }
+  const conf = { high: "high", medium: "medium", low: "low", uncertain: "uncertain" };
+  $("#pdf-records").innerHTML = table(
+    ["Page", "Type", "Symbol", "Field", "Value", "Unit", "Confidence", "Review", "Source"],
+    records.slice(0, 200).map((r) => [
+      { html: esc(String(r.page)) },
+      { html: esc(r.record_type) },
+      { html: esc(r.symbol || "—") },
+      { html: esc(r.field_name || r.source_ref || "—") },
+      { html: r.value === null || r.value === undefined ? "—" : esc(String(r.value)) },
+      { html: esc(r.unit || "") },
+      { html: esc(conf[r.confidence] || r.confidence), cls: r.confidence === "high" ? "good" : r.confidence === "uncertain" ? "bad" : "" },
+      { html: esc(r.review_status), cls: r.review_status === "reviewed" ? "good" : r.review_status === "rejected" ? "bad" : "" },
+      { html: esc(`p.${r.page}`) },
+    ])
+  );
+}
+
 function renderJournalStats(s) {
   // With no closed trades the API returns nulls, not zeroes: "—" is shown so a
   // missing statistic is never presented as a real 0%.
@@ -1229,6 +1300,12 @@ function boot() {
 
   $("#jr-add").addEventListener("click", addJournalEntry);
   $("#plan-run").addEventListener("click", runPlanner);
+
+  $("#pdf-load").addEventListener("click", () => { loadPdfSummary(); loadPdfRecords(); });
+  $("#pdf-symbol").addEventListener("keydown", (e) => { if (e.key === "Enter") loadPdfRecords(); });
+  $("#pdf-page").addEventListener("keydown", (e) => { if (e.key === "Enter") loadPdfRecords(); });
+  $("#pdf-reviewed").addEventListener("change", loadPdfRecords);
+  $("#pdf-type").addEventListener("change", loadPdfRecords);
 
   loadFreshness();
   loadSymbols();

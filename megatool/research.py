@@ -612,8 +612,12 @@ def answer(
         "pdf_findings": pdf_findings,
         "topic_help": {k: TOPIC_HELP[k] for k in TOPICS},
         "limits": report.limits,
-        "warnings": report.warnings + (
-            [f"{len(pdf_findings)} PDF records found, but none are reviewed yet."
-             if pdf_findings else []]
+        "warnings": report.warnings
+        + (
+            [
+                f"{len(pdf_findings)} PDF records found, but none are reviewed yet."
+                if pdf_findings
+                else []
+            ]
         ),
     }
