@@ -519,6 +519,85 @@ def build_report(
     return report
 
 
+def journal_only_answer(symbol: str, question: str = "") -> dict[str, Any]:
+    """Answer from the handwritten journal when there is no price history.
+
+    Many symbols appear in Written Data.pdf but are not in the 60-symbol
+    stored dataset. Returning a bare 404 for those would make the journal
+    unreachable, so this returns whatever reviewed journal records exist —
+    clearly labelled as journal records, with the absence of price history
+    stated rather than hidden.
+    """
+    # A fresh or partially-migrated store has no pdf_records table yet. That
+    # means nothing has been extracted — it must not crash the endpoint.
+    import sqlite3
+
+    from megatool.written_pdf import ReviewStatus, query_records
+
+    try:
+        rows = query_records(symbol=symbol.upper())
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc):
+            raise
+        rows = []
+
+    findings: list[dict[str, Any]] = []
+    unreviewed = 0
+    for row in rows:
+        if row.get("review_status") == ReviewStatus.REVIEWED.value:
+            findings.append(
+                {
+                    "topic": "historical journal",
+                    "field": f"{row.get('field_name', '')} (page {row['page']})",
+                    "value": row.get("value"),
+                    "unit": row.get("unit"),
+                    "source": "Written Data.pdf",
+                    "review_status": row.get("review_status"),
+                    "note": "Personal journal record. Descriptive, not independently verified.",
+                }
+            )
+        else:
+            unreviewed += 1
+
+    return {
+        "symbol": symbol.upper(),
+        "as_of": None,
+        "bars": 0,
+        "refused": False,
+        "topics": [],
+        "matched_note": (
+            f"No stored price history for {symbol.upper()} — the answer below comes "
+            "only from your handwritten journal, so no technical or price-based "
+            "finding is possible."
+        ),
+        "findings": [],
+        "pdf_findings": findings,
+        "topic_help": {k: TOPIC_HELP[k] for k in TOPICS},
+        "limits": [
+            "No price history is stored for this symbol, so no technical analysis, "
+            "indicator, or pattern has been computed.",
+        ],
+        "warnings": (
+            (
+                [
+                    f"{unreviewed} journal record(s) for {symbol.upper()} are not reviewed yet, so they are not shown as findings."
+                ]
+                if unreviewed
+                else []
+            )
+            + (
+                [
+                    "Journal records are the author's own notes, not independently verified market data."
+                ]
+                if findings
+                else []
+            )
+            + ([] if findings else ["No reviewed journal records exist for this symbol."])
+        ),
+        "journal_only": True,
+    }
+
+
 def answer(
     df: pd.DataFrame, symbol: str, question: str, universe: pd.DataFrame | None = None
 ) -> dict[str, Any]:
@@ -532,24 +611,28 @@ def answer(
     q = (question or "").lower()
     report = build_report(df, symbol, universe)
     pdf_findings: list[dict[str, Any]] = []
+    pdf_unreviewed = 0
     if "journal" in q or "written" in q or "pdf" in q or "eps" in q:
-        # The PDF is a historical personal journal. Its records are included only
-        # with their source page and review status, never as verified market data.
+        # The PDF is a historical personal journal. Only *reviewed* records are
+        # ever surfaced as findings; unreviewed ones are counted so the answer
+        # can say they exist rather than silently hiding them.
         from megatool.written_pdf import ReviewStatus, query_records
 
-        pdf_rows = query_records(symbol=symbol, review_status=ReviewStatus.REVIEWED)
-        for row in pdf_rows:
-            pdf_findings.append(
-                {
-                    "topic": "historical journal",
-                    "field": f"{row.get('field_name', '')} (page {row['page']})",
-                    "value": row.get("value"),
-                    "unit": row.get("unit"),
-                    "source": "Written Data.pdf",
-                    "review_status": row.get("review_status"),
-                    "note": "Personal journal record. Descriptive, not independently verified.",
-                }
-            )
+        for row in query_records(symbol=symbol):
+            if row.get("review_status") == ReviewStatus.REVIEWED.value:
+                pdf_findings.append(
+                    {
+                        "topic": "historical journal",
+                        "field": f"{row.get('field_name', '')} (page {row['page']})",
+                        "value": row.get("value"),
+                        "unit": row.get("unit"),
+                        "source": "Written Data.pdf",
+                        "review_status": row.get("review_status"),
+                        "note": "Personal journal record. Descriptive, not independently verified.",
+                    }
+                )
+            else:
+                pdf_unreviewed += 1
 
     predictive = (
         "will ",
@@ -615,9 +698,9 @@ def answer(
         "warnings": report.warnings
         + (
             [
-                f"{len(pdf_findings)} PDF records found, but none are reviewed yet."
-                if pdf_findings
-                else []
+                f"{pdf_unreviewed} journal record(s) for {symbol} are not reviewed yet, so they are not shown as findings."
             ]
+            if pdf_unreviewed
+            else []
         ),
     }

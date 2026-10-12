@@ -716,3 +716,108 @@ def test_forecast_naive_model_is_labelled_the_baseline(client):
     ).json()
     assert d["verdict"].startswith("BASELINE")
     assert d["metrics"]["rmse_skill_ratio"] is None
+
+
+# ------------------------------------------------------------ written pdf routes
+def _pdf_record(symbol="TPC", review="unreviewed"):
+    from megatool.written_pdf import (
+        ExtractedRecord,
+        ExtractionConfidence,
+        RecordType,
+        ReviewStatus,
+        import_records,
+    )
+
+    return import_records(
+        [
+            ExtractedRecord(
+                record_type=RecordType.FUNDAMENTAL,
+                page=1,
+                source_ref="row 1",
+                symbol=symbol,
+                field_name="eps",
+                value=46.0,
+                unit="NPR",
+                confidence=ExtractionConfidence.HIGH,
+                review_status=ReviewStatus(review),
+            )
+        ],
+        "WRITTENdata.pdf",
+    )
+
+
+def test_written_pdf_summary_reports_counts_and_limitations(client):
+    _pdf_record()
+    d = client.get("/api/written-pdf/summary").json()
+    assert d["total"] == 1
+    assert d["by_review_status"] == {"unreviewed": 1}
+    assert "Automated OCR failed" in d["note"]
+
+
+def test_written_pdf_records_filters_and_labels(client):
+    _pdf_record()
+    d = client.get("/api/written-pdf/records", params={"symbol": "TPC"}).json()
+    assert d["count"] == 1
+    assert "handwritten personal journal" in d["note"]
+    # reviewed-only returns nothing while the record is unreviewed
+    assert (
+        client.get("/api/written-pdf/records", params={"reviewed_only": True}).json()["count"] == 0
+    )
+
+
+def test_written_pdf_record_type_is_validated_not_a_500(client):
+    # Regression: a raw string reached code that called .value on it -> 500.
+    r = client.get("/api/written-pdf/records", params={"record_type": "fundamental"})
+    assert r.status_code == 200
+    bad = client.get("/api/written-pdf/records", params={"record_type": "garbage"})
+    assert bad.status_code == 400
+    assert "unknown record_type" in bad.json()["detail"]
+
+
+def test_written_pdf_review_endpoint(client):
+    _pdf_record()
+    rec = client.get("/api/written-pdf/records", params={"symbol": "TPC"}).json()["records"][0]
+    out = client.post(
+        "/api/written-pdf/review", json={"ids": [rec["id"]], "status": "reviewed"}
+    ).json()
+    assert out["updated"] == 1
+    # now it is visible under reviewed_only
+    assert (
+        client.get("/api/written-pdf/records", params={"reviewed_only": True}).json()["count"] == 1
+    )
+
+
+def test_written_pdf_review_rejects_bad_status_and_unreviewed(client):
+    _pdf_record()
+    bad = client.post("/api/written-pdf/review", json={"ids": [1], "status": "maybe"})
+    assert bad.status_code == 400
+    assert "unknown status" in bad.json()["detail"]
+    back = client.post("/api/written-pdf/review", json={"ids": [1], "status": "unreviewed"})
+    assert back.status_code == 400
+    assert "unreviewed" in back.json()["detail"]
+
+
+def test_research_ask_falls_back_to_journal_for_a_symbol_without_history(client):
+    # TPC has no bars in this store, but a reviewed journal record.
+    _pdf_record(symbol="TPC", review="reviewed")
+    d = client.post("/api/research/ask", json={"symbol": "TPC", "question": "journal eps"}).json()
+    assert d["journal_only"] is True
+    assert d["bars"] == 0
+    assert len(d["pdf_findings"]) == 1
+    assert d["pdf_findings"][0]["value"] == 46.0
+    assert "No stored price history" in d["matched_note"]
+
+
+def test_research_ask_still_404s_when_there_is_nothing_to_answer(client):
+    # No bars and no journal records: the honest answer is still a 404.
+    r = client.post("/api/research/ask", json={"symbol": "ZZZZ", "question": "eps journal"})
+    assert r.status_code == 404
+
+
+def test_research_ask_hides_unreviewed_journal_records(client):
+    _pdf_record(symbol="QQQ", review="unreviewed")
+    d = client.post(
+        "/api/research/ask", json={"symbol": "QQQ", "question": "what does the journal say"}
+    ).json()
+    assert d["pdf_findings"] == []
+    assert any("not reviewed yet" in w for w in d["warnings"])

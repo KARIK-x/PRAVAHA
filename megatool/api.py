@@ -88,6 +88,7 @@ from megatool.portfolio import (
 from megatool.research import (
     TOPIC_HELP,
     TOPICS,
+    journal_only_answer,
 )
 from megatool.research import (
     answer as research_answer,
@@ -210,6 +211,13 @@ class PydanticFloorSheetRequest(BaseModel):
     text: str = Field(min_length=1, max_length=20_000_000)
     traded_at: str
     source: str = "manual import"
+
+
+class PydanticReviewRequest(BaseModel):
+    """Set the review status of specific extracted PDF records."""
+
+    ids: list[int] = Field(min_length=1, max_length=5000)
+    status: str
 
 
 def create_app(store: MarketStore | None = None) -> FastAPI:
@@ -668,6 +676,28 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
             ),
         }
 
+    @app.post("/api/written-pdf/review")
+    def written_pdf_review(req: PydanticReviewRequest) -> dict[str, Any]:
+        """Mark extracted records as reviewed, corrected, or rejected.
+
+        This is the human-verification step. Records start `unreviewed` and
+        are never surfaced as findings until a human flips them here.
+        """
+        from megatool.written_pdf import PdfValidationError, ReviewStatus, set_review_status
+
+        try:
+            status = ReviewStatus(req.status)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown status: {req.status!r}. "
+                f"Valid: {', '.join(s.value for s in ReviewStatus)}",
+            ) from exc
+        try:
+            return set_review_status(req.ids, status)
+        except PdfValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     # ----------------------------------------------------------- forecasting
     @app.get("/api/forecast/models")
     def forecast_models() -> dict[str, Any]:
@@ -757,6 +787,12 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
         sym = symbol.upper()
         df = store.get_bars(sym)
         if df.empty:
+            # Fall back to journal-only so symbols present in the handwritten
+            # records but absent from the stored dataset remain reachable.
+            payload = journal_only_answer(sym)
+            if payload["pdf_findings"]:
+                payload["live"] = False
+                return payload
             raise HTTPException(404, f"no stored history for {sym}")
         universe = store.all_closes() if len(store.symbols()) > 1 else None
         payload = research_report(df, sym, universe=universe).to_dict()
@@ -770,6 +806,12 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
         sym = req.symbol.upper()
         df = store.get_bars(sym)
         if df.empty:
+            # No price history, but the handwritten journal may still cover
+            # this symbol. Return the journal answer instead of a bare 404.
+            payload = journal_only_answer(sym, req.question)
+            if payload["pdf_findings"] or any("not reviewed" in w for w in payload["warnings"]):
+                payload["live"] = False
+                return payload
             raise HTTPException(404, f"no stored history for {sym}")
         universe = store.all_closes() if len(store.symbols()) > 1 else None
         payload = research_answer(df, sym, req.question, universe=universe)

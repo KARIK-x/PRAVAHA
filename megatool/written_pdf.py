@@ -550,3 +550,38 @@ def query_records(
                 d["value"] = json.loads(d["value"])
         out.append(d)
     return out
+
+
+def set_review_status(
+    record_ids: list[int],
+    status: ReviewStatus,
+    db_path: Any = None,
+) -> dict[str, Any]:
+    """Set the review status of specific extracted records.
+
+    This is the human-review step: a record starts `unreviewed` and only after
+    a human confirms it does it become usable in analytical output. Only
+    `reviewed`, `corrected` and `rejected` are allowed as targets — a record
+    cannot be sent back to `unreviewed` to hide that it was once checked.
+    """
+    if not record_ids:
+        raise PdfValidationError("no record ids given")
+    if status in (ReviewStatus.UNREVIEWED,):
+        raise PdfValidationError("cannot set a record back to 'unreviewed'")
+
+    from megatool.db import get_conn
+
+    placeholders = ", ".join("?" for _ in record_ids)
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            f"UPDATE pdf_records SET review_status = ? WHERE id IN ({placeholders})",
+            [status.value, *record_ids],
+        )
+        changed = cur.rowcount or 0
+        missing = len(record_ids) - changed
+    return {
+        "requested": len(record_ids),
+        "updated": changed,
+        "not_found": missing,
+        "status": status.value,
+    }

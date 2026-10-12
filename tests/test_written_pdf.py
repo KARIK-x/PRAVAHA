@@ -20,6 +20,7 @@ from megatool.written_pdf import (
     import_records,
     parse_nepse_number,
     query_records,
+    set_review_status,
     validate_eps,
     validate_nepse_symbol,
     validate_price,
@@ -340,3 +341,34 @@ def test_min_confidence_filter_includes_that_level_and_above(db):
     # min=uncertain -> all four
     rows = query_records(db_path=db, min_confidence=ExtractionConfidence.UNCERTAIN)
     assert len(rows) == 4
+
+
+# ---------------------------------------------------------------- review workflow
+
+
+def test_review_status_can_be_set(db):
+    records = _sample_records()
+    import_records(records, "WRITTENdata.pdf", db_path=db)
+    ids = [r["id"] for r in query_records(db_path=db)]
+    out = set_review_status(ids[:2], ReviewStatus.REVIEWED, db_path=db)
+    assert out["updated"] == 2
+    assert out["not_found"] == 0
+    assert len(query_records(db_path=db, review_status=ReviewStatus.REVIEWED)) == 2
+
+
+def test_review_status_refuses_returning_to_unreviewed(db):
+    records = _sample_records()
+    import_records(records, "WRITTENdata.pdf", db_path=db)
+    with pytest.raises(PdfValidationError, match="unreviewed"):
+        set_review_status([1], ReviewStatus.UNREVIEWED, db_path=db)
+
+
+def test_review_status_reports_missing_ids(db):
+    out = set_review_status([999, 1000], ReviewStatus.REJECTED, db_path=db)
+    assert out["updated"] == 0
+    assert out["not_found"] == 2
+
+
+def test_review_status_requires_ids(db):
+    with pytest.raises(PdfValidationError, match="no record ids"):
+        set_review_status([], ReviewStatus.REVIEWED, db_path=db)

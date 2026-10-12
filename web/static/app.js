@@ -675,8 +675,9 @@ function renderValue(v) {
   return renderValueInline(v);
 }
 
-function renderFindings(findings, topicHelp) {
-  if (!findings || !findings.length) return `<div class="empty">No findings.</div>`;
+function renderFindings(findings, topicHelp, suppressEmpty) {
+  if (!findings || !findings.length)
+    return suppressEmpty ? "" : `<div class="empty">No findings.</div>`;
   const groups = new Map();
   findings.forEach((f) => {
     if (!groups.has(f.topic)) groups.set(f.topic, []);
@@ -733,9 +734,12 @@ async function runResearchReport() {
   btn.disabled = true;
   try {
     const d = await api(`/api/research/${encodeURIComponent(symbol)}`);
-    $("#rs-report-head").textContent =
-      `Full report — ${d.symbol} as of ${d.as_of} · ${d.bars} bars since ${d.first_date} · not live`;
-    $("#rs-report").innerHTML = renderFindings(d.findings, null);
+    $("#rs-report-head").textContent = d.journal_only
+      ? `Journal-only — ${d.symbol}: no stored price history`
+      : `Full report — ${d.symbol} as of ${d.as_of} · ${d.bars} bars since ${d.first_date} · not live`;
+    $("#rs-report").innerHTML =
+      renderFindings(d.findings, null, d.journal_only) +
+      renderPdfFindings(d.pdf_findings);
     $("#rs-limits").innerHTML =
       (d.limits || []).map((x) => `<li>${esc(x)}</li>`).join("") ||
       "<li class='muted'>None reported.</li>";
@@ -787,12 +791,30 @@ function renderAskAnswer(d) {
   }
   el.innerHTML =
     `<p class="hint"><b>${esc(d.matched_note)}</b> · ${esc(d.symbol)} as of ${esc(d.as_of)} · ${fmtInt(d.bars)} bars</p>` +
-    renderFindings(d.findings, d.topic_help) +
+    renderFindings(d.findings, d.topic_help, d.journal_only) +
+    renderPdfFindings(d.pdf_findings) +
     renderLimitsBlock(d.limits) +
     ((d.warnings || []).length
       ? `<h3 class="topic-head">Warnings</h3><ul class="list">` +
         d.warnings.map((w) => `<li class="warn">${esc(w)}</li>`).join("") + `</ul>`
       : "");
+}
+
+function renderPdfFindings(pdfFindings) {
+  if (!pdfFindings || !pdfFindings.length) return "";
+  const rows = pdfFindings.map((f) => [
+    { html: esc(f.field || "—") },
+    { html: f.value === null || f.value === undefined ? "—" : esc(String(f.value)) },
+    { html: esc(f.unit || "") },
+    { html: esc(f.source || "Written Data.pdf") },
+    { html: `<span class="warn">${esc(f.review_status)}</span>` },
+    { html: `<span class="hint">${esc(f.note || "")}</span>` },
+  ]);
+  return (
+    `<h3 class="topic-head">Written Data.pdf — reviewed journal records</h3>` +
+    `<p class="hint">Personal handwritten records. Descriptive, not independently verified.</p>` +
+    table(["Field", "Value", "Unit", "Source", "Review", "Note"], rows)
+  );
 }
 
 async function runForecastCompare() {
@@ -1055,7 +1077,7 @@ function renderPdfRecords(records) {
   }
   const conf = { high: "high", medium: "medium", low: "low", uncertain: "uncertain" };
   $("#pdf-records").innerHTML = table(
-    ["Page", "Type", "Symbol", "Field", "Value", "Unit", "Confidence", "Review", "Source"],
+    ["Page", "Type", "Symbol", "Field", "Value", "Unit", "Confidence", "Review", "Source", "Action"],
     records.slice(0, 200).map((r) => [
       { html: esc(String(r.page)) },
       { html: esc(r.record_type) },
@@ -1066,8 +1088,37 @@ function renderPdfRecords(records) {
       { html: esc(conf[r.confidence] || r.confidence), cls: r.confidence === "high" ? "good" : r.confidence === "uncertain" ? "bad" : "" },
       { html: esc(r.review_status), cls: r.review_status === "reviewed" ? "good" : r.review_status === "rejected" ? "bad" : "" },
       { html: esc(`p.${r.page}`) },
+      {
+        html:
+          r.review_status === "reviewed"
+            ? `<span class="hint">—</span>`
+            : `<button class="ghost" data-review-id="${r.id}" data-review-status="reviewed">✓ review</button>` +
+              ` <button class="ghost" data-review-id="${r.id}" data-review-status="rejected">✕ reject</button>`,
+      },
     ])
   );
+  $$("#pdf-records button[data-review-id]").forEach((b) =>
+    b.addEventListener("click", () =>
+      reviewPdfRecords([Number(b.dataset.reviewId)], b.dataset.reviewStatus)
+    )
+  );
+}
+
+async function reviewPdfRecords(ids, status) {
+  try {
+    await api("/api/written-pdf/review", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, status }),
+    });
+    loadPdfSummary();
+    loadPdfRecords();
+  } catch (e) {
+    $("#pdf-records").insertAdjacentHTML(
+      "afterbegin",
+      `<div class="error">${esc(e.message)}</div>`
+    );
+  }
 }
 
 function renderJournalStats(s) {

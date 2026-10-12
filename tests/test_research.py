@@ -16,6 +16,7 @@ from megatool.research import (
     _volatility,
     answer,
     build_report,
+    journal_only_answer,
 )
 
 
@@ -288,3 +289,69 @@ def test_answer_explains_when_nothing_matched():
 def test_answer_carries_the_limits():
     out = answer(_bars(np.linspace(100, 150, 300)), "TEST", "risk please")
     assert any("investment advice" in x for x in out["limits"])
+
+
+# ------------------------------------------------- journal-only answer (Audit A/B)
+def _pdf_records(symbol: str, review: str):
+    from megatool.written_pdf import (
+        ExtractedRecord,
+        ExtractionConfidence,
+        RecordType,
+        ReviewStatus,
+    )
+
+    return [
+        ExtractedRecord(
+            record_type=RecordType.FUNDAMENTAL,
+            page=1,
+            source_ref="row 1",
+            symbol=symbol,
+            field_name="eps",
+            value=46.0,
+            unit="NPR",
+            confidence=ExtractionConfidence.HIGH,
+            review_status=ReviewStatus(review),
+        )
+    ]
+
+
+def test_journal_only_answer_surfaces_reviewed_records():
+    from megatool.written_pdf import import_records
+
+    import_records(_pdf_records("TPC", "reviewed"), "WRITTENdata.pdf")
+    d = journal_only_answer("TPC", "what does the journal say")
+    assert d["journal_only"] is True
+    assert d["bars"] == 0
+    assert d["refused"] is False
+    assert len(d["pdf_findings"]) == 1
+    assert d["pdf_findings"][0]["value"] == 46.0
+    # it must state the absence of price history, not hide it
+    assert "No stored price history" in d["matched_note"]
+    assert any("not independently verified" in w for w in d["warnings"])
+
+
+def test_journal_only_answer_hides_unreviewed_and_counts_them():
+    from megatool.written_pdf import import_records
+
+    import_records(_pdf_records("XYZ", "unreviewed"), "WRITTENdata.pdf")
+    d = journal_only_answer("XYZ")
+    assert d["pdf_findings"] == []
+    assert any("not reviewed yet" in w for w in d["warnings"])
+    assert any("No reviewed journal records" in w for w in d["warnings"])
+
+
+def test_journal_only_answer_for_unknown_symbol_is_empty_not_hallucinated():
+    from megatool.db import init_app_db
+
+    init_app_db()
+    d = journal_only_answer("QQQQ")
+    assert d["pdf_findings"] == []
+    assert d["journal_only"] is True
+
+
+def test_journal_only_answer_survives_a_missing_pdf_table():
+    """A store that has never been migrated must not 500 the endpoint."""
+    d = journal_only_answer("ZZZZ")
+    assert d["pdf_findings"] == []
+    assert d["journal_only"] is True
+    assert any("No reviewed journal records" in w for w in d["warnings"])
