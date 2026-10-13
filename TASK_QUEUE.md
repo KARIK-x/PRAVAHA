@@ -6,7 +6,7 @@ Prioritised next work.
 
 | Category | Meaning | Current members |
 |---|---|---|
-| **COMPLETED AND VERIFIED** | Built, tested, and exercised end-to-end with evidence recorded | T-A1…T-A9, T-16 *(the validation was run and its result — failure — is verified)*, T-23, T-24, B-17, B-18, route inventory, security pass |
+| **COMPLETED AND VERIFIED** | Built, tested, and exercised end-to-end with evidence recorded | T-A1…T-A11, T-16 *(the validation was run and its result — failure — is verified)*, T-23, T-24, B-17, B-18, route inventory, security pass |
 | **IMPLEMENTED BUT NOT FULLY VERIFIED** | The mechanism works and is tested, but has never run on real input | Fundamentals Lab (0 records), Floor-sheet analysis (synthetic only), PDF extraction pipeline (0/52 pages transcribed) |
 | **FAILED** | Executed honestly and did not pass | **T-16 ranking validation** — top quantile underperformed the bottom in *every* window; no alternative weighting passed. Recorded, not hidden |
 | **BLOCKED BY EXTERNAL INPUT** | Cannot proceed without an owner file, credential, permission or authoritative source | T-09 (image access), T-11 (sector CSV), T-12 (verified tax/fee rates), T-10 (Ollama approval), T-13 (real floor sheet), T-15 (licensing), B-09/B-10/B-11/B-12, OmniRoute key |
