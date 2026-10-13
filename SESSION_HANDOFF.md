@@ -15,7 +15,7 @@ uv sync                     # dependencies into ./.venv (Python 3.12.3)
 uv run megatool init        # create/upgrade the local databases
 uv run megatool fetch       # download real NEPSE history (network)
 uv run megatool serve       # web terminal at http://127.0.0.1:8710
-uv run pytest               # 766 tests, ~52 s
+uv run pytest               # 774 tests, ~52 s
 ```
 
 The server binds `127.0.0.1` only. Nothing listens on the network interface.
@@ -29,7 +29,7 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | Analysis | `scanner.py`, `backtest.py`, `forecast.py`, `research.py`, `floorsheet.py` |
 | Personal state | `portfolio.py` (ledger-derived), `journal.py`, `planning.py` |
 | Interface | `api.py` (FastAPI, 46 routes), `cli.py` (incl. `megatool floor import|summary`, `megatool walk-forward`), `web/static/` (11 tabs) |
-| Tests | `tests/` — 766 tests across 18 files |
+| Tests | `tests/` — 774 tests across 21 files |
 | Docs | `docs/ARCHITECTURE.md`, `DATA_SOURCES.md`, `TECH_STACK_DECISIONS.md`, `RESEARCH_REGISTER.md`, `PROJECT_STATUS.md`, `TESTING.md`, `SOURCES.md`, `DECISIONS.md`, `KNOWN_BUGS.md`, `TEST_RESULTS.md`, `TASK_QUEUE.md`, this file |
 
 ### Data actually in the store
@@ -108,7 +108,11 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | `9714ec5` | **Full-market fetch**: 60 → **372 symbols** (514,018 bars); docs + PDF cross-validation re-run |
 | `092ce95` | **Multi-factor ranking** (`megatool/ranking.py`, `POST /api/rank`, Screener panel) + **settlement-sign defect** fix (B-01) |
 | `2806181` | **Fundamentals Lab** (`megatool/fundamentals.py`, schema v3→v4, 3 endpoints, 11th tab) |
-| *(this commit)* | Docs: `DECISIONS.md`, `KNOWN_BUGS.md`, `TEST_RESULTS.md`, `TASK_QUEUE.md`; refreshed status + handoff |
+| *(prior commits)* | … plus the T-09/T-16/T-24/B-17/B-18 and docs commits listed in `TASK_QUEUE.md` |
+| `23fba2e` | **Route inventory**: closed the last API coverage gap (`DELETE /api/portfolio/transactions/{tx_id}` success path), added `scripts/route_inventory.py` (in-process, exits non-zero if any route lacks tests) and `docs/API_ROUTE_INVENTORY.md` |
+| `dc6cb97` | **Tradeability gate** — excluded symbols last traded >30 days before T from the walk-forward universe. A genuine defect fix that made the result **worse**, reported as such |
+| `329501c` | **Report loader defect (§2.4)** — `walk_forward_report.py` bypassed the B-17 invalid-row filter, contaminating every headline number; corrected figures + `docs/RANKING_VALIDATION_REPORT.md` + `RESEARCH_REGISTER` D12 |
+| *(this commit)* | Serve-bind auth warning, route-classification sync tests, rank-panel validation banner, corrected stale counts across docs |
 
 ### Work done this session that is *not* a code commit
 
@@ -296,7 +300,7 @@ problem.
 
 ## 7. Verification evidence
 
-- `.venv/bin/python -m pytest -p no:warnings` — **766 passed, 0 failed** (2026-10-12), 18 test files.
+- `.venv/bin/python -m pytest -p no:warnings` — **774 passed, 0 failed** (2026-10-13), 21 test files.
 - `.venv/bin/python scripts/smoke_live.py` — live server, real store: **36 of 46 routes
   probed, 36 expected, 0 unexpected, exit 0**; the 10 mutating routes are skipped by design.
 - `ruff check` and `ruff format` — clean.
@@ -349,9 +353,17 @@ Mirrors `TASK_QUEUE.md`, which carries the same list with acceptance criteria.
    needs a real, permitted source. Whatever is imported must carry reporting
    period, unit, source and verification level — the ratio guards will refuse
    anything else by design.
-7. **Walk-forward validation of the ranking (T-16)** — rank monthly using only
-   data up to each month, form top/bottom quartiles, measure the next-month
-   spread. Chronological only; label it research, not evidence of profit.
+7. ~~Walk-forward validation of the ranking (T-16).~~ **Done 2026-10-12–13, and
+   the ranking failed.** Top quantile underperformed the bottom in every window;
+   no alternative factor weighting passed either. Three defects were found and
+   fixed along the way (tradeability gate, exact-date forward returns, the
+   report loader's missing invalid-row filter) — each left the result unchanged
+   or *worse*, never better. Nothing here is a trading signal. Read
+   `docs/RANKING_VALIDATION_REPORT.md` before touching the ranking. The one
+   open research thread: low-volatility was the only positive factor, but it is
+   positive only in the window it was found in, so testing it needs **fresh
+   out-of-sample data** (a later period or another market) — do not re-test it
+   on 2018–2026 and call the answer validation.
 8. ~~Widen coverage to all 372 symbols.~~ **Done 2026-10-12** — all 372 are in
    (514,018 rows). Re-run `uv run megatool fetch` to refresh; stop the server first,
    since DuckDB allows only one writer.

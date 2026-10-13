@@ -7,7 +7,7 @@ Every claim in this file was verified by executing the named command on the proj
 
 | Command | Result |
 | --- | --- |
-| `uv run pytest` | **766 passed**, ~52 s |
+| `uv run pytest` | **774 passed**, ~52 s |
 | `ruff check .` | clean |
 | `ruff format .` | clean |
 
@@ -34,7 +34,7 @@ Per-file test counts:
 | `tests/test_planning.py` | 21 | Position sizing, R multiples, warnings |
 | `tests/test_walkforward.py` | 23 | Walk-forward validation: hand-derived spreads, no look-ahead, trim equivalence, staleness, chance baseline |
 | `tests/test_cli_floor.py` | 9 | `megatool floor import` / `floor summary` |
-| **Total (18 files)** | **766** | |
+| **Total (21 files)** | **774** | |
 
 A separate, non-pytest benchmark measures handwriting extraction on five
 ground-truthed PDF pages — see `TEST_RESULTS.md` for the numbers and

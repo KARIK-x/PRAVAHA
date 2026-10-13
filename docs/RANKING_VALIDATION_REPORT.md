@@ -6,9 +6,9 @@
 
 This report is the Priority-Two deliverable. Every number below was executed
 against the real store (514,018 bars, 372 symbols) and is reproducible from the
-commands above. No figure was tuned to improve a result, and the one defect
-fix made during this investigation **worsened** the outcome — which is recorded
-here rather than hidden.
+commands above. No figure was tuned to improve a result: both defect fixes made
+during this investigation left the outcome **unchanged or worse — never
+better** — and each is recorded here rather than hidden.
 
 ---
 
@@ -21,12 +21,15 @@ negative:
 
 | Factor (alone) | Mean spread | Hit rate | Cum long | Cum bench |
 |---|---:|---:|---:|---:|
-| composite (default) | **−2.89%** | 45.7% | 106.60% | 199.08% |
-| momentum_3m | −1.95% | 31.4% | 105.16% | 199.00% |
-| momentum_6m | −3.00% | 31.4% | 105.57% | 195.81% |
-| volume_trend | −1.84% | 48.6% | 135.98% | 199.08% |
-| near_52w_high | −1.64% | 34.3% | 139.32% | 199.08% |
-| volatility (low-vol) | **+0.85%** | 57.1% | 218.96% | 199.08% |
+| composite (default) | **−3.25%** | 40.0% | 103.41% | 200.81% |
+| momentum_3m | −1.79% | 37.1% | 106.56% | 200.72% |
+| momentum_6m | **−3.50%** | 34.3% | 95.70% | 198.84% |
+| volume_trend | −1.84% | 45.7% | 136.50% | 200.81% |
+| near_52w_high | −2.03% | 40.0% | 135.46% | 200.81% |
+| volatility (low-vol) | **+0.73%** | 57.1% | 217.94% | 200.81% |
+
+*(Q 2018–2026, tradeability gate applied and invalid rows filtered — the same
+code path as §5, so the composite row matches §5 exactly.)*
 
 **The failure is not one bad factor.** It is that the two factors carrying half
 the weight (both momentum measures) were among the worst, and the remaining
@@ -38,8 +41,11 @@ the arithmetic.
 
 ## 2. Implementation defects found
 
-Auditing the methodology against the standard checklist surfaced **one genuine
-defect this session**, plus two corrected in the previous session.
+Auditing the methodology against the standard checklist surfaced **two genuine
+defects this session** (§2.1, §2.4), plus two corrected in the previous session
+(§2.2, §2.3). Neither of this session's fixes improved the result — §2.1 made
+it measurably worse, and §2.4 changed only the absolute levels by a few
+hundredths of a point while leaving every conclusion intact.
 
 ### 2.1 Untradeable symbols in the universe (FIXED — `dc6cb97`)
 
@@ -64,18 +70,24 @@ tail or the outcome pool. The count is surfaced in the period note. No weight,
 threshold or factor direction changed: this is universe construction, not a
 strategy parameter.
 
-**Honest before/after — the fix made the result worse:**
+**Honest before/after — both sides measured with the invalid-row filter
+applied, so the only difference is the gate itself:**
 
-| Window | Before | After | Direction |
+| Window | Before (no gate) | After (gate) | Direction |
 |---|---:|---:|---|
 | Q 1995–2007 | −11.80% | −11.80% | unchanged |
-| Q 2008–2017 | −0.16% | **−1.03%** | worse |
-| Q 2018–2026 | −2.96% | **−3.30%** | worse |
-| Q 1995–2026 | −3.19% | **−3.71%** | worse |
-| M 2015–2026 | −1.37% | −1.34% | ~unchanged |
+| Q 2008–2017 | −0.16% | **−1.04%** | worse |
+| Q 2018–2026 | −2.90% | **−3.25%** | worse |
+| Q 1995–2026 | −3.17% | **−3.70%** | worse |
+| M 2015–2026 | −1.33% | −1.28% | marginally better |
+
+Four of five windows got worse; the fifth improved by 0.05pp, which is
+reported rather than rounded away. Hit rate fell in the same direction
+(Q 2018–2026: 45.7% → 40.0%; Q 1995–2026: 41.3% → 38.0%).
 
 Had the fix improved the result, that would have been reported with the same
-prominence. It did not. **The negative spread is robust to the correction.**
+prominence. Overall it did not. **The negative spread is robust to the
+correction.**
 
 ### 2.2 Forward returns required an exact date match (fixed previously)
 
@@ -118,7 +130,7 @@ the corrected table. All windows remain negative.
 
 | Change | Effect on result |
 |---|---|
-| Tradeability gate (§2.1) | **Worse** (−3.19% → −3.71% full history) |
+| Tradeability gate (§2.1) | **Worse** (−3.17% → −3.70% full history) |
 | LOCF forward returns (§2.2) | Enabled the chance baseline; added symbols back |
 | Per-period tail size (§2.3) | Chance baseline now computable for all windows |
 
@@ -139,12 +151,12 @@ windows. **It is positive only in the window it was found in:**
 | Window | default | low-vol |
 |---|---:|---:|
 | Q 1995–2007 | −11.80% | −3.58% |
-| Q 2008–2017 | −1.03% | **−7.44%** |
+| Q 2008–2017 | −1.04% | **−7.44%** |
 | Q 2018–2026 | −3.25% | **+0.73%** ← selected here |
 | M 2015–2026 | −1.28% | −1.12% |
 
 Low-vol is negative in 3 of 4 windows, including **−7.44%** in 2008–2017 where
-the default was only −1.03%.
+the default was only −1.04%.
 
 ### 4.2 Why this is not evidence for low-vol
 
@@ -179,8 +191,10 @@ Determinism: two independent full runs are bit-for-bit identical except
 > contaminated by 124 invalid rows (e.g. Q 2018–2026 was reported as −3.30% and
 > Q 1995–2026 as −3.71%). The table above is authoritative. The corrections are
 > small and **do not change any conclusion** — every window remains negative.
-> An earlier figure of −0.16% for Q 2008–2017 also predates the §2.1 tradeability
-> gate and is superseded by −1.04%.
+>
+> Separately, a figure of −0.16% for Q 2008–2017 that circulated in the first
+> session is the **pre-gate** value: it remains correct as the "before" column
+> of §2.1, but it is not the current number, which is −1.04%.
 
 ## 6. Did any method pass validation?
 

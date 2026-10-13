@@ -285,6 +285,20 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     host, port = args.host or HOST, args.port or PORT
     print(f"Mega Tool starting on http://{host}:{port}")
+    # The API has no authentication: journal entries, portfolio positions and
+    # transcribed PDF records are served to whoever can reach the socket.
+    # Loopback is safe by construction, so only warn when that stops being true
+    # (--host 0.0.0.0 or MEGATOOL_HOST=...). A warning, not a block: a user
+    # behind their own firewall or an SSH tunnel has a legitimate reason, but
+    # they should be told rather than discover it later.
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            "  WARNING: bound to a non-loopback address with NO authentication.\n"
+            "  Anyone who can reach this address can read and edit your journal,\n"
+            "  portfolio and transcribed records. Use 127.0.0.1 unless you have\n"
+            "  a firewall or tunnel in front of this.\n",
+            file=sys.stderr,
+        )
     print("  Press Ctrl-C to stop.\n")
     print(DISCLAIMER)
     print()

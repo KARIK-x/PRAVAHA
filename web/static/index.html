@@ -134,6 +134,15 @@
         Composite of weighted, percentile-ranked factors. This is a view over past
         data, not a prediction or a trading signal.
       </p>
+      <div class="banner warn">
+        <b>Walk-forward validation failed.</b> Measured 2026-10-13 on the stored
+        history: the top quantile underperformed the bottom quantile in
+        <b>every window tested</b>, and <b>no alternative factor weighting
+        passed</b> either. The ranking is therefore an experimental research
+        signal, not a validated strategy, and nothing here is a recommendation.
+        Reproduce with <code>megatool walk-forward</code>; full analysis in
+        <code>docs/RANKING_VALIDATION_REPORT.md</code>.
+      </div>
       <div id="rank-error" class="error"></div>
       <div class="stat-row" id="rank-summary"></div>
       <div id="rank-table" class="tablewrap"></div>

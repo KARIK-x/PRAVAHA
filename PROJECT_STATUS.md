@@ -11,7 +11,7 @@ marked working because the code exists. The labels mean:
 | `NOT-IMPLEMENTED` | Deliberately not built. The reason is stated |
 | `NOT-TESTED` | Code exists but has not been executed/observed |
 
-Test suite: **766 passed, 0 failed** (18 files, `.venv/bin/python -m pytest -p no:warnings`, 2026-10-12).
+Test suite: **774 passed, 0 failed** (21 files, `.venv/bin/python -m pytest -p no:warnings`, 2026-10-13).
 `ruff check` and `ruff format` clean. Live app verified this session against the
 running server with the real 514,018-row store: `scripts/smoke_live.py` derives
 its probe list from the server's own OpenAPI spec and exercised **36 of 46
@@ -31,7 +31,7 @@ Browser UI was verified via Playwright in an earlier session.
 | 2 | **Market Dashboard** | `TESTED-PASS` | Breadth/movers/most-active render in the browser; the response carries `is_live: false` and shows **no index value** because no index source is available |
 | 3 | **Charting Terminal** | `TESTED-PASS` | Candles + volume + 28 indicators; verified in-browser against pandas (SMA 1014.485 / 877.87 matched exactly) |
 | 4 | **Stock Scanner** | `TESTED-PASS` | 19 metrics, 4 presets, filter-tree validation with plain-English 400s; 21 scanner tests + 65 API tests |
-| 5 | **Multi-Factor Ranking** | `TESTED-PASS` | `megatool/ranking.py` + `POST /api/rank` + a Screener-tab panel. Five price/volume factors, percentile-ranked and weighted; **every score decomposes into per-factor contributions that sum back to it** (verified on the real universe: 0 of 369 mismatched). Missing factors are median-substituted *and flagged*; symbols past `max_missing_fraction` are excluded with a stated reason. Five factors that need unavailable data (P/E, P/B, dividend yield, index-relative strength, sector) are declared at **zero weight** rather than faked. `as_of` truncates before any factor runs. 27 unit + 10 API tests |
+| 5 | **Multi-Factor Ranking** | `TESTED-PASS` | `megatool/ranking.py` + `POST /api/rank` + a Screener-tab panel. Five price/volume factors, percentile-ranked and weighted; **every score decomposes into per-factor contributions that sum back to it** (verified on the real universe: 0 of 369 mismatched). Missing factors are median-substituted *and flagged*; symbols past `max_missing_fraction` are excluded with a stated reason. Five factors that need unavailable data (P/E, P/B, dividend yield, index-relative strength, sector) are declared at **zero weight** rather than faked. `as_of` truncates before any factor runs. 27 unit + 10 API tests. **`TESTED-PASS` is the *implementation* status only — the ranking as a strategy FAILED walk-forward validation (top quartile underperformed the bottom in every window; no alternative weighting passed). It is a research view, not a predictive signal; see `docs/RANKING_VALIDATION_REPORT.md`.** |
 | 6 | **Fundamentals Lab** | `PARTIAL` | The **mechanism** is built and tested: `megatool/fundamentals.py`, schema v4, `GET /api/fundamentals/summary`, `GET /api/fundamentals/{symbol}`, `POST /api/fundamentals/import` (with `dry_run`), and an 11th web tab. Every value carries source, reporting period, unit and verification level; P/E, P/B and dividend yield **refuse** unverified inputs, unknown periods, periods >120 days apart, stale figures and non-positive denominators. **The store holds 0 records** — no verified source is connected (ShareSansar serves per-company reports behind a CSRF-protected AJAX POST, so nothing is scraped). 44 unit + 7 API tests |
 | 7 | **News / Events** | `NOT-IMPLEMENTED` | No machine-readable news source was found (A7/A8). Nothing is scraped |
 | 8 | **AI Research Assistant** | `TESTED-PASS` (as a rules engine) | **There is no LLM** — no key, and no local model fits 8 GB RAM. What ships is a deterministic rules engine that cites the window and definition behind every number, and **refuses** predictive/prescriptive questions. 28 unit + 6 API tests |
@@ -147,7 +147,7 @@ Evidence, not assertions. Everything below was executed and observed.
 
 | What | How | Result |
 | --- | --- | --- |
-| Full test suite | `.venv/bin/python -m pytest -p no:warnings` | **766 passed, 0 failed**, 51.76 s (was 709, 729, 731, 759, 764) |
+| Full test suite | `.venv/bin/python -m pytest -p no:warnings` | **774 passed, 0 failed**, 52.49 s (was 709, 729, 731, 759, 764, 766) |
 | Lint / format | `ruff check megatool/ tests/ scripts/`, `ruff format --check` | clean (56 files) |
 | Front end | `node --check web/static/app.js` | clean |
 | Live route coverage | `.venv/bin/python scripts/smoke_live.py` (server restarted on the changed code) | **36/46 routes probed, 36 expected, 0 unexpected, exit 0**; 10 mutating routes skipped by design |

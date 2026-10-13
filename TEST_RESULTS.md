@@ -1,7 +1,7 @@
 # Test results
 
-**Last run:** 2026-10-12 · **766 passed, 0 failed, 0 skipped** · 51.76 s · exit 0
-**Lint:** `ruff check` clean · `ruff format --check` clean (55 files)
+**Last run:** 2026-10-13 · **774 passed, 0 failed, 0 skipped** · 52.49 s · exit 0
+**Lint:** `ruff check` clean · `ruff format --check` clean (62 files)
 **Front end:** `node --check web/static/app.js` clean
 
 Reproduce (this run used the `.venv` interpreter directly — same suite, `addopts` supplies `-q`):
@@ -12,6 +12,7 @@ cd "/Users/ashim/Downloads/AI trading NEPSE"
 uv run ruff check megatool/ tests/ scripts/
 uv run ruff format --check megatool/ tests/ scripts/
 node --check web/static/app.js
+python scripts/route_inventory.py              # exits non-zero if a route lacks tests
 ```
 
 > `addopts` already contains `-q`. Adding another `-q` suppresses the summary
@@ -24,12 +25,12 @@ node --check web/static/app.js
 | File | Tests |
 |---|---:|
 | `test_indicators.py` | 132 |
-| `test_api.py` | 90 |
+| `test_api.py` | 96 |
+| `test_written_transcribe.py` | 57 |
 | `test_fundamentals.py` | 56 |
-| `test_written_transcribe.py` | 57 **(new)** |
-| `test_audit_a_fixes.py` | 45 |
 | `test_written_pdf.py` | 46 |
-| `test_financial_integrity.py` | 37 |
+| `test_audit_a_fixes.py` | 45 |
+| `test_financial_integrity.py` | 38 |
 | `test_research.py` | 32 |
 | `test_backtest.py` | 32 |
 | `test_journal.py` | 30 |
@@ -37,14 +38,25 @@ node --check web/static/app.js
 | `test_forecast.py` | 29 |
 | `test_ranking.py` | 27 |
 | `test_floorsheet.py` | 25 |
+| `test_walkforward.py` | 23 |
 | `test_scanner.py` | 21 |
 | `test_planning.py` | 21 |
-| `test_written_reference.py` | 20 **(new)** |
-| `test_walkforward.py` | 23 **(new)** |
+| `test_written_reference.py` | 20 |
 | `test_cli_floor.py` | 9 |
-| **Total (18 files)** | **766** |
+| `test_cli_serve.py` | 3 **(new)** |
+| `test_route_inventory.py` | 3 **(new)** |
+| **Total (21 files)** | **774** |
 
-Progression: 511 (13 files) → 602 → 650 → 707 → 709 → 729 → 731 → 759 → 764 → **766** (18 files).
+### Added this session (766 → 774)
+
+| Test | File | Why |
+|---|---|---|
+| `test_portfolio_delete_transaction_removes_it_from_the_ledger` | `test_api.py` | **API coverage gap:** `DELETE /api/portfolio/transactions/{tx_id}` had only a 404 test. Asserts the row actually leaves the ledger (count drops, id gone, re-delete 404s) — a delete returning 200 while leaving the row would corrupt realised P&L |
+| `test_walk_forward_report_loader_applies_the_invalid_filter` | `test_financial_integrity.py` | **§2.4 defect:** `walk_forward_report.py` read `price_bars` with raw SQL and bypassed B-17's filter, so the canonical research tool fed 124 impossible rows into the walk-forward. Asserts `load_frames()` and `get_bars()` agree exactly |
+| 3 × serve bind warning | `test_cli_serve.py` | Non-loopback bind warns about no authentication; loopback stays quiet; unset host falls back to config |
+| 3 × route classification | `test_route_inventory.py` | `smoke_live.py` and `route_inventory.py` must agree on which POSTs mutate, every named mutating POST must exist, and no DELETE/PATCH may ever be classed read-only |
+
+Progression: 511 (13 files) → 602 → 650 → 707 → 709 → 729 → 731 → 759 → 764 → 766 → **774** (21 files).
 
 ---
 
