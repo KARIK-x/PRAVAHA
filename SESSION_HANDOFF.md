@@ -15,7 +15,7 @@ uv sync                     # dependencies into ./.venv (Python 3.12.3)
 uv run megatool init        # create/upgrade the local databases
 uv run megatool fetch       # download real NEPSE history (network)
 uv run megatool serve       # web terminal at http://127.0.0.1:8710
-uv run pytest               # 759 tests, ~38 s
+uv run pytest               # 764 tests, ~31 s
 ```
 
 The server binds `127.0.0.1` only. Nothing listens on the network interface.
@@ -29,7 +29,7 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | Analysis | `scanner.py`, `backtest.py`, `forecast.py`, `research.py`, `floorsheet.py` |
 | Personal state | `portfolio.py` (ledger-derived), `journal.py`, `planning.py` |
 | Interface | `api.py` (FastAPI, 46 routes), `cli.py` (incl. `megatool floor import|summary`, `megatool walk-forward`), `web/static/` (11 tabs) |
-| Tests | `tests/` — 759 tests across 18 files |
+| Tests | `tests/` — 764 tests across 18 files |
 | Docs | `docs/ARCHITECTURE.md`, `DATA_SOURCES.md`, `TECH_STACK_DECISIONS.md`, `RESEARCH_REGISTER.md`, `PROJECT_STATUS.md`, `TESTING.md`, `SOURCES.md`, `DECISIONS.md`, `KNOWN_BUGS.md`, `TEST_RESULTS.md`, `TASK_QUEUE.md`, this file |
 
 ### Data actually in the store
@@ -296,7 +296,7 @@ problem.
 
 ## 7. Verification evidence
 
-- `.venv/bin/python -m pytest -p no:warnings` — **759 passed, 0 failed** (2026-10-12), 18 test files.
+- `.venv/bin/python -m pytest -p no:warnings` — **764 passed, 0 failed** (2026-10-12), 18 test files.
 - `.venv/bin/python scripts/smoke_live.py` — live server, real store: **36 of 46 routes
   probed, 36 expected, 0 unexpected, exit 0**; the 10 mutating routes are skipped by design.
 - `ruff check` and `ruff format` — clean.

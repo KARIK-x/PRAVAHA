@@ -6,6 +6,8 @@ that mirror the real structure without exposing any personal data.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from megatool.db import get_conn, init_app_db
@@ -15,7 +17,9 @@ from megatool.written_pdf import (
     PdfValidationError,
     RecordType,
     ReviewStatus,
+    VerificationStatus,
     WrittenPdfExtractor,
+    append_correction,
     build_manifest,
     import_records,
     parse_nepse_number,
@@ -286,6 +290,111 @@ def test_import_is_idempotent(db):
     # Total rows in DB is still 4
     rows = query_records(db_path=db)
     assert len(rows) == 4
+
+
+def test_extraction_method_is_stored_and_retrieved(db):
+    """Every record remembers HOW it was read, not just what it says.
+
+    A number that cannot be traced back to a reading method cannot be audited,
+    so an empty ``extraction_method`` is preserved verbatim rather than
+    defaulted to something reassuring.
+    """
+    records = _sample_records()
+    records[0].extraction_method = "apple_vision_ocr"
+    records[1].extraction_method = "manual_visual"
+    import_records(records, "WRITTENdata.pdf", db_path=db)
+
+    rows = {r["symbol"]: r for r in query_records(db_path=db)}
+    assert rows["TPC"]["extraction_method"] == "apple_vision_ocr"
+    assert rows["SAHAS"]["extraction_method"] == "manual_visual"
+    # The others were imported with no method recorded; that stays empty,
+    # not invented.
+    assert rows["NABIL"]["extraction_method"] == ""
+
+
+def test_append_correction_preserves_the_original_reading(db):
+    """A correction must never destroy what was there before.
+
+    ``value`` (the original) and ``raw_text`` are untouched; the new figure
+    goes to ``corrected_value`` and the change is appended to the history, so
+    the record can always be reconstructed back to its pre-correction state.
+    """
+    records = _sample_records()
+    records[0].extraction_method = "apple_vision_ocr"
+    import_records(records, "WRITTENdata.pdf", db_path=db)
+
+    before = query_records(db_path=db, symbol="TPC")[0]
+    original_value = before["value"]
+    assert original_value == 46.0
+
+    out = append_correction(
+        before["id"],
+        45.0,
+        "OCR read 46 but the digit is a 45 at full resolution",
+        db_path=db,
+    )
+    assert out["record_id"] == before["id"]
+    assert out["entries"] == 1
+
+    after = query_records(db_path=db, symbol="TPC")[0]
+    # The original value and raw text are untouched.
+    assert after["value"] == original_value
+    assert after["raw_text"] == before["raw_text"]
+    assert after["extraction_method"] == "apple_vision_ocr"
+    # The new figure lives in corrected_value, not over the original.
+    assert json.loads(after["corrected_value"]) == 45.0
+
+    history = json.loads(after["correction_history"])
+    assert len(history) == 1
+    assert history[0]["from"] == original_value
+    assert history[0]["to"] == 45.0
+    assert history[0]["reason"].startswith("OCR read 46")
+    assert history[0]["original_reading"] == before["raw_text"]
+
+
+def test_append_correction_is_append_only_across_multiple_corrections(db):
+    """Two corrections produce two history entries; the first is not replaced."""
+    records = _sample_records()
+    import_records(records, "WRITTENdata.pdf", db_path=db)
+    row = query_records(db_path=db, symbol="TPC")[0]
+
+    append_correction(row["id"], 45.0, "first fix", db_path=db)
+    append_correction(row["id"], 44.5, "second fix", db_path=db)
+
+    final = query_records(db_path=db, symbol="TPC")[0]
+    history = json.loads(final["correction_history"])
+    assert [h["to"] for h in history] == [45.0, 44.5]
+    assert [h["reason"] for h in history] == ["first fix", "second fix"]
+    # Each entry records the value it replaced, so the chain is walkable back.
+    assert [h["from"] for h in history] == [46.0, 45.0]
+    # The ORIGINAL original survives both corrections.
+    assert final["value"] == 46.0
+
+
+def test_append_correction_marks_the_record_corrected_and_requires_a_reason(db):
+    """A correction without a stated reason is a guess, so it is rejected."""
+    records = _sample_records()
+    import_records(records, "WRITTENdata.pdf", db_path=db)
+    row = query_records(db_path=db, symbol="TPC")[0]
+
+    with pytest.raises(PdfValidationError):
+        append_correction(row["id"], 45.0, "   ", db_path=db)
+
+    # Nothing was recorded by the rejected call.
+    assert json.loads(query_records(db_path=db, symbol="TPC")[0]["correction_history"]) == []
+
+    # An accepted correction is visibly marked corrected_verified, the status
+    # that gates use in financial output.
+    append_correction(row["id"], 45.0, "visual check", db_path=db)
+    after = query_records(db_path=db, symbol="TPC")[0]
+    assert after["verification_status"] == VerificationStatus.CORRECTED_VERIFIED.value
+    assert after["review_status"] == ReviewStatus.CORRECTED.value
+
+
+def test_correction_on_an_unknown_record_fails_loudly(db):
+    """A correction to a row that does not exist must not silently succeed."""
+    with pytest.raises(PdfValidationError):
+        append_correction(999_999, 1.0, "nonexistent", db_path=db)
 
 
 def test_review_status_filter(db):
