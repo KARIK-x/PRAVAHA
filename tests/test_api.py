@@ -637,6 +637,29 @@ def test_portfolio_delete_transaction_404(client):
     assert client.delete("/api/portfolio/transactions/999").status_code == 404
 
 
+def test_portfolio_delete_transaction_removes_it_from_the_ledger(client):
+    """The success path must actually remove the transaction, not just say 200.
+
+    A delete that returned 200 while leaving the row in place would silently
+    corrupt realised P&L, so this asserts the ledger is genuinely shorter and
+    the deleted id is gone, not merely that the call was accepted.
+    """
+    tx = client.post("/api/portfolio/transactions", json=_tx()).json()["transaction"]
+    tx_id = tx["id"]
+    before = client.get("/api/portfolio/transactions").json()["transactions"]
+    assert any(t["id"] == tx_id for t in before)
+
+    r = client.delete(f"/api/portfolio/transactions/{tx_id}")
+    assert r.status_code == 200
+    assert r.json()["deleted"] == tx_id
+
+    after = client.get("/api/portfolio/transactions").json()["transactions"]
+    assert len(after) == len(before) - 1
+    assert all(t["id"] != tx_id for t in after)
+    # Deleting the same id again is now a 404, not a silent second delete.
+    assert client.delete(f"/api/portfolio/transactions/{tx_id}").status_code == 404
+
+
 def test_portfolio_manual_position_conflicts_with_ledger(client):
     client.post("/api/portfolio/transactions", json=_tx())
     r = client.post(
