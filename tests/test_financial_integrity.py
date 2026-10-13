@@ -879,3 +879,66 @@ def test_bars_are_unique_on_symbol_and_date(tmp_path):
     count = store.bar_count()
     store.close()
     assert count == 1, "re-upserting the same (symbol, date) must not duplicate"
+
+
+def test_walk_forward_report_loader_applies_the_invalid_filter(tmp_path):
+    """The research report script must exclude invalid rows, like every reader.
+
+    Regression test for the §2.4 defect found while reconciling two runs of the
+    same window that disagreed (Q 2018-2026: -3.30% vs -3.25%, hit rate 37.1%
+    vs 40.0%).
+
+    ``scripts/walk_forward_report.py`` loaded bars with raw SQL, ``SELECT ...
+    FROM price_bars``, and so bypassed the B-17 ``_NOT_INVALID`` predicate that
+    ``get_bars`` applies. The *canonical reproduction tool* - the one the
+    research report and README point at - was therefore computing the
+    walk-forward over 124 physically impossible rows (inverted high/low, zero
+    prices) that the API and CLI excluded, silently contaminating every
+    headline number.
+
+    This asserts the two paths agree: ``load_frames`` must return exactly the
+    rows ``get_bars`` would, no more and no fewer.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    store = MarketStore(tmp_path / "market.duckdb")
+    n = 4
+    store.upsert_bars(
+        pd.DataFrame(
+            {
+                "symbol": ["BAD"] * n + ["OK"] * n,
+                "trading_date": list(pd.bdate_range("2026-01-01", periods=n)) * 2,
+                "open": [10.0] * (2 * n),
+                "high": [9.0] * n + [12.0] * n,  # high < low on BAD only
+                "low": [11.0] * n + [9.0] * n,
+                "close": [10.0] * (2 * n),
+                "volume": [100] * (2 * n),
+                "source": ["TEST"] * (2 * n),
+                "retrieved_at": [RETRIEVED] * (2 * n),
+                "validation_status": ["invalid"] * n + ["valid"] * n,
+                "flags": ["high_low_inverted"] * n + [None] * n,
+            }
+        )
+    )
+    store.close()
+
+    script = Path(__file__).resolve().parent.parent / "scripts" / "walk_forward_report.py"
+    spec = importlib.util.spec_from_file_location("wf_report_under_test", script)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    frames = mod.load_frames(tmp_path / "market.duckdb")
+
+    # A symbol whose every row is impossible is absent altogether: the WHERE
+    # filter removes the rows before the groupby, so no empty frame is made.
+    # Clean rows never vanish.
+    assert "BAD" not in frames, "a symbol of only invalid rows must not reach the walk-forward"
+    assert len(frames["OK"]) == n, "clean rows must never be dropped"
+
+    # And it agrees with get_bars exactly - one predicate, no drift.
+    store = MarketStore(tmp_path / "market.duckdb")
+    assert len(frames["OK"]) == len(store.get_bars("OK"))
+    assert len(frames.get("BAD", [])) == len(store.get_bars("BAD"))
+    store.close()

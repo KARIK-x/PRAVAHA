@@ -43,12 +43,25 @@ DEFAULT_RUNS: list[tuple[str, str, str]] = [
 ]
 
 
-def load_frames() -> dict:
-    """Every symbol's bars, loaded once and reused across all windows."""
-    store = MarketStore(PATHS.market_db)
+def load_frames(db_path: Path | None = None) -> dict:
+    """Every symbol's bars, loaded once and reused across all windows.
+
+    The ``_NOT_INVALID`` predicate is imported from ``market_store`` rather
+    than restated here, so this bulk load applies exactly the same rule as
+    ``get_bars`` and the two can never drift apart. Before this, the raw SQL
+    bypassed the B-17 filter and the walk-forward was being computed over 124
+    physically impossible rows (inverted high/low, zero prices) that every
+    other read path excludes.
+
+    ``db_path`` exists so the regression test can point this at a throwaway
+    store instead of the real one.
+    """
+    from megatool.market_store import _NOT_INVALID
+
+    store = MarketStore(db_path or PATHS.market_db)
     rows = store.execute(
         "SELECT symbol, trading_date, open, high, low, close, volume "
-        "FROM price_bars ORDER BY symbol, trading_date"
+        f"FROM price_bars WHERE {_NOT_INVALID} ORDER BY symbol, trading_date"
     ).df()
     store.close()
     frames = {s: g.reset_index(drop=True) for s, g in rows.groupby("symbol")}
