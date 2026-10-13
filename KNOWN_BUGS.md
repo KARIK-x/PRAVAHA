@@ -274,13 +274,20 @@ distance-from-low metrics on those symbols were measuring the corruption.
 `test_a_zero_price_row_cannot_set_a_symbols_all_time_low`,
 `test_snapshot_and_cross_sectional_reads_also_exclude_invalid`.
 
-### B-18 — Re-importing the PDF under a different filename duplicates records — **OPEN**
+### B-18 — Re-importing the PDF under a different filename duplicates records — **FIXED**
 
-`import_records` dedupes on `(source_file, content_hash)`. Re-importing the
-same path is idempotent (verified: `0 inserted, 2 updated`), but a **renamed
-copy of identical bytes** creates a second `import_id`, and `query_records`
-filters by no import — so `SELECT *` returns both copies (verified: 4 rows
+`import_records` deduped on `(source_file, content_hash)`. Re-importing the
+same path was idempotent (verified: `0 inserted, 2 updated`), but a **renamed
+copy of identical bytes** created a second `import_id`, and `query_records`
+filtered by no import — so `SELECT *` returned both copies (verified: 4 rows
 across 2 imports).
+
+**Fixed** by deduplicating on `content_hash` alone: identical sha256 bytes *are*
+the same document, so a renamed copy now reuses the original `import_id`
+instead of shadowing it. A genuinely different file (different bytes → different
+hash) still gets its own import. Verified by two new tests: a renamed copy of
+identical bytes reuses the import (`0 inserted, 4 updated`, query returns each
+record once), and two different documents keep separate imports.
 
 ---
 

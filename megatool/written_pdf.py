@@ -544,18 +544,25 @@ def import_records(
 
     with get_conn(db_path) as conn:
         # Register the import
-        cur = conn.execute(
-            "INSERT OR IGNORE INTO pdf_imports (source_file, content_hash, page_count, imported_at) "
-            "VALUES (?, ?, ?, ?)",
-            (pdf_path.name, content_hash, page_count, now_iso()),
-        )
-        if cur.rowcount == 0:
-            row = conn.execute(
-                "SELECT id FROM pdf_imports WHERE source_file=? AND content_hash=?",
-                (pdf_path.name, content_hash),
-            ).fetchone()
+        # Identical bytes are the same document, whatever the file is called.
+        # Deduplicating on content_hash alone means re-importing a renamed copy
+        # reuses the original import rather than shadowing it (B-18): the
+        # UNIQUE(source_file, content_hash) constraint would otherwise mint a
+        # second import_id and every query would return both copies. A given
+        # sha256 can only ever describe one document, so this cannot merge two
+        # genuinely different files.
+        row = conn.execute(
+            "SELECT id FROM pdf_imports WHERE content_hash=?",
+            (content_hash,),
+        ).fetchone()
+        if row is not None:
             import_id = int(row["id"])
         else:
+            cur = conn.execute(
+                "INSERT INTO pdf_imports (source_file, content_hash, page_count, imported_at) "
+                "VALUES (?, ?, ?, ?)",
+                (pdf_path.name, content_hash, page_count, now_iso()),
+            )
             import_id = int(cur.lastrowid or 0)
 
         inserted = 0

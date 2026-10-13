@@ -1,6 +1,6 @@
 # Test results
 
-**Last run:** 2026-10-12 · **764 passed, 0 failed, 0 skipped** · 30.92 s · exit 0
+**Last run:** 2026-10-12 · **766 passed, 0 failed, 0 skipped** · 51.76 s · exit 0
 **Lint:** `ruff check` clean · `ruff format --check` clean (55 files)
 **Front end:** `node --check web/static/app.js` clean
 
@@ -28,7 +28,7 @@ node --check web/static/app.js
 | `test_fundamentals.py` | 56 |
 | `test_written_transcribe.py` | 57 **(new)** |
 | `test_audit_a_fixes.py` | 45 |
-| `test_written_pdf.py` | 44 |
+| `test_written_pdf.py` | 46 |
 | `test_financial_integrity.py` | 37 |
 | `test_research.py` | 32 |
 | `test_backtest.py` | 32 |
@@ -42,9 +42,9 @@ node --check web/static/app.js
 | `test_written_reference.py` | 20 **(new)** |
 | `test_walkforward.py` | 23 **(new)** |
 | `test_cli_floor.py` | 9 |
-| **Total (18 files)** | **764** |
+| **Total (18 files)** | **766** |
 
-Progression: 511 (13 files) → 602 → 650 → 707 → 709 → 729 → 731 → 759 → **764** (18 files).
+Progression: 511 (13 files) → 602 → 650 → 707 → 709 → 729 → 731 → 759 → 764 → **766** (18 files).
 
 ---
 

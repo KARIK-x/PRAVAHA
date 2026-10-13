@@ -34,9 +34,12 @@ earlier audit's readings, not the notebook.
 | T-22 | Decide on B-17 (`invalid` bars in the read path) | **FIXED — invalid rows filtered from all three read paths.** `_NOT_INVALID` applied to `get_bars`, `latest_bars`, `all_closes`, each with an `include_invalid` opt-in, plus `include_flagged` on `GET /api/bars/{symbol}`. `suspect` deliberately kept. Measured: 124 rows excluded, **45/45** symbols' full-history ATR changed, **8** all-time lows corrected from `0.0`, **0** symbols lost a latest price, **0** removed. Tests 729 → **731**. |
 | T-A11 | Live end-to-end route verification | New `scripts/smoke_live.py` builds its probe list from the server's own `/openapi.json` so it cannot drift: **35 of 45 routes probed (27/27 GET, 8/8 read-only POST), 35 expected, 0 unexpected, exit 0**; 10 mutating routes skipped by design. First run found **3 probe defects, 0 product defects** — the script was wrong (bad entry_id placeholder, missing `exit_price`), not the API. |
 | T-16 | Walk-forward validation of the ranking | **Done — and the ranking failed the test.** New `megatool/walkforward.py` ranks at each period end using only data then available, holds the top/bottom quantiles, and measures the forward return against the universe benchmark and a random-selection baseline. **Every window tested has a negative mean spread** (Q 1995–2007 −11.80%, Q 2008–2017 −0.16%, Q 2018–2026 −2.96%, Q 1995–2026 −3.19%, M 2015–2026 −1.37%); the long portfolio underperformed the equal-weight benchmark in every window; the observed spread is at/below the **5th percentile of the random distribution in 4 of 5 windows**. Exposed as `POST /api/walk-forward` and `megatool walk-forward`; reproduced by `scripts/walk_forward_report.py`. Finding recorded in `docs/RESEARCH_REGISTER.md` D11 with its caveats. |
+| T-23 | Decide on B-18 (renamed-PDF re-import duplication) | **FIXED — deduplicated on `content_hash` alone.** Identical sha256 bytes are the same document whatever the file is called, so a renamed copy now reuses the original `import_id` instead of shadowing it; two different files (different bytes) still get separate imports. No schema migration needed. Verified by two new tests (renamed copy → `0 inserted, 4 updated`, query returns each record once; different documents → separate imports). |
+| T-24 | Store `extraction_method` and an append-only correction history | **Already implemented — and now tested.** The schema-v5 provenance columns (`extraction_method`, `verification_status`, `original_reading`, `corrected_value`, `correction_history`) and `append_correction` existed in `written_pdf.py`/`db.py` but had **zero test coverage**. Added 5 tests: method stored verbatim (empty stays empty); correction preserves the original reading and appends to history; history is append-only across multiple corrections; a reasonless correction is rejected and an accepted one is marked `corrected_verified`; a correction to a missing record fails loudly. |
 
-**Test count: 729 → 731.** No product defect was found by the live probe; the
-only defect found and fixed this session was B-17.
+**Test count: 729 → 731 (B-17) → 759 (T-16) → 764 (T-24) → 766 (B-18).** No product
+defect was found by the live probe; the defects found and fixed this session were
+B-17, B-18, and the missing test coverage on the T-24 provenance columns.
 
 ---
 
@@ -200,8 +203,6 @@ credentials.
 | T-19 | Transcribe PDF pages 18–33 | Settlement arithmetic self-checks make these the highest-yield pages (T-09). |
 | T-20 | `TASK_QUEUE.md` / `KNOWN_BUGS.md` upkeep | Update with every fix. |
 | T-21 | Decide on L-05 (median substitution) | Computing percentiles over **observed values only** is methodologically cleaner but changes every score. Owner's call. |
-| T-23 | Decide on B-18 (renamed-PDF re-import duplication) | Dedupe on `content_hash` alone, or filter `query_records` to the newest `import_id`. |
-| T-24 | Store `extraction_method` and an append-only correction history | Both missing from `pdf_records` (manifest, field-provenance table). |
 | T-25 | Populate the Fundamentals Lab | Import path is complete and tested; waiting on a permitted source. |
 
 ---

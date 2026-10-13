@@ -11,7 +11,7 @@ marked working because the code exists. The labels mean:
 | `NOT-IMPLEMENTED` | Deliberately not built. The reason is stated |
 | `NOT-TESTED` | Code exists but has not been executed/observed |
 
-Test suite: **764 passed, 0 failed** (18 files, `.venv/bin/python -m pytest -p no:warnings`, 2026-10-12).
+Test suite: **766 passed, 0 failed** (18 files, `.venv/bin/python -m pytest -p no:warnings`, 2026-10-12).
 `ruff check` and `ruff format` clean. Live app verified this session against the
 running server with the real 514,018-row store: `scripts/smoke_live.py` derives
 its probe list from the server's own OpenAPI spec and exercised **35 of 45
@@ -147,7 +147,7 @@ Evidence, not assertions. Everything below was executed and observed.
 
 | What | How | Result |
 | --- | --- | --- |
-| Full test suite | `.venv/bin/python -m pytest -p no:warnings` | **764 passed, 0 failed**, 30.92 s (was 709, 729, 731, 759) |
+| Full test suite | `.venv/bin/python -m pytest -p no:warnings` | **766 passed, 0 failed**, 51.76 s (was 709, 729, 731, 759, 764) |
 | Lint / format | `ruff check megatool/ tests/ scripts/`, `ruff format --check` | clean (56 files) |
 | Front end | `node --check web/static/app.js` | clean |
 | Live route coverage | `.venv/bin/python scripts/smoke_live.py` (server restarted on the changed code) | **36/46 routes probed, 36 expected, 0 unexpected, exit 0**; 10 mutating routes skipped by design |

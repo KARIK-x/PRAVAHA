@@ -7,7 +7,7 @@ Every claim in this file was verified by executing the named command on the proj
 
 | Command | Result |
 | --- | --- |
-| `uv run pytest` | **764 passed**, ~31 s |
+| `uv run pytest` | **766 passed**, ~52 s |
 | `ruff check .` | clean |
 | `ruff format .` | clean |
 
@@ -21,7 +21,7 @@ Per-file test counts:
 | `tests/test_fundamentals.py` | 56 | Provenance, units, periods, verification levels, CSV validation, idempotent storage, ratio guards |
 | `tests/test_written_reference.py` | 20 | Secondary-digitization labelling, settlement-block regressions, totals and component cross-checks, CSV encoding |
 | `tests/test_audit_a_fixes.py` | 45 | Regression tests for defects found by Audit A and Audit B |
-| `tests/test_written_pdf.py` | 44 | PDF extraction, validation, idempotent import, confidence filter, review workflow, settlement reconciliation, extraction_method provenance, append-only correction history |
+| `tests/test_written_pdf.py` | 46 | PDF extraction, validation, idempotent import, confidence filter, review workflow, settlement reconciliation, extraction_method provenance, append-only correction history, renamed-copy dedup (B-18) |
 | `tests/test_financial_integrity.py` | 37 | Hand-computed fixtures for money, P&L and ratio arithmetic; B-17 invalid-bar filtering |
 | `tests/test_research.py` | 32 | Cited findings, question routing, refusal of predictions, journal-only answer |
 | `tests/test_backtest.py` | 32 | Long/flat engine, fills, fees, assumptions |
@@ -34,7 +34,7 @@ Per-file test counts:
 | `tests/test_planning.py` | 21 | Position sizing, R multiples, warnings |
 | `tests/test_walkforward.py` | 23 | Walk-forward validation: hand-derived spreads, no look-ahead, trim equivalence, staleness, chance baseline |
 | `tests/test_cli_floor.py` | 9 | `megatool floor import` / `floor summary` |
-| **Total (18 files)** | **764** | |
+| **Total (18 files)** | **766** | |
 
 A separate, non-pytest benchmark measures handwriting extraction on five
 ground-truthed PDF pages — see `TEST_RESULTS.md` for the numbers and

@@ -7,6 +7,7 @@ that mirror the real structure without exposing any personal data.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -395,6 +396,61 @@ def test_correction_on_an_unknown_record_fails_loudly(db):
     """A correction to a row that does not exist must not silently succeed."""
     with pytest.raises(PdfValidationError):
         append_correction(999_999, 1.0, "nonexistent", db_path=db)
+
+
+def _write_synthetic_pdf(path, bytes_source=None) -> Path:
+    """Write a one-page PDF. Pass ``bytes_source`` to clone identical bytes."""
+    if bytes_source is not None:
+        path.write_bytes(Path(bytes_source).read_bytes())
+        return path
+    import pymupdf
+
+    doc = pymupdf.open()
+    doc.new_page()
+    doc.save(path)
+    doc.close()
+    return path
+
+
+def test_a_renamed_copy_of_identical_bytes_does_not_duplicate_records(db, tmp_path):
+    """Re-importing the same bytes under a new filename must be idempotent.
+
+    B-18: ``import_records`` deduped on ``(source_file, content_hash)``, so a
+    renamed copy of identical bytes minted a second ``import_id`` and every
+    query returned both copies. Identical sha256 bytes are the same document,
+    so the import is reused rather than duplicated.
+    """
+    original = _write_synthetic_pdf(tmp_path / "records.pdf")
+    first = import_records(_sample_records(), original, db_path=db)
+    assert first["records_inserted"] == 4
+
+    renamed = _write_synthetic_pdf(tmp_path / "records-renamed.pdf", bytes_source=original)
+    second = import_records(_sample_records(), renamed, db_path=db)
+
+    # Same document: the same import is reused, not shadowed by a second one.
+    assert second["import_id"] == first["import_id"]
+    assert second["records_inserted"] == 0
+    assert second["records_updated"] == 4
+
+    # And a query returns each record once, not twice.
+    assert len(query_records(db_path=db)) == 4
+
+
+def test_two_genuinely_different_documents_still_get_separate_imports(db, tmp_path):
+    """Deduping on content_hash must not merge two different documents."""
+    a = _write_synthetic_pdf(tmp_path / "a.pdf")
+    b = tmp_path / "b.pdf"
+    import pymupdf
+
+    doc = pymupdf.open()
+    doc.new_page()
+    doc.new_page()  # two pages: different bytes, so a different document
+    doc.save(b)
+    doc.close()
+
+    first = import_records(_sample_records(), a, db_path=db)
+    second = import_records(_sample_records(), b, db_path=db)
+    assert first["import_id"] != second["import_id"]
 
 
 def test_review_status_filter(db):
