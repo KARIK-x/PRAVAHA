@@ -7,7 +7,7 @@ Every claim in this file was verified by executing the named command on the proj
 
 | Command | Result |
 | --- | --- |
-| `uv run pytest` | **774 passed**, ~52 s |
+| `uv run pytest` | **796 passed**, ~35 s |
 | `ruff check .` | clean |
 | `ruff format .` | clean |
 
@@ -31,10 +31,11 @@ Per-file test counts:
 | `tests/test_ranking.py` | 27 | Score decomposition, missing-data handling, exclusion reasons, `as_of` truncation, factor polarity |
 | `tests/test_floorsheet.py` | 25 | CSV parsing, HHI, counterparties, concentration |
 | `tests/test_scanner.py` | 21 | Metrics, presets, filter-tree validation |
+| `tests/test_swings.py` | 17 **(new)** | Swing pivots on a hand-built zigzag, **prefix-recomputation causality**, confirmation lag, plateau handling, prominence, structure labels, break-of-structure dating |
 | `tests/test_planning.py` | 21 | Position sizing, R multiples, warnings |
 | `tests/test_walkforward.py` | 23 | Walk-forward validation: hand-derived spreads, no look-ahead, trim equivalence, staleness, chance baseline |
 | `tests/test_cli_floor.py` | 9 | `megatool floor import` / `floor summary` |
-| **Total (21 files)** | **774** | |
+| **Total (22 files)** | **796** | |
 
 A separate, non-pytest benchmark measures handwriting extraction on five
 ground-truthed PDF pages — see `TEST_RESULTS.md` for the numbers and

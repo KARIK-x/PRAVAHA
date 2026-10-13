@@ -6,7 +6,7 @@ Prioritised next work.
 
 | Category | Meaning | Current members |
 |---|---|---|
-| **COMPLETED AND VERIFIED** | Built, tested, and exercised end-to-end with evidence recorded | T-A1…T-A11, T-16 *(the validation was run and its result — failure — is verified)*, T-23, T-24, B-17, B-18, route inventory, security pass |
+| **COMPLETED AND VERIFIED** | Built, tested, and exercised end-to-end with evidence recorded | T-A1…T-A12, T-16 *(the validation was run and its result — failure — is verified)*, T-23, T-24, B-17, B-18, route inventory, security pass, **swing/market-structure engine** |
 | **IMPLEMENTED BUT NOT FULLY VERIFIED** | The mechanism works and is tested, but has never run on real input | Fundamentals Lab (0 records), Floor-sheet analysis (synthetic only), PDF extraction pipeline (0/52 pages transcribed) |
 | **FAILED** | Executed honestly and did not pass | **T-16 ranking validation** — top quantile underperformed the bottom in *every* window; no alternative weighting passed. Recorded, not hidden |
 | **BLOCKED BY EXTERNAL INPUT** | Cannot proceed without an owner file, credential, permission or authoritative source | T-09 (image access), T-11 (sector CSV), T-12 (verified tax/fee rates), T-10 (Ollama approval), T-13 (real floor sheet), T-15 (licensing), B-09/B-10/B-11/B-12, OmniRoute key |
@@ -46,9 +46,33 @@ earlier audit's readings, not the notebook.
 | T-23 | Decide on B-18 (renamed-PDF re-import duplication) | **FIXED — deduplicated on `content_hash` alone.** Identical sha256 bytes are the same document whatever the file is called, so a renamed copy now reuses the original `import_id` instead of shadowing it; two different files (different bytes) still get separate imports. No schema migration needed. Verified by two new tests (renamed copy → `0 inserted, 4 updated`, query returns each record once; different documents → separate imports). |
 | T-24 | Store `extraction_method` and an append-only correction history | **Already implemented — and now tested.** The schema-v5 provenance columns (`extraction_method`, `verification_status`, `original_reading`, `corrected_value`, `correction_history`) and `append_correction` existed in `written_pdf.py`/`db.py` but had **zero test coverage**. Added 5 tests: method stored verbatim (empty stays empty); correction preserves the original reading and appends to history; history is append-only across multiple corrections; a reasonless correction is rejected and an accepted one is marked `corrected_verified`; a correction to a missing record fails loudly. |
 
-**Test count: 729 → 731 (B-17) → 759 (T-16) → 764 (T-24) → 766 (B-18) → 774 (route inventory + serve warning + loader regression).** No product
+**Test count: 729 → 731 (B-17) → 759 (T-16) → 764 (T-24) → 766 (B-18) → 774 (route inventory + serve warning + loader regression) → 796 (swing engine).** No product
 defect was found by the live probe; the defects found and fixed this session were
 B-17, B-18, and the missing test coverage on the T-24 provenance columns.
+
+### Advanced-analysis engine (2026-10-13)
+
+The specification's repeatedly emphasised **comprehensive technical-analysis
+engine** (Elliott Wave §4, Fibonacci §5, chart patterns §6, harmonics §7, price
+action §9, support/resistance §14) did not exist: `grep` across `megatool/` for
+`elliott|fibonacci|harmonic|gartley|butterfly|candlestick|doji|engulfing`
+returned **nothing**. Only the conventional indicator library (28 indicators)
+was present.
+
+A feature-by-feature audit against the primary reference
+(`ALL THE CONTENT:IDEA MAIN OVERVIEW OF PROJECT.pdf`, 104 pages, read in full)
+identified the **swing point** as the shared primitive all six mandatory
+modules need. Implemented it once, per §28.2 (shared calculation layer):
+
+| ID | Task | Evidence |
+|---|---|---|
+| T-A12 | Swing-point & market-structure engine | `megatool/ta/swings.py`, `GET /api/bars/{symbol}/structure`, and a **Swings** chart overlay. Documented fractal rule (strictly above the left window, `>=` the right — so a plateau yields exactly one pivot); alternating HH/HL/LH/LL labels; trend; break-of-structure. **The look-ahead rule is enforced, not merely intended**: every swing carries `confirmed_index`, only confirmed swings are drawn, and an unconfirmed pivot is excluded rather than guessed. Verified by a hand-built zigzag, a **prefix-recomputation causality test**, and the API contract. Tests **774 → 796**; route inventory **46 → 47 routes**, all test-covered; live smoke **37 probed · 37 expected · 0 unexpected · exit 0**. Real store: ADBL 250 bars → 23 swings, every `confirmed_index >= index` |
+
+This is labelled **DETECTED** everywhere — a candidate turning point under
+fixed geometric rules, not a validated signal and not a prediction. It unblocks
+the next four mandatory modules (Fibonacci, Elliott, harmonics, chart patterns),
+each of which now consumes one shared, tested definition instead of inventing
+its own.
 
 ---
 
@@ -56,6 +80,47 @@ B-17, B-18, and the missing test coverage on the T-24 provenance columns.
 
 Each blocker below is recorded with user impact, dependencies, the safe path,
 how to validate it, and what needs an owner decision.
+
+### T-26 · Fibonacci analysis module — **READY** *(unblocked by T-A12)*
+
+* **User impact:** high. §5 is a mandatory capability and is the natural first
+  consumer of the swing engine: retracements and extensions are anchored on
+  swing highs/lows.
+* **Technical dependency:** `megatool/ta/swings.py` (done). The module is pure
+  arithmetic once the anchors exist.
+* **Data dependency:** none beyond stored bars.
+* **Safe path:** retracements (23.6/38.2/50/61.8/78.6) and extensions
+  (127.2/138.2/150/161.8/200/261.8) computed from an explicitly stated anchor
+  pair; **the anchoring methodology must be printed in the response** (§5.1),
+  and the 50% level labelled a market convention, not a Fibonacci ratio.
+* **Validation:** hand-computed levels for a known high/low pair; a test that
+  the response states its anchors; confluence reported as overlap, never as
+  proof a level will hold (§5.4).
+* **Owner decision:** none.
+
+### T-27 · Candlestick pattern engine — **READY**
+
+* **User impact:** medium-high. §8 mandatory. Self-contained (needs only OHLCV),
+  so it can proceed independently of T-26.
+* **Safe path:** single/two/three-candle patterns with **explicit tolerances**
+  and **context** (prior trend, proximity to a swing level) — §8.4 requires
+  context rather than isolated labels. Labelled DETECTED.
+* **Validation:** hand-built candles for each pattern; a test that a pattern
+  in the middle of a range is reported with weaker context than one at a swing
+  level.
+* **Owner decision:** none.
+
+### T-28 · Elliott Wave / harmonic candidates — **BLOCKED-ON-DESIGN**
+
+* **User impact:** high, but §4/§7 require alternative counts, invalidation
+  levels and explicit uncertainty labels. Building this badly would be worse
+  than not building it.
+* **Technical dependency:** T-A12 (done) supplies the legs; T-26 supplies the
+  Fibonacci ratios the harmonic definitions require.
+* **Safe path:** after T-26. Report *candidates* with invalidation levels and
+  competing interpretations; never a single asserted count.
+* **Owner decision:** none to start, but review of the output framing is
+  worthwhile before it reaches the UI.
 
 ### T-09 · Re-verify the PDF transcription page by page — **IN PROGRESS**
 

@@ -1,6 +1,6 @@
 # Test results
 
-**Last run:** 2026-10-13 · **774 passed, 0 failed, 0 skipped** · 52.49 s · exit 0
+**Last run:** 2026-10-13 · **796 passed, 0 failed, 0 skipped** · 34.79 s · exit 0
 **Lint:** `ruff check` clean · `ruff format --check` clean (62 files)
 **Front end:** `node --check web/static/app.js` clean
 
@@ -25,7 +25,7 @@ python scripts/route_inventory.py              # exits non-zero if a route lacks
 | File | Tests |
 |---|---:|
 | `test_indicators.py` | 132 |
-| `test_api.py` | 96 |
+| `test_api.py` | 101 **(+5)** |
 | `test_written_transcribe.py` | 57 |
 | `test_fundamentals.py` | 56 |
 | `test_written_pdf.py` | 46 |
@@ -40,23 +40,22 @@ python scripts/route_inventory.py              # exits non-zero if a route lacks
 | `test_floorsheet.py` | 25 |
 | `test_walkforward.py` | 23 |
 | `test_scanner.py` | 21 |
+| `test_swings.py` | 17 **(new)** |
 | `test_planning.py` | 21 |
 | `test_written_reference.py` | 20 |
 | `test_cli_floor.py` | 9 |
-| `test_cli_serve.py` | 3 **(new)** |
-| `test_route_inventory.py` | 3 **(new)** |
-| **Total (21 files)** | **774** |
+| `test_cli_serve.py` | 3 |
+| `test_route_inventory.py` | 3 |
+| **Total (22 files)** | **796** |
 
-### Added this session (766 → 774)
+### Added this session (774 → 796)
 
 | Test | File | Why |
 |---|---|---|
-| `test_portfolio_delete_transaction_removes_it_from_the_ledger` | `test_api.py` | **API coverage gap:** `DELETE /api/portfolio/transactions/{tx_id}` had only a 404 test. Asserts the row actually leaves the ledger (count drops, id gone, re-delete 404s) — a delete returning 200 while leaving the row would corrupt realised P&L |
-| `test_walk_forward_report_loader_applies_the_invalid_filter` | `test_financial_integrity.py` | **§2.4 defect:** `walk_forward_report.py` read `price_bars` with raw SQL and bypassed B-17's filter, so the canonical research tool fed 124 impossible rows into the walk-forward. Asserts `load_frames()` and `get_bars()` agree exactly |
-| 3 × serve bind warning | `test_cli_serve.py` | Non-loopback bind warns about no authentication; loopback stays quiet; unset host falls back to config |
-| 3 × route classification | `test_route_inventory.py` | `smoke_live.py` and `route_inventory.py` must agree on which POSTs mutate, every named mutating POST must exist, and no DELETE/PATCH may ever be classed read-only |
+| 17 × swing engine | `test_swings.py` **(new)** | Hand-built zigzag with exact expected pivots; **prefix-recomputation causality** (a recomputation on the first N bars must reproduce exactly the swings already confirmed by bar N — history never rewrites itself); plateau emits one pivot not many; confirmation lags the pivot by exactly `right` bars; unconfirmed tail excluded rather than guessed; monotonic prominence filter; HH/HL/LH/LL and trend classification; **a break of structure is dated at the confirmation bar, never before the level was knowable**; input validation |
+| 5 × structure API | `test_api.py` | Route returns swings with dates and `confirmed_index >= index`; alternation; the response states its limitations ("not a prediction", `confirmed_index`); 404 for an unknown symbol; 422 for impossible windows |
 
-Progression: 511 (13 files) → 602 → 650 → 707 → 709 → 729 → 731 → 759 → 764 → 766 → **774** (21 files).
+Progression: 511 (13 files) → 602 → 650 → 707 → 709 → 729 → 731 → 759 → 764 → 766 → 774 → **796** (22 files).
 
 ---
 

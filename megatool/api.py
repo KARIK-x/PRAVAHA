@@ -129,6 +129,14 @@ from megatool.scanner import (
 )
 from megatool.ta import available as ta_available
 from megatool.ta import compute as ta_compute
+from megatool.ta.swings import (
+    DEFAULT_LEFT,
+    DEFAULT_RIGHT,
+    SwingError,
+    classify_structure,
+    find_breaks,
+    find_swings,
+)
 from megatool.walkforward import WalkForwardConfig, walk_forward
 
 
@@ -523,6 +531,84 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
             "message": r.message,
             "dates": [str(d.date()) for d in df["trading_date"]],
             "series": series,
+        }
+
+    @app.get("/api/bars/{symbol}/structure")
+    def structure(
+        symbol: str,
+        start: date | None = None,
+        end: date | None = None,
+        limit: int | None = None,
+        left: int = Query(DEFAULT_LEFT, ge=1, le=200),
+        right: int = Query(DEFAULT_RIGHT, ge=1, le=200),
+        min_prominence: float = Query(0.0, ge=0.0, le=1.0),
+    ) -> dict[str, Any]:
+        """Swing points and market structure for one symbol.
+
+        This is a *detection* endpoint, not a signal: it reports candidate
+        turning points under the documented rules in ``megatool.ta.swings``.
+        Every swing carries ``confirmed_index`` — the first bar at which the
+        swing was knowable — because a pivot is only a pivot once ``right``
+        further bars have failed to exceed it. Anything earlier would be
+        look-ahead.
+        """
+        store = get_store()
+        df = store.get_bars(symbol.upper(), start=start, end=end, limit=limit)
+        if df.empty:
+            raise HTTPException(404, f"no stored history for {symbol.upper()}")
+
+        highs = df["high"].to_numpy(float)
+        lows = df["low"].to_numpy(float)
+        closes = df["close"].to_numpy(float)
+
+        try:
+            swings = find_swings(highs, lows, left=left, right=right, min_prominence=min_prominence)
+        except SwingError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+        dates = [str(d.date()) for d in df["trading_date"]]
+        structure_info = classify_structure(swings)
+        breaks = find_breaks(swings, closes)
+
+        def stamp(row: dict[str, Any], idx_key: str = "index") -> dict[str, Any]:
+            i = row[idx_key]
+            return {**row, "date": dates[i] if 0 <= i < len(dates) else None}
+
+        return {
+            "symbol": symbol.upper(),
+            "method": "fractal pivot (unique extreme over left/right window)",
+            "params": {"left": left, "right": right, "min_prominence": min_prominence},
+            "counts": {
+                "bars": int(len(df)),
+                "swings": len(swings),
+                "swing_highs": structure_info["swing_highs"],
+                "swing_lows": structure_info["swing_lows"],
+            },
+            "first_date": dates[0],
+            "last_date": dates[-1],
+            "swings": [
+                {
+                    **stamp(s.to_dict()),
+                    "confirmed_date": (
+                        dates[s.confirmed_index] if 0 <= s.confirmed_index < len(dates) else None
+                    ),
+                }
+                for s in swings
+            ],
+            "labels": [stamp(row) for row in structure_info["labels"]],
+            "trend": structure_info["trend"],
+            "breaks": [stamp(row) for row in breaks],
+            "interpretation": "detected",
+            "caveats": [
+                "Detected turning points under fixed geometric rules, not validated "
+                "patterns and not a prediction.",
+                "A swing is knowable only at `confirmed_index`, `right` bars after the "
+                "pivot bar; do not act on it before then.",
+                "Swing classification depends on `left`, `right` and `min_prominence`; "
+                "different settings give different, defensible structures.",
+                "Prices are unadjusted for bonus/split issues, so a structural break "
+                "may reflect a corporate action rather than trading behaviour.",
+            ],
         }
 
     # ---------------------------------------------------------------- screen

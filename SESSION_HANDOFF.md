@@ -15,7 +15,7 @@ uv sync                     # dependencies into ./.venv (Python 3.12.3)
 uv run megatool init        # create/upgrade the local databases
 uv run megatool fetch       # download real NEPSE history (network)
 uv run megatool serve       # web terminal at http://127.0.0.1:8710
-uv run pytest               # 774 tests, ~52 s
+uv run pytest               # 796 tests, ~35 s
 ```
 
 The server binds `127.0.0.1` only. Nothing listens on the network interface.
@@ -25,11 +25,11 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | Layer | Files |
 | --- | --- |
 | Data | `megatool/config.py`, `db.py` (SQLite, schema v2), `market_store.py` (DuckDB), `quality.py`, `datasources/`, `ingest.py` |
-| Indicators | `megatool/ta/` — 28 indicators, decorator registry, per-output warm-up |
+| Indicators | `megatool/ta/` — 28 indicators, decorator registry, per-output warm-up; `ta/swings.py` — swing points, market structure, breaks of structure |
 | Analysis | `scanner.py`, `backtest.py`, `forecast.py`, `research.py`, `floorsheet.py` |
 | Personal state | `portfolio.py` (ledger-derived), `journal.py`, `planning.py` |
-| Interface | `api.py` (FastAPI, 46 routes), `cli.py` (incl. `megatool floor import|summary`, `megatool walk-forward`), `web/static/` (11 tabs) |
-| Tests | `tests/` — 774 tests across 21 files |
+| Interface | `api.py` (FastAPI, 47 routes), `cli.py` (incl. `megatool floor import|summary`, `megatool walk-forward`), `web/static/` (11 tabs) |
+| Tests | `tests/` — 796 tests across 22 files |
 | Docs | `docs/ARCHITECTURE.md`, `DATA_SOURCES.md`, `TECH_STACK_DECISIONS.md`, `RESEARCH_REGISTER.md`, `PROJECT_STATUS.md`, `TESTING.md`, `SOURCES.md`, `DECISIONS.md`, `KNOWN_BUGS.md`, `TEST_RESULTS.md`, `TASK_QUEUE.md`, this file |
 
 ### Data actually in the store
@@ -113,6 +113,8 @@ The server binds `127.0.0.1` only. Nothing listens on the network interface.
 | `dc6cb97` | **Tradeability gate** — excluded symbols last traded >30 days before T from the walk-forward universe. A genuine defect fix that made the result **worse**, reported as such |
 | `329501c` | **Report loader defect (§2.4)** — `walk_forward_report.py` bypassed the B-17 invalid-row filter, contaminating every headline number; corrected figures + `docs/RANKING_VALIDATION_REPORT.md` + `RESEARCH_REGISTER` D12 |
 | *(this commit)* | Serve-bind auth warning, route-classification sync tests, rank-panel validation banner, corrected stale counts across docs |
+| *(primary-reference session)* | Read the 104-page project overview PDF in full; feature-by-feature audit of the 12 core areas |
+| *(this commit)* | **Swing-point & market-structure engine** — `megatool/ta/swings.py`, `GET /api/bars/{symbol}/structure`, **Swings** chart overlay, 22 new tests (796 total), route inventory 46 → 47 |
 
 ### Work done this session that is *not* a code commit
 
@@ -300,7 +302,7 @@ problem.
 
 ## 7. Verification evidence
 
-- `.venv/bin/python -m pytest -p no:warnings` — **774 passed, 0 failed** (2026-10-13), 21 test files.
+- `.venv/bin/python -m pytest -p no:warnings` — **796 passed, 0 failed** (2026-10-13), 22 test files.
 - `.venv/bin/python scripts/smoke_live.py` — live server, real store: **36 of 46 routes
   probed, 36 expected, 0 unexpected, exit 0**; the 10 mutating routes are skipped by design.
 - `ruff check` and `ruff format` — clean.
@@ -323,6 +325,17 @@ problem.
 
 Mirrors `TASK_QUEUE.md`, which carries the same list with acceptance criteria.
 
+0. **Continue the advanced-analysis engine (T-26 → T-27 → T-28).** The swing
+   and market-structure engine shipped this session (T-A12) and is the shared
+   primitive the specification's mandatory Fibonacci (§5), Elliott Wave (§4),
+   harmonic (§7), chart-pattern (§6) and support/resistance (§14) modules all
+   need. In order: **T-26 Fibonacci** (pure arithmetic on top of the swings;
+   print the anchoring methodology and label 50% a market convention, not a
+   Fibonacci ratio), then **T-27 candlestick patterns** (self-contained; needs
+   explicit tolerances and *context*, not isolated labels), then **T-28
+   Elliott/harmonic candidates** (report competing counts with invalidation
+   levels, never one asserted count). Every one of these must stay labelled
+   **DETECTED**, never a validated signal.
 1. **Continue the page-by-page PDF transcription (T-09).** Page 21 is done — its
    four settlements are visually verified, and the re-read overturned a fabricated
    correction (gap 10). The measured route now works end to end: run Apple Vision

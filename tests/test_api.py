@@ -7,6 +7,7 @@ Nothing here uses the network. Synthetic fixtures are clearly labelled by their
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 
 import numpy as np
 import pandas as pd
@@ -147,6 +148,121 @@ def test_indicator_accepts_param_overrides(client):
     assert d["output_warmup"]["sma"] == 9
     assert d["series"]["sma"][8] is None
     assert d["series"]["sma"][9] is not None
+
+
+# ------------------------------------------------------------------ structure
+@contextmanager
+def _zigzag_client(tmp_path, monkeypatch):
+    """A store holding a hand-checkable zigzag, so swings are unambiguous."""
+    store = MarketStore(tmp_path / "zigzag.duckdb")
+    close = np.array(
+        [
+            8,
+            9,
+            10,
+            9,
+            8,
+            7,
+            6,
+            7,
+            8,
+            9,
+            10,
+            9,
+            8,
+            7,
+            6,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            11,
+            10,
+            9,
+            8,
+            7,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+        ],
+        dtype=float,
+    )
+    dates = pd.bdate_range("2026-01-01", periods=len(close))
+    df = pd.DataFrame(
+        {
+            "symbol": "ZZ",
+            "trading_date": dates,
+            "open": close,
+            "high": close + 0.5,
+            "low": close - 0.5,
+            "close": close,
+            "volume": np.full(len(close), 10_000, dtype=np.int64),
+            "turnover": close * 10_000,
+            "percent_change": 1.0,
+            "source": "synthetic-zigzag-fixture",
+            "retrieved_at": RETRIEVED,
+            "validation_status": "valid",
+        }
+    )
+    store.upsert_bars(df)
+    app = create_app(store=store)
+    with TestClient(app) as c:
+        yield c
+    store.close()
+
+
+def test_structure_route_returns_swings_with_dates(tmp_path, monkeypatch):
+    with _zigzag_client(tmp_path, monkeypatch) as c:
+        d = c.get("/api/bars/ZZ/structure", params={"left": 2, "right": 2}).json()
+
+    assert d["symbol"] == "ZZ"
+    assert d["interpretation"] == "detected"
+    assert d["counts"]["swings"] == len(d["swings"]) > 0
+    for s in d["swings"]:
+        assert s["kind"] in {"high", "low"}
+        assert s["date"] and s["confirmed_date"]
+        # The confirmation bar is never before the pivot bar.
+        assert s["confirmed_index"] >= s["index"]
+
+    kinds = [s["kind"] for s in d["swings"]]
+    assert all(a != b for a, b in zip(kinds, kinds[1:], strict=False)), kinds
+
+
+def test_structure_route_states_its_limitations(tmp_path, monkeypatch):
+    with _zigzag_client(tmp_path, monkeypatch) as c:
+        d = c.get("/api/bars/ZZ/structure", params={"left": 2, "right": 2}).json()
+    joined = " ".join(d["caveats"])
+    assert "not a prediction" in joined
+    assert "confirmed_index" in joined
+    assert d["method"]
+
+
+def test_structure_404_for_unknown_symbol(client):
+    assert client.get("/api/bars/ZZZZ/structure").status_code == 404
+
+
+def test_structure_rejects_impossible_windows(client):
+    r = client.get("/api/bars/TEST1/structure", params={"left": 0})
+    assert r.status_code == 422  # FastAPI query validation, ge=1
+    r = client.get("/api/bars/TEST1/structure", params={"min_prominence": -1})
+    assert r.status_code == 422
+
+
+def test_structure_is_labelled_not_validated(client):
+    """The endpoint must never present a detection as a validated signal."""
+    d = client.get("/api/bars/TEST1/structure", params={"left": 3, "right": 3}).json()
+    assert d["interpretation"] == "detected"
+    assert d["trend"] in {"up", "down", "mixed", "insufficient data"}
 
 
 def test_screen_pass_and_explanations(client):

@@ -175,6 +175,51 @@ verified unchanged. Upgrading an installed application is a machine change.
 
 ---
 
+## 2026-10-13 — the advanced-analysis engine, started from its foundation
+
+### Decision: build the swing point first, not Fibonacci
+
+The primary reference (104-page project overview PDF) marks Elliott Wave (§4),
+Fibonacci (§5), chart patterns (§6), harmonics (§7), price action (§9) and
+support/resistance (§14) as mandatory. `grep` across `megatool/` for any of
+those terms returned **nothing** — only the 28-indicator library existed.
+
+All six modules need the same primitive: a defensible list of turning points.
+Implementing each separately would produce six private, disagreeing definitions
+of "a swing" — exactly what §28.2 (shared calculation layer) forbids. So the
+swing point ships first, once, and the other five consume it.
+
+### Decision: `confirmed_index` is enforced, not merely documented
+
+A swing high at bar *i* is only a swing high once `right` further bars have
+failed to exceed it. Acting on bar *i* would be look-ahead — the same class of
+error as the one that made the walk-forward ranking untrustworthy. Therefore:
+
+* every swing carries `confirmed_index`, the first bar at which it was knowable;
+* the chart draws **only confirmed** swings — an unconfirmed pivot is excluded
+  rather than plotted;
+* a break of structure is dated at the confirmation bar, never at the pivot;
+* the behaviour is pinned by a **prefix-recomputation test**: running the
+  detector on the first N bars must reproduce exactly the swings the full series
+  had already confirmed by bar N. History cannot rewrite itself.
+
+### Decision: swings are not registered as indicators
+
+`megatool.ta`'s registry holds per-bar *series* (RSI has a value at every bar).
+A swing is a discrete *event* with its own identity, confirmation lag and
+invalidation. Forcing it into the series registry would misrepresent it, so it
+lives in `ta/swings.py` and is re-exported, with its own metadata.
+
+### Decision: label it DETECTED
+
+Fractal pivots under fixed geometric rules are an *algorithmic detection*
+(§32.2), not a validated pattern and not a prediction. The API returns
+`interpretation: "detected"` and four caveats; the chart note says
+"DETECTED from geometry, not a validated signal". No confidence percentage is
+invented (§32.7, the spec's explicit rule against arbitrary confidence).
+
+---
+
 ## Standing decisions (from earlier sessions)
 
 | # | Decision | Reason |

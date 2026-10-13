@@ -208,6 +208,7 @@ function destroyCharts() {
   state.charts = {};
   state.paneSeries = {};
   ["#chart", "#rsi-pane", "#macd-pane"].forEach((id) => { $(id).innerHTML = ""; });
+  if ($("#chart-note")) $("#chart-note").textContent = "";
 }
 
 function makeChart(container, height) {
@@ -285,6 +286,7 @@ async function loadChart() {
       await addPane("macd-pane", "macd", symbol, {}, dates, "#4c8dff", "MACD");
       await addPane("macd-pane", "macd", symbol, {}, dates, "#f0b90b", "Signal", 0, 0, "signal", true);
     }
+    if ($("#ind-swings").checked) await addSwings(symbol, range, candle, $("#chart-note"));
 
     chart.timeScale().fitContent();
     $("#export-csv").onclick = () => exportCsv(symbol, data.bars);
@@ -311,8 +313,40 @@ function alignedSeries(resp, key, dates) {
   return dates.map((d) => byDate.get(d) ?? null);
 }
 
-async function addOverlay(chart, symbol, name, params, dates, color, title, field) {
-  const r = await api(`/api/bars/${encodeURIComponent(symbol)}/indicator?${indQuery(name, params)}`);
+/* Swing points and market structure, drawn as chart markers.
+
+   Two honesty rules are enforced here rather than left to the reader:
+   - every marker is labelled DETECTED, never a signal or a prediction;
+   - only CONFIRMED swings are drawn. An unconfirmed pivot is by definition
+     future information, and plotting it would put a level on the chart that
+     nobody could have known at that bar. */
+async function addSwings(symbol, range, candleSeries, noteEl) {
+  const qs = range === "0" ? "" : `?limit=${encodeURIComponent(range)}`;
+  const d = await api(`/api/bars/${encodeURIComponent(symbol)}/structure${qs}`);
+  const confirmed = (d.swings || []).filter((s) => s.confirmed);
+
+  candleSeries.setMarkers(
+    confirmed.map((s) => ({
+      time: s.date,
+      position: s.kind === "high" ? "aboveBar" : "belowBar",
+      color: s.kind === "high" ? "#ef5350" : "#26a69a",
+      shape: s.kind === "high" ? "arrowDown" : "arrowUp",
+      text: s.kind === "high" ? "SH" : "SL",
+    }))
+  );
+
+  if (noteEl) {
+    const dropped = (d.swings || []).length - confirmed.length;
+    noteEl.textContent =
+      `${d.counts.swings} swings (${d.counts.swing_highs}H/${d.counts.swing_lows}L)` +
+      ` · structure: ${d.trend}` +
+      ` · ${d.breaks.length} break(s)` +
+      (dropped ? ` · ${dropped} unconfirmed pivot(s) not drawn` : "") +
+      " · DETECTED from geometry, not a validated signal";
+  }
+}
+
+async function addOverlay(chart, symbol, name, params, dates, color, title, field) {  const r = await api(`/api/bars/${encodeURIComponent(symbol)}/indicator?${indQuery(name, params)}`);
   const key = field || Object.keys(r.series)[0];
   const aligned = alignedSeries(r, key, dates);
   const line = chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title });
