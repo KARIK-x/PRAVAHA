@@ -14,12 +14,12 @@ marked working because the code exists. The labels mean:
 Test suite: **766 passed, 0 failed** (18 files, `.venv/bin/python -m pytest -p no:warnings`, 2026-10-12).
 `ruff check` and `ruff format` clean. Live app verified this session against the
 running server with the real 514,018-row store: `scripts/smoke_live.py` derives
-its probe list from the server's own OpenAPI spec and exercised **35 of 45
-routes — 27/27 GET and 8/8 read-only POST — all returning an expected status
-(35/35, exit 0)**; the remaining 10 routes mutate state and were skipped by
+its probe list from the server's own OpenAPI spec and exercised **36 of 46
+routes — 27/27 GET and 9/9 read-only POST — all returning an expected status
+(36/36, exit 0)**; the remaining 10 routes mutate state and were skipped by
 design. Slowest: `/api/rank` 20.1 s, `/api/screen/export.csv` 3.8 s,
-`/api/quality` 7.5 s. Browser UI was verified via Playwright in an earlier
-session.
+`/api/quality` 7.5 s, `/api/walk-forward` 53.2 s (full-history quarterly).
+Browser UI was verified via Playwright in an earlier session.
 
 ---
 
