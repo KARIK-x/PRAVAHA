@@ -492,6 +492,31 @@ def walk_forward(
             continue
 
         ordered = sorted(ranked, key=lambda r: r.rank if r.rank is not None else 10**9)
+        # Tradeability gate. A symbol whose last bar is older than STALE_DAYS
+        # before T could not have been bought at T's close: it was suspended,
+        # suspended-then-relisted, or delisted. Ranking it is meaningless (its
+        # "momentum" is measured over the gap) and holding it is impossible, so
+        # it is dropped from this period's universe rather than allowed to
+        # contaminate the tails. This is universe construction, not a strategy
+        # parameter: on the real store 20.3% of ranked symbol-periods were
+        # stale, with a p90 gap of 692 days, so leaving them in made the
+        # "forward return" a multi-year return measured from a price the
+        # portfolio never held. The count is reported, never hidden.
+        tradeable: list[Any] = []
+        dropped_stale = 0
+        as_of_ts = pd.Timestamp(as_of)
+        for r in ordered:
+            f = frames.get(r.symbol)
+            if f is None or not len(f):
+                dropped_stale += 1
+                continue
+            col = _date_column(f)
+            last = f[f[col] <= as_of_ts][col]
+            if last.empty or int((as_of_ts - last.iloc[-1]).days) > STALE_DAYS:
+                dropped_stale += 1
+                continue
+            tradeable.append(r)
+        ordered = tradeable
         symbols = [r.symbol for r in ordered]
         k = max(1, int(round(len(symbols) * cfg.top_quantile)))
         if len(symbols) < 2 * k:
@@ -549,11 +574,24 @@ def walk_forward(
                 missing_outcome=sorted(missing),
                 stale_outcome=sorted(stale),
                 outcome_returns=returns,
-                note=(
-                    f"{len(missing)} ranked symbol(s) had no close on or before "
-                    f"{nxt} and were dropped rather than imputed"
-                    if missing
-                    else ""
+                note="; ".join(
+                    n
+                    for n in (
+                        (
+                            f"{dropped_stale} symbol(s) last traded more than "
+                            f"{STALE_DAYS}d before {as_of} and were excluded as "
+                            f"untradeable"
+                            if dropped_stale
+                            else ""
+                        ),
+                        (
+                            f"{len(missing)} ranked symbol(s) had no close on or "
+                            f"before {nxt} and were dropped rather than imputed"
+                            if missing
+                            else ""
+                        ),
+                    )
+                    if n
                 ),
             )
         )

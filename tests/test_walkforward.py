@@ -306,22 +306,42 @@ def test_factor_window_is_at_least_min_bars():
 # ----------------------------------------------------------- missing outcomes
 
 
-def test_a_stale_price_is_flagged_not_treated_as_fresh():
-    """A carried-forward price is reported as stale, never as a fresh trade.
+def test_an_untradeable_symbol_is_excluded_from_the_universe():
+    """A symbol that last traded long before T is dropped, not ranked.
 
-    S2's history ends on the first rebalance day, so its forward price for both
-    periods is carried forward from 2024-11-29: the return is zero and the
-    staleness is 32 and 49 calendar days. Both exceed :data:`STALE_DAYS`, so S2
-    must appear in ``stale_outcome`` — a return of zero from a name that never
-    traded is not the same thing as a name that traded flat.
+    S2's history ends on the first rebalance day (2024-11-29). At the *first*
+    rebalance its last bar is that same day (gap 0), so it is tradeable and is
+    ranked; its forward price is carried forward 32 days, so it is flagged
+    stale with a return of zero. At the *second* rebalance (2024-12-31) its
+    last bar is 32 days old (> STALE_DAYS), so it could not have been bought at
+    T's close and is excluded from the universe entirely — it must not appear
+    in either tail or in the outcome pool.
+
+    This is universe construction, not a strategy knob: on the real store 20.3%
+    of ranked symbol-periods were stale (p90 gap 692 days), so leaving them in
+    turned "forward returns" into multi-year returns measured from prices the
+    portfolio never held.
     """
     result = walk_forward(_frames(truncate={"S2": "2024-11-29"}), _cfg())
-    for period in result.periods:
-        assert "S2" in period.stale_outcome
-        assert "S2" not in period.missing_outcome
-        assert period.outcome_returns["S2"] == 0.0
-    # One stale symbol (S2) per period, over both periods.
-    assert result.stale_symbols_total == len(result.periods)
+    first, second = result.periods
+
+    # First rebalance: tradeable (gap 0), so it IS in the ranked universe and
+    # has an outcome — but its return is 0.0, which lands it mid-table, not in
+    # either tail. Its forward price is stale, so it is flagged.
+    assert first.universe == 6  # all six ranked, S2 included
+    assert "S2" in first.outcome_returns
+    assert "S2" in first.stale_outcome
+    assert "S2" not in first.missing_outcome
+    assert first.outcome_returns["S2"] == 0.0
+
+    # Second rebalance: last bar 32 days old -> untradeable, excluded outright.
+    assert "S2" not in second.long_symbols + second.short_symbols
+    assert "S2" not in second.stale_outcome
+    assert "S2" not in second.outcome_returns
+    assert "untradeable" in second.note
+
+    # The exclusion is counted in the summary, not hidden.
+    assert result.stale_symbols_total == 1  # only the first period's flag
 
 
 def test_a_symbol_with_no_price_at_all_is_reported_missing():
