@@ -86,6 +86,9 @@ SNAPSHOT_PARTS = ("seed", "pravaha_market_seed.parquet")
 #: Attribution recorded on every row that comes from the snapshot.
 SNAPSHOT_SOURCE = "github.com/Aabishkar2/nepse-data"
 
+#: Symbols per INSERT. Keeps the load well inside Render Free's 512 MB RAM.
+_BATCH = 10
+
 
 def snapshot_path() -> Path:
     """Absolute path to the committed market-data snapshot."""
@@ -106,36 +109,54 @@ def seed_from_snapshot(store: Any, path: Path | None = None) -> dict[str, Any]:
     if not src.is_file():
         raise FileNotFoundError(f"market-data snapshot not found: {src}")
 
-    before = int(store.execute("SELECT COUNT(*) FROM price_bars").fetchone()[0])
-    store.execute(
-        """
-        INSERT INTO price_bars
-          (symbol, trading_date, open, high, low, close, volume, turnover,
-           percent_change, transactions, source, source_url, retrieved_at,
-           validation_status, adjustment_status, flags)
-        SELECT symbol, trading_date, open, high, low, close, volume, turnover,
-               percent_change, transactions, source, source_url, retrieved_at,
-               COALESCE(validation_status, 'valid'),
-               COALESCE(adjustment_status, 'unadjusted'), flags
-        FROM read_parquet(?)
-        ON CONFLICT (symbol, trading_date) DO UPDATE SET
-           open = excluded.open,
-           high = excluded.high,
-           low = excluded.low,
-           close = excluded.close,
-           volume = excluded.volume,
-           turnover = excluded.turnover,
-           percent_change = excluded.percent_change,
-           transactions = excluded.transactions,
-           source = excluded.source,
-           source_url = excluded.source_url,
-           retrieved_at = excluded.retrieved_at,
-           validation_status = excluded.validation_status,
-           adjustment_status = excluded.adjustment_status,
-           flags = excluded.flags
-        """,
-        [str(src)],
+    # MEMORY: the whole snapshot is 515k rows. A single `INSERT … ON CONFLICT`
+    # builds a conflict hash table over the target and peaked at ~530 MB — above
+    # Render Free's 512 MB limit, which OOM-crashed the service. Two paths keep
+    # the peak low:
+    #   * the table is EMPTY at first seed → a plain INSERT needs no hash table
+    #     (~290 MB, measured);
+    #   * otherwise → merge symbol-by-symbol in small batches (~365 MB at 25,
+    #     less at 10), which is also what makes a re-run idempotent.
+    _COLS = (
+        "symbol, trading_date, open, high, low, close, volume, turnover, "
+        "percent_change, transactions, source, source_url, retrieved_at, "
+        "validation_status, adjustment_status, flags"
     )
+    _SELECT = (
+        "SELECT symbol, trading_date, open, high, low, close, volume, turnover, "
+        "percent_change, transactions, source, source_url, retrieved_at, "
+        "COALESCE(validation_status, 'valid'), "
+        "COALESCE(adjustment_status, 'unadjusted'), flags FROM read_parquet(?)"
+    )
+
+    _CONFLICT = (
+        " ON CONFLICT (symbol, trading_date) DO UPDATE SET "
+        "open = excluded.open, high = excluded.high, low = excluded.low, "
+        "close = excluded.close, volume = excluded.volume, "
+        "turnover = excluded.turnover, "
+        "percent_change = excluded.percent_change, "
+        "transactions = excluded.transactions, source = excluded.source, "
+        "source_url = excluded.source_url, retrieved_at = excluded.retrieved_at, "
+        "validation_status = excluded.validation_status, "
+        "adjustment_status = excluded.adjustment_status, flags = excluded.flags"
+    )
+
+    before = int(store.execute("SELECT COUNT(*) FROM price_bars").fetchone()[0])
+    symbols = [
+        r[0]
+        for r in store.execute(
+            "SELECT DISTINCT symbol FROM read_parquet(?) ORDER BY symbol", [str(src)]
+        ).fetchall()
+    ]
+    # Small batches keep the peak low on either path (measured: ~210 MB plain,
+    # ~365 MB merge at 25 → less at 10).
+    for i in range(0, len(symbols), _BATCH):
+        chunk = symbols[i : i + _BATCH]
+        marks = ",".join(["?"] * len(chunk))
+        sql = f"INSERT INTO price_bars ({_COLS}) {_SELECT} WHERE symbol IN ({marks})"
+        if before:
+            sql += _CONFLICT
+        store.execute(sql, [str(src), *chunk])
     after = int(store.execute("SELECT COUNT(*) FROM price_bars").fetchone()[0])
 
     rows = store.execute(
