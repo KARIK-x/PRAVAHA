@@ -119,3 +119,63 @@ def test_the_seed_commands_are_registered():
     parser = cli.build_parser()
     assert parser.parse_args(["fetch-index"]).func is cli._cmd_fetch_index
     assert parser.parse_args(["fetch-sectors"]).func is cli._cmd_fetch_sectors
+
+
+# --- the full `fetch` marks the deployment seed complete ---------------------
+def _stub_fetch(monkeypatch):
+    """Make `megatool fetch` run offline against a dummy adapter."""
+    import types
+
+    from megatool import deploy_seed as ds
+    from megatool.datasources import nepse_data_repo
+
+    class DummyAdapter:
+        def __init__(self, **_k):
+            pass
+
+        def list_symbols(self):
+            return ["NABIL"]
+
+    monkeypatch.setattr(nepse_data_repo, "NepseDataRepoAdapter", DummyAdapter)
+    fake = types.SimpleNamespace(
+        source=types.SimpleNamespace(value="github.com/Aabishkar2/nepse-data"),
+        ok=True,
+        symbols_succeeded=1,
+        symbols_requested=1,
+        symbols_failed=0,
+        rows_read=10,
+        rows_inserted=10,
+        rows_updated=0,
+        rows_flagged=0,
+        coverage_start=None,
+        coverage_end=None,
+        errors=[],
+    )
+    monkeypatch.setattr("megatool.ingest.ingest", lambda *a, **k: fake)
+
+    from megatool.db import init_app_db, set_setting
+
+    init_app_db()
+    set_setting(ds.SEED_MARKER_KEY, "0")
+    assert ds.seed_needed() is True
+    return ds
+
+
+def _fetch_args(**kw):
+    import argparse
+
+    base = {"symbols": None, "limit": None, "cache_ttl_hours": 12.0, "quiet": True}
+    base.update(kw)
+    return argparse.Namespace(**base)
+
+
+def test_full_fetch_marks_the_seed_complete(monkeypatch):
+    ds = _stub_fetch(monkeypatch)
+    assert cli._cmd_fetch(_fetch_args()) == 0
+    assert ds.seed_needed() is False  # a runtime auto-seed will now be skipped
+
+
+def test_partial_fetch_does_not_mark_the_seed_complete(monkeypatch):
+    ds = _stub_fetch(monkeypatch)
+    assert cli._cmd_fetch(_fetch_args(symbols="NABIL")) == 0
+    assert ds.seed_needed() is True  # a partial fetch must not claim completeness

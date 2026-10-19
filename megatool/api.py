@@ -852,8 +852,24 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        import sys as _sys
+
         init_app_db()
         _log_access_boundary()
+        # On a hosted host with an ephemeral disk the market database starts
+        # empty. Seed it from the public sources in a BACKGROUND thread so the
+        # app serves immediately (the health check never waits on a download)
+        # and charts populate as the data lands. Disabled for loopback binds, so
+        # local development and the test client never start a download. A failed
+        # seed is reported and never kills the app.
+        try:
+            from megatool.deploy_seed import start_background_seed
+
+            start_background_seed(
+                get_store(), log=lambda m: print(m, file=_sys.stderr)
+            )
+        except Exception as exc:  # noqa: BLE001 - startup must not fail here
+            print(f"[seed] startup hook skipped: {type(exc).__name__}: {exc}", file=_sys.stderr)
         yield
         if shared_store is not None:
             shared_store.close()

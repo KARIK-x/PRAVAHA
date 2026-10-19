@@ -53,20 +53,32 @@ involved; request headers (including `X-Friend-Token`) are forwarded.
 defaults to `<repo>/data`, which is where the build seeds data. **Port 8710 is
 never used in production** — it is only the local default.
 
-### Build-time data seeding
+### Runtime data seeding (no build download)
 
-Render keeps the build filesystem for the life of a deploy, so the seed runs in
-the build and the data is present at runtime:
+On the Free plan the database starts empty, so the app seeds itself from the
+**same public sources the CLI uses**, in a **background thread at startup**
+(`megatool/deploy_seed.py`):
 
 ```
-python -m megatool.cli fetch          # 372 symbols, ~515k daily bars (public GitHub CSV)
-python -m megatool.cli fetch-index    # NEPSE composite, 1997→today (one public CSV)
-python -m megatool.cli fetch-sectors  # sector classifications (public JSON)
+Aabishkar2/nepse-data        → price_bars            (372 symbols, ~515k bars)
+binayabaral/nepal-market-data→ index_series + index_ohlc_history
+shubhamnpk/yonepse           → security_master.sector
 ```
 
-Each step is wrapped in `( … || echo "WARN: …")` so a network hiccup on a public
-dataset never breaks the build — the app still boots and reports an honest empty
-state. The full `fetch` takes ~5 minutes and downloads ~80 MB.
+Why at runtime rather than in the build: a ~5-minute, ~80 MB download in the
+build can time out and fail the deploy, and it only works if the build command
+is set exactly right. The runtime seed:
+
+* lets the app **serve immediately** (the health check never waits on a download);
+* runs **at most once per deploy** (a marker in the app DB) and is **idempotent**;
+* is **off for loopback binds**, so local development and the test client never
+  start a download (`MEGATOOL_AUTO_SEED=1` forces it, `=0` disables it);
+* caps with `MEGATOOL_SEED_LIMIT=N` if the host is slow;
+* reports every failure instead of swallowing it, and never sets the marker if
+  the price-bar step failed (so the next boot retries).
+
+The CLI equivalents (`python -m megatool.cli fetch|fetch-index|fetch-sectors`)
+remain available for manual seeding and are what the tests exercise.
 
 ---
 
@@ -124,12 +136,17 @@ build, so:
 
 | Data | Source | Persists across restarts? | Across deploys? |
 |---|---|---|---|
-| Market bars (`price_bars`) | `fetch` (Aabishkar2/nepse-data) | yes (same deploy) | re-seeded |
-| NEPSE index (`index_series`) | `fetch-index` (binayabaral) | yes | re-seeded |
-| Sectors (`security_master.sector`) | `fetch-sectors` (yonepse) | yes | re-seeded |
+| Market bars (`price_bars`) | runtime seed (Aabishkar2/nepse-data) | yes (same deploy) | re-seeded |
+| NEPSE index (`index_series`) | runtime seed (binayabaral) | yes | re-seeded |
+| NEPSE index OHLC (`index_ohlc_history`) | runtime seed (binayabaral) | yes | re-seeded |
+| Sectors (`security_master.sector`) | runtime seed (yonepse) | yes | re-seeded |
 | App state (journal, portfolio, …) | user input | yes | **lost** |
-| Index OHLC (`index_ohlc_history`, charting view for NEPSE) | not seeded | — | — |
+| Sector-index OHLC, fundamentals, corporate events | not seeded | — | — |
 | Kronos weights | not shipped | — | — |
+
+The first boot after a deploy has no data for ~5 minutes (the seed runs in the
+background). Reload the page after that; the dashboard and charts then show real
+history.
 
 > App state (journal/portfolio/watchlists) is **not durable on Free**. For
 > durable state, attach a persistent disk on a paid instance and set
