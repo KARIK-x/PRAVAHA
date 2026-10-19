@@ -2636,3 +2636,43 @@ def test_market_ribbon_reports_index_when_one_is_stored(tmp_path):
     assert d["index"]["close"] == pytest.approx(2634.17)
     assert d["index"]["change"] == pytest.approx(124.17)
     assert d["index"]["change_pct"] == pytest.approx(round(124.17 / 2510.0 * 100, 2))
+
+
+# ------------------------------------------------- corporate-events API (2026-10-19)
+# The chart's Event & Corporate-Action layer reads /api/corporate-events?symbol=…
+# These tests pin the request/response contract that layer depends on: a 200 with
+# an `events` array, symbol filtering, and an honest empty result for a symbol
+# with no events. No synthetic events are invented — the registry projection is
+# the only source in a throwaway store.
+
+
+def test_corporate_events_returns_an_events_array(client):
+    r = client.get("/api/corporate-events")
+    assert r.status_code == 200
+    d = r.json()
+    assert isinstance(d.get("events"), list)
+    assert d["count"] == len(d["events"])
+    # The attested registry always projects at least one real dated action.
+    assert d["count"] >= 1
+    for ev in d["events"]:
+        assert {"symbol", "event_type"} <= set(ev)
+
+
+def test_corporate_events_filters_by_symbol(client):
+    d = client.get("/api/corporate-events?symbol=LBL").json()
+    assert d["count"] >= 1
+    assert all(ev["symbol"] == "LBL" for ev in d["events"])
+
+
+def test_corporate_events_unknown_symbol_is_empty_not_an_error(client):
+    r = client.get("/api/corporate-events?symbol=ZZZZNOTREAL")
+    assert r.status_code == 200
+    d = r.json()
+    assert d["events"] == []
+    assert d["count"] == 0
+
+
+def test_corporate_events_symbol_is_case_insensitive(client):
+    upper = client.get("/api/corporate-events?symbol=LBL").json()
+    lower = client.get("/api/corporate-events?symbol=lbl").json()
+    assert upper["count"] == lower["count"] >= 1

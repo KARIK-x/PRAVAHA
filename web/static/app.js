@@ -11963,15 +11963,17 @@ async function plotPriceDistribution(chart, data, bars) {
 async function plotEventAnalysis(chart, data, bars) {
   if (!bars || !bars.length) return [];
   const made = [];
-  // Check if corporate events exist
-  state.layerData.event = { available: false, reason: "No corporate-event records stored (corporate_events table is empty). Dividend/bonus/rights/AGM data is not available in this dataset." };
-  // Try to fetch from API if available
+  // Corporate events for this symbol (dividends, bonus, rights, AGM). The
+  // endpoint merges the stored table with the attested registry projection, so
+  // a symbol with a known dated action reports it even with an empty table.
+  state.layerData.event = { available: false, reason: "No corporate-event records stored for this symbol. Dividend/bonus/rights/AGM data is not available in this dataset." };
   try {
-    const d = await api(`/api/corporate-actions/${encodeURIComponent(state.chartSymbol)}`);
+    const sym = encodeURIComponent(state.chartSymbol);
+    const d = await api(`/api/corporate-events?symbol=${sym}&limit=100`);
     if (d && Array.isArray(d.events) && d.events.length) {
       state.layerData.event = { available: true, count: d.events.length, events: d.events };
     }
-  } catch (e) { /* endpoint may not exist - keep unavailable state */ }
+  } catch (e) { /* keep the honest unavailable state if the fetch fails */ }
   return made;
 }
 

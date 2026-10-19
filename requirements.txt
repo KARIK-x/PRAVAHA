@@ -1,0 +1,35 @@
+# PRAVAHA — runtime dependencies for a hosted (Render) deployment.
+#
+# This file mirrors the core `dependencies` in pyproject.toml — the project
+# package itself is imported from the repo root (`python -m megatool.cli serve`),
+# so `pip install -r requirements.txt` only needs to install the third-party
+# libraries. pyproject.toml remains the authoritative manifest for `uv sync`.
+#
+# Derived by scanning every top-level import under megatool/ (2026-10-19).
+
+# --- web / API layer ---
+fastapi>=0.115
+uvicorn>=0.30
+pydantic>=2.7
+
+# --- data / compute ---
+pandas>=2.2
+numpy>=1.26
+duckdb>=1.0
+scikit-learn>=1.4
+
+# --- HTTP + config ---
+httpx>=0.27
+python-dotenv>=1.0
+
+# --- feature-specific, imported lazily but required by live routes ---
+# PDF Journal tab: megatool.written_pdf imports pymupdf at module level.
+pymupdf>=1.24
+# /api/screen/export.xlsx (and the workbook importer).
+openpyxl>=3.1
+
+# --- deliberately NOT included ---
+# torch            → only megatool.kronos_service (Kronos AI); needs model
+#                    weights that are not in the repo. Install separately.
+# tensorflow       → only the optional transformer sentiment adapter; lazy.
+# The app boots and serves every non-AI view without either.

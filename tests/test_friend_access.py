@@ -245,3 +245,117 @@ def test_template_catalogue_and_alert_writes_stay_owner_only():
     assert fa.friend_allowed("POST", "/api/alerts/acknowledge") is False
     assert fa.friend_allowed("POST", "/api/screens/propose") is False
     assert fa.friend_allowed("POST", "/api/screens") is False
+
+
+# --------------------------------------------- fail-closed private records (2026-10-19)
+def test_private_record_route_predicate():
+    assert fa.private_record_route("/api/journal") is True
+    assert fa.private_record_route("/api/journal/123") is True
+    assert fa.private_record_route("/api/portfolio") is True
+    assert fa.private_record_route("/api/portfolio/risk") is True
+    assert fa.private_record_route("/api/written-pdf/review") is True
+    assert fa.private_record_route("/api/planning") is True
+    # A sibling path that merely shares a prefix is NOT private.
+    assert fa.private_record_route("/api/journalism") is False
+    assert fa.private_record_route("/api/quotes") is False
+    assert fa.private_record_route("/api/health") is False
+
+
+def test_remote_client_without_token_cannot_reach_private_records(app, monkeypatch):
+    """In production mode a non-loopback client is refused on private records."""
+    monkeypatch.delenv(fa.FRIEND_TOKEN_ENV, raising=False)
+    monkeypatch.setenv(fa.REQUIRE_AUTH_ENV, "1")
+    assert _client(app, "10.0.0.5").get(PERSONAL).status_code == 401
+    assert _client(app, "10.0.0.5").post(ADMIN).status_code == 401
+
+
+def test_private_records_are_owner_only_with_a_valid_token(app, monkeypatch):
+    """A valid friend token still cannot read personal/admin routes."""
+    monkeypatch.setenv(fa.FRIEND_TOKEN_ENV, TOKEN)
+    c = _client(app, "10.0.0.5")
+    assert c.get(PERSONAL, headers={"X-Friend-Token": TOKEN}).status_code == 403
+    assert c.post(ADMIN, headers={"X-Friend-Token": TOKEN}).status_code == 403
+
+
+def test_owner_only_mode_preserves_local_development(app, monkeypatch):
+    """With no token and no require-auth the boundary is skipped entirely.
+
+    This is the documented owner-only mode (must bind loopback) and is what keeps
+    local development and the test client working. Production sets
+    MEGATOOL_REQUIRE_AUTH=1 to fail closed instead.
+    """
+    monkeypatch.delenv(fa.FRIEND_TOKEN_ENV, raising=False)
+    monkeypatch.delenv(fa.REQUIRE_AUTH_ENV, raising=False)
+    c = _client(app, "10.0.0.5")
+    assert c.get(PERSONAL).status_code == 200
+    # Not denied by the middleware (the app answers 404 — the route is undefined).
+    assert c.get("/api/not-allowlisted").status_code not in (401, 403)
+
+
+def test_loopback_owner_still_sees_private_records_without_a_token(app, monkeypatch):
+    monkeypatch.delenv(fa.FRIEND_TOKEN_ENV, raising=False)
+    monkeypatch.delenv(fa.REQUIRE_AUTH_ENV, raising=False)
+    assert _client(app, "127.0.0.1").get(PERSONAL).status_code == 200
+
+
+def test_require_auth_fails_closed_without_a_token(app, monkeypatch):
+    """MEGATOOL_REQUIRE_AUTH=1 with no token denies every non-loopback request."""
+    monkeypatch.delenv(fa.FRIEND_TOKEN_ENV, raising=False)
+    monkeypatch.setenv(fa.REQUIRE_AUTH_ENV, "1")
+    # A public, allowlisted route is still refused: fail closed, not open.
+    assert _client(app, "10.0.0.5").get(SAFE_GET).status_code == 401
+    assert _client(app, "10.0.0.5").get(PERSONAL).status_code == 401
+
+
+def test_require_auth_keeps_loopback_owner_working(app, monkeypatch):
+    monkeypatch.delenv(fa.FRIEND_TOKEN_ENV, raising=False)
+    monkeypatch.setenv(fa.REQUIRE_AUTH_ENV, "1")
+    assert _client(app, "127.0.0.1").get(SAFE_GET).status_code == 200
+    assert _client(app, "127.0.0.1").get(PERSONAL).status_code == 200
+
+
+def test_require_auth_with_token_serves_allowlisted_only(app, monkeypatch):
+    monkeypatch.setenv(fa.FRIEND_TOKEN_ENV, TOKEN)
+    monkeypatch.setenv(fa.REQUIRE_AUTH_ENV, "1")
+    c = _client(app, "10.0.0.5")
+    assert c.get(SAFE_GET, headers={"X-Friend-Token": TOKEN}).status_code == 200
+    assert c.get(PERSONAL, headers={"X-Friend-Token": TOKEN}).status_code == 403
+
+
+def test_require_auth_denies_a_non_allowlisted_route(app, monkeypatch):
+    """A route that is not on the allowlist is refused once auth is required."""
+    monkeypatch.setenv(fa.REQUIRE_AUTH_ENV, "1")
+    monkeypatch.delenv(fa.FRIEND_TOKEN_ENV, raising=False)
+    r = _client(app, "10.0.0.5").get("/api/not-allowlisted")
+    assert r.status_code == 401  # no token → 401 before the allowlist is reached
+
+
+def test_health_probe_is_public_even_when_auth_is_required(app, monkeypatch):
+    """A hosting provider's health check must not 401 (it would roll back)."""
+    monkeypatch.setenv(fa.REQUIRE_AUTH_ENV, "1")
+    monkeypatch.delenv(fa.FRIEND_TOKEN_ENV, raising=False)
+    r = _client(app, "10.0.0.5").get("/api/health")
+    # The tiny fixture app defines no /api/health route, so 404 means the
+    # middleware let it through (rather than refusing it with 401).
+    assert r.status_code != 401
+
+
+def test_require_auth_is_off_by_default(monkeypatch):
+    monkeypatch.delenv(fa.REQUIRE_AUTH_ENV, raising=False)
+    assert fa.require_auth() is False
+    monkeypatch.setenv(fa.REQUIRE_AUTH_ENV, "1")
+    assert fa.require_auth() is True
+    monkeypatch.setenv(fa.REQUIRE_AUTH_ENV, "0")
+    assert fa.require_auth() is False
+
+
+def test_startup_notice_fails_closed_when_require_auth_has_no_token(monkeypatch):
+    out = _capture_boundary(
+        monkeypatch,
+        MEGATOOL_HOST="0.0.0.0",
+        MEGATOOL_REQUIRE_AUTH="1",
+        MEGATOOL_FRIEND_TOKEN=None,
+    )
+    assert "REQUIRE_AUTH" in out
+    assert "CLOSED" in out.upper()
+    assert "MEGATOOL_FRIEND_TOKEN" in out

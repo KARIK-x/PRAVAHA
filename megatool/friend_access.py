@@ -16,6 +16,27 @@ token configured the process is owner-only and must bind to loopback (the app's
 default host); the deployment doc states this explicitly. Nothing here turns the
 boundary off — an unset token simply means "not exposed yet".
 
+FAIL-CLOSED RULES (added 2026-10-19)
+------------------------------------
+The boundary is *active* when a token is configured **or** the deployment sets
+``MEGATOOL_REQUIRE_AUTH=1`` (:func:`boundary_active`). When it is active, two
+rules protect private data:
+
+1. **Private records are owner-only.** Routes under :data:`FRIEND_DENIED_PREFIXES`
+   (portfolio, journal, planning, alerts, watchlists, experiments, screens,
+   written-pdf, research, agent, imports) are served to a **loopback** client
+   only. A non-loopback client is refused with 401 (no token) or 403 (token
+   present) — never served. The check is independent of the allowlist.
+2. **Production fails closed.** ``MEGATOOL_REQUIRE_AUTH=1`` activates the
+   boundary even with no token configured; :func:`token_matches` then rejects
+   every request, so all non-loopback traffic is refused (401) rather than
+   silently served. This is the switch a hosted deployment (e.g. Render) sets.
+
+When the boundary is **inactive** (no token and no require-auth) the process is
+owner-only and must bind loopback; enforcement is skipped so local development
+and the test client keep full access. `/api/health` is always public so a
+hosting provider's health check cannot be mistaken for an intruder.
+
 CORS is NOT authentication. The allowlist and the token are.
 """
 
@@ -34,6 +55,11 @@ FRIEND_ORIGIN_ENV = "MEGATOOL_FRIEND_ORIGIN"
 
 #: Treat loopback as the owner even when a token is configured.
 TRUST_LOOPBACK_ENV = "MEGATOOL_FRIEND_TRUST_LOOPBACK"
+
+#: Production hardening switch. When set to "1" the friend boundary is enforced
+#: even if no token is configured, so a hosted deployment fails closed instead
+#: of silently serving every route to non-loopback clients.
+REQUIRE_AUTH_ENV = "MEGATOOL_REQUIRE_AUTH"
 
 #: EXPLICIT allowlist of (METHOD, path-regex) exposed to friend tokens.
 #: Everything not listed here is denied for non-loopback clients.
@@ -84,6 +110,11 @@ FRIEND_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", r"^/api/forecast/models$"),
 )
 
+#: Always-public liveness probes. These disclose no private data and must answer
+#: a hosting provider's HTTP health check even when the friend boundary is
+#: active (a 401 would mark the deployment unhealthy and trigger a rollback).
+PUBLIC_PROBES: tuple[str, ...] = ("/api/health",)
+
 #: Documented as NEVER friend-facing (personal data / write / admin).
 FRIEND_DENIED_PREFIXES: tuple[str, ...] = (
     "/api/portfolio",
@@ -124,9 +155,34 @@ def friend_token() -> str | None:
     return token or None
 
 
+def require_auth() -> bool:
+    """True when the deployment demands authentication (production hardening).
+
+    Set ``MEGATOOL_REQUIRE_AUTH=1`` on a hosted deployment. The boundary is then
+    enforced even with no token configured, and a missing token means *deny*,
+    not *allow* — the process fails closed rather than open.
+    """
+    return os.environ.get(REQUIRE_AUTH_ENV, "0").strip() == "1"
+
+
 def boundary_active() -> bool:
-    """The friend boundary is enforced only once a token is configured."""
-    return friend_token() is not None
+    """The friend boundary is enforced once a token is configured **or** the
+    deployment requires authentication (``MEGATOOL_REQUIRE_AUTH=1``)."""
+    return friend_token() is not None or require_auth()
+
+
+def private_record_route(path: str) -> bool:
+    """True when ``path`` is a personal / write / admin route.
+
+    These routes must never be served to a non-loopback client without a valid
+    token, and are never served *with* one either — they are owner-only. The
+    check matches the exact prefix or a child path, so ``/api/journal`` and
+    ``/api/journal/123`` both match while ``/api/journalism`` does not.
+    """
+    for prefix in FRIEND_DENIED_PREFIXES:
+        if path == prefix or path.startswith(prefix + "/") or path.startswith(prefix + "?"):
+            return True
+    return False
 
 
 def trust_loopback() -> bool:
@@ -185,6 +241,9 @@ class FriendAccessMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
+        # Owner-only mode (no token, no require-auth): nothing is enforced, so a
+        # local developer and the test client keep full access. Production must
+        # set MEGATOOL_REQUIRE_AUTH=1 (see boundary_active) to fail closed.
         if scope["type"] != "http" or not boundary_active():
             return await self.app(scope, receive, send)
 
@@ -193,20 +252,42 @@ class FriendAccessMiddleware:
         if scope.get("method") == "OPTIONS":
             return await self.app(scope, receive, send)
 
+        path = scope.get("path", "/")
+
+        # Liveness probes are always public (see PUBLIC_PROBES), so a hosting
+        # provider's health check never 401s and triggers a rollback.
+        if path in PUBLIC_PROBES:
+            return await self.app(scope, receive, send)
+
         client = scope.get("client")
         host = client[0] if client else None
         if trust_loopback() and client_is_loopback(host):
             return await self.app(scope, receive, send)
 
-        # Non-loopback: require a valid token, then the allowlist.
         headers = _Headers(scope.get("headers") or [])
-        if not token_matches(extract_token(headers)):
-            response = _deny(401, "authentication required for friend access")
-        elif not friend_allowed(scope.get("method", "GET"), scope.get("path", "/")):
-            response = _deny(403, "route not exposed for friend access")
-        else:
-            return await self.app(scope, receive, send)
-        return await response(scope, receive, send)
+        authed = token_matches(extract_token(headers))
+
+        # Private records are owner-only: never served to a non-loopback client,
+        # with or without a valid token. This is independent of the allowlist, so
+        # a route cannot be published by accident.
+        if private_record_route(path):
+            if authed:
+                return await _deny(403, "route not exposed for friend access")(scope, receive, send)
+            return await _deny(401, "authentication required for private records")(
+                scope, receive, send
+            )
+
+        # Non-loopback: a valid token is required, then the explicit allowlist.
+        # With require-auth on but no token configured, token_matches rejects
+        # everything and the deployment fails closed.
+        if not authed:
+            return await _deny(401, "authentication required for friend access")(
+                scope, receive, send
+            )
+        if not friend_allowed(scope.get("method", "GET"), path):
+            return await _deny(403, "route not exposed for friend access")(scope, receive, send)
+
+        return await self.app(scope, receive, send)
 
 
 class _Headers:

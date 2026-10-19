@@ -275,13 +275,24 @@ def _log_access_boundary() -> None:
     """
     import sys
 
-    from megatool.friend_access import boundary_active, friend_origin
+    from megatool.friend_access import boundary_active, friend_origin, friend_token
 
     if boundary_active():
+        if friend_token() is None:
+            # require-auth is on but no token is configured: fail closed.
+            print(
+                "  \u26a0 access boundary: MEGATOOL_REQUIRE_AUTH=1 but NO friend token "
+                "is set.\n  Failing CLOSED: every non-loopback request is refused "
+                "(401).\n  Set MEGATOOL_FRIEND_TOKEN to serve allowlisted read-only "
+                "routes to friends.",
+                file=sys.stderr,
+            )
+            return
         origin = friend_origin() or "(any origin permitted by CORS config)"
         print(
             f"  access boundary: friend token ACTIVE - non-loopback clients must "
-            f"authenticate; allowlisted read-only routes only; origin {origin}",
+            f"authenticate; allowlisted read-only routes only; private records "
+            f"stay owner-only; origin {origin}",
             file=sys.stderr,
         )
         return
@@ -290,7 +301,8 @@ def _log_access_boundary() -> None:
     if host in ("127.0.0.1", "localhost", "::1"):
         print(
             "  access boundary: owner-only (no friend token). Binding "
-            f"{host}:{port}; private routes are unreachable off-host.",
+            f"{host}:{port}; private routes require loopback and are unreachable "
+            "off-host.",
             file=sys.stderr,
         )
     else:

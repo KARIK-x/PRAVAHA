@@ -45,12 +45,15 @@ docs/evidence/
 docs/screenshots/
 
 # --- Reference materials (large; not application code) ---
+# NOTE: .gitignore has NO quoting syntax — a quoted pattern is matched
+# literally (quotes included) and silently fails. Paths with spaces are written
+# unquoted; internal spaces are significant, so keep them exact.
 PHOTOS/
-"UI AND FEATURES PHOTO REFERENCE"/
-"ALL THE CONTENT:IDEA MAIN OVERVIEW OF PROJECT.pages"
-"ALL THE CONTENT:IDEA MAIN OVERVIEW OF PROJECT.pdf"
-"The Phases COMPLETE !.pages"
-"The Phases COMPLETE !.pdf"
+UI AND FEATURES PHOTO REFERENCE/
+ALL THE CONTENT:IDEA MAIN OVERVIEW OF PROJECT.pages
+ALL THE CONTENT:IDEA MAIN OVERVIEW OF PROJECT.pdf
+The Phases COMPLETE !.pages
+The Phases COMPLETE !.pdf
 NEPSE_Mega_Tool_106_Screenshot_Analysis.pdf
 PRAVAHA.pdf
 logoFimage.png

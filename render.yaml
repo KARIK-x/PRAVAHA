@@ -1,0 +1,65 @@
+# render.yaml — Render Blueprint for PRAVAHA (NEPSE Analytics Platform).
+#
+# Creates ONE web service plus a persistent disk. The application is a single
+# FastAPI process that also serves the static frontend, and it writes a DuckDB
+# market store + SQLite state database to MEGATOOL_DATA_DIR. DuckDB is
+# single-writer, so the API and any data-collection job must share one disk —
+# do NOT scale this service to multiple instances.
+#
+# Nothing here deploys on its own: apply this Blueprint from the Render
+# dashboard when you are ready. No secret VALUE is stored in this file.
+#
+# SECURITY: MEGATOOL_REQUIRE_AUTH=1 makes the API fail CLOSED. While the boundary
+# is active (require-auth and/or a token), every non-loopback request is refused
+# unless it carries the token, and private records (portfolio, journal, PDF
+# journal) are owner-only — never served to a non-loopback client. The generated
+# token is visible only in the Render dashboard; paste it once per browser
+# session into the console (sessionStorage is per-tab and never written to disk):
+#     sessionStorage.setItem("megatool_friend_token", "<token from dashboard>")
+# The token grants read-only access to the public allowlist only. See
+# docs/DEPLOYMENT_RENDER.md.
+
+services:
+  - type: web
+    name: pravaha
+    runtime: python
+    plan: starter              # a persistent disk requires a paid instance type
+    region: oregon             # change to the region nearest you
+    branch: main
+    autoDeploy: false
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m megatool.cli serve --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health   # always public (see megatool/friend_access.py)
+    envVars:
+      # --- runtime ---------------------------------------------------------
+      - key: PYTHON_VERSION
+        value: "3.12.3"        # must satisfy pyproject: >=3.12,<3.14
+      # --- bind + storage --------------------------------------------------
+      - key: MEGATOOL_HOST
+        value: 0.0.0.0
+      - key: MEGATOOL_DATA_DIR
+        value: /var/data       # must match the disk mountPath below
+      # --- access control (fail closed) ------------------------------------
+      - key: MEGATOOL_REQUIRE_AUTH
+        value: "1"
+      - key: MEGATOOL_FRIEND_TOKEN
+        generateValue: true    # Render generates the secret; never committed
+      # Do NOT trust loopback on a hosted deployment: there is no legitimate
+      # loopback client, and if Render's proxy ever presented a loopback source
+      # address, trusting it would treat every request as the owner. The app
+      # makes no loopback self-calls, so 0 is strictly safer here.
+      - key: MEGATOOL_FRIEND_TRUST_LOOPBACK
+        value: "0"
+      # Set this to the exact deployed origin if you split the frontend off
+      # (e.g. https://your-site.netlify.app). Leave unset for same-origin.
+      - key: MEGATOOL_FRIEND_ORIGIN
+        sync: false
+      # --- external data gates (off unless you explicitly authorise) -------
+      - key: MEGATOOL_NEPSE_API_AUTHORIZED
+        value: "0"
+      - key: MEGATOOL_INTEGRATION_AUTHORIZED
+        value: "0"
+    disk:
+      name: pravaha-data
+      mountPath: /var/data
+      sizeGB: 5
