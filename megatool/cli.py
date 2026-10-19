@@ -242,6 +242,152 @@ def _cmd_import_sectors(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_fetch_index(args: argparse.Namespace) -> int:
+    """Fetch the published NEPSE composite index (one public CSV) into ``index_series``.
+
+    Source: ``binayabaral/nepal-market-data`` ``data/nepse/NEPSE_INDEX.csv`` — a
+    single openly published file carrying the official composite OHLC from 1997.
+    Plain HTTPS, no authentication. The dashboard's index chart reads
+    ``index_series``, so this is what makes that panel real rather than empty.
+    """
+    import csv as _csv
+    import io as _io
+
+    from megatool.datasources import binayabaral
+    from megatool.market_store import MarketStore
+
+    print("Fetching the published NEPSE composite index (binayabaral/nepal-market-data)...")
+    try:
+        text = binayabaral.fetch_index_csv()
+    except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+        print(f"ERROR: could not fetch the NEPSE index: {exc}")
+        return 1
+
+    rows: list[dict[str, object]] = []
+    for rec in _csv.DictReader(_io.StringIO(text)):
+        day = (rec.get("published_date") or "").strip()
+        close_raw = (rec.get("close") or "").strip()
+        if not day or not close_raw:
+            continue
+        try:
+            close = float(close_raw)
+        except ValueError:
+            continue
+        if close <= 0:
+            continue
+        rows.append(
+            {
+                "index_name": "NEPSE",
+                "trading_date": day,
+                "close": close,
+                "source": "binayabaral/nepal-market-data",
+            }
+        )
+
+    if not rows:
+        print("ERROR: the index file contained no usable rows")
+        return 1
+
+    with MarketStore() as store:
+        written = store.upsert_index_rows(rows)
+
+    print(f"Rows read     : {len(rows)}")
+    print(f"Rows written  : {written}")
+    print(f"Coverage      : {rows[0]['trading_date']} -> {rows[-1]['trading_date']}")
+
+    # The charting view for NEPSE reads `index_ohlc_history` (a separate table in
+    # the app DB), so also ingest the genuine OHLC from the same file. Rows where
+    # open == high == low == close are stored as close-only, never as fake candles.
+    import tempfile
+    from pathlib import Path as _Path
+
+    from megatool.index_ohlc_ingest import IngestError, ingest_index_ohlc
+
+    buf = _io.StringIO()
+    writer = _csv.writer(buf)
+    writer.writerow(["date", "open", "high", "low", "close", "volume", "symbol"])
+    for rec in _csv.DictReader(_io.StringIO(text)):
+        day = (rec.get("published_date") or "").strip()
+        close_raw = (rec.get("close") or "").strip()
+        if not day or not close_raw:
+            continue
+        writer.writerow(
+            [
+                day,
+                (rec.get("open") or "").strip(),
+                (rec.get("high") or "").strip(),
+                (rec.get("low") or "").strip(),
+                close_raw,
+                (rec.get("traded_amount") or "").strip(),
+                "NEPSE_index",
+            ]
+        )
+    tmp = _Path(tempfile.mkdtemp()) / "nepse_index_ohlc.csv"
+    tmp.write_text(buf.getvalue(), encoding="utf-8")
+    try:
+        res = ingest_index_ohlc(
+            str(tmp), source="binayabaral/nepal-market-data", index_name="NEPSE"
+        )
+        print(
+            f"Index OHLC    : {res.genuine} genuine, {res.placeholder} close-only, "
+            f"{res.invalid} rejected"
+        )
+    except IngestError as exc:
+        print(f"WARN: index OHLC ingest skipped: {exc}")
+
+    print("Source        : binayabaral/nepal-market-data (published composite, not a live feed)")
+    return 0
+
+
+def _cmd_fetch_sectors(args: argparse.Namespace) -> int:
+    """Fetch sector classifications from the public YONEPSE securities snapshot.
+
+    Source: ``shubhamnpk/yonepse`` ``data/other/securities.json`` — one public
+    JSON file with each symbol's ``sectorName``. No authentication. The Sector
+    Explorer reads ``security_master.sector``, which this populates.
+    """
+    import csv as _csv
+    import io as _io
+
+    from megatool.datasources import yonepse
+    from megatool.market_store import MarketStore
+    from megatool.sectors import SectorError, import_sectors
+
+    print("Fetching sector classifications (shubhamnpk/yonepse securities snapshot)...")
+    try:
+        records = yonepse.fetch_securities()
+    except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+        print(f"ERROR: could not fetch the YONEPSE securities snapshot: {exc}")
+        return 1
+
+    rows = yonepse.securities_to_sector_rows(records)
+    if not rows:
+        print("ERROR: the securities snapshot contained no sector rows")
+        return 1
+
+    buf = _io.StringIO()
+    writer = _csv.DictWriter(
+        buf,
+        fieldnames=["symbol", "sector", "source", "retrieved_at", "observed_date"],
+    )
+    writer.writeheader()
+    writer.writerows(rows)
+
+    with MarketStore() as store:
+        try:
+            report = import_sectors(buf.getvalue(), source="yonepse/securities.json", store=store)
+        except SectorError as exc:
+            print(f"ERROR: {exc}")
+            return 1
+
+    print(f"Symbols in file : {report['rows_in_file']}")
+    print(f"Classified      : {report['classified']}")
+    print(f"Assigned        : {report['assigned']}")
+    print(f"Unknown symbols : {len(report['unknown_symbols'])}")
+    print("Source          : yonepse/securities.json")
+    return 0
+
+
 def _cmd_status(args: argparse.Namespace) -> int:
     from megatool.db import get_conn, init_app_db
     from megatool.market_store import MarketStore
@@ -1119,6 +1265,16 @@ def build_parser() -> argparse.ArgumentParser:
     is_.add_argument("--db", help="DuckDB market database path (default: market DB)")
     is_.add_argument("--source", help="provenance label (default: owner-supplied CSV)")
     is_.set_defaults(func=_cmd_import_sectors)
+
+    sub.add_parser(
+        "fetch-index",
+        help="download the published NEPSE composite index into index_series",
+    ).set_defaults(func=_cmd_fetch_index)
+
+    sub.add_parser(
+        "fetch-sectors",
+        help="download sector classifications from the public YONEPSE snapshot",
+    ).set_defaults(func=_cmd_fetch_sectors)
 
     sub.add_parser("status", help="show data coverage and freshness").set_defaults(func=_cmd_status)
 

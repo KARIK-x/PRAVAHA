@@ -167,15 +167,71 @@ function friendToken() {
   }
 }
 
+/* Ask for the access token when the API answers 401. The value is typed by the
+ * user, kept only in sessionStorage, and never logged. A deployment that is not
+ * access-controlled never reaches this path.
+ *
+ * The whole page boots in parallel, so a single 401 is not enough: the token is
+ * stored and the page reloads once so every request re-issues with the token.
+ * Attempts and "declined" are bounded so a wrong token cannot loop forever. */
+let _tokenPromptActive = false;
+let _reloadedForToken = false;
+function _sessionNum(key) {
+  try { return parseInt(sessionStorage.getItem(key) || "0", 10) || 0; } catch (e) { return 0; }
+}
+function _sessionSet(key, val) {
+  try { sessionStorage.setItem(key, val); } catch (e) { /* storage blocked */ }
+}
+function _sessionRemove(key) {
+  try { sessionStorage.removeItem(key); } catch (e) { /* storage blocked */ }
+}
+function promptForFriendToken() {
+  if (_tokenPromptActive) return false;
+  if (_sessionNum("megatool_token_declined") >= 1) return false;
+  if (_sessionNum("megatool_token_attempts") >= 3) return false;
+  _tokenPromptActive = true;
+  try {
+    const t = window.prompt(
+      "PRAVAHA is access-controlled. Paste the access token (kept for this browser tab only):"
+    );
+    if (t && t.trim()) {
+      _sessionSet("megatool_friend_token", t.trim());
+      _sessionSet("megatool_token_attempts", String(_sessionNum("megatool_token_attempts") + 1));
+      return true;
+    }
+    _sessionSet("megatool_token_declined", "1");   // do not nag on every request
+    return false;
+  } catch (e) {
+    _sessionSet("megatool_token_declined", "1");
+    return false;
+  } finally {
+    _tokenPromptActive = false;
+  }
+}
+
+function _withFriendToken(base) {
+  const tok = friendToken();
+  if (!tok) return base;
+  const headers = new Headers(base.headers || undefined);
+  if (!headers.has("X-Friend-Token")) headers.set("X-Friend-Token", tok);
+  return Object.assign({}, base, { headers });
+}
+
 async function api(path, opts) {
   const init = opts ? Object.assign({}, opts) : {};
-  const tok = friendToken();
-  if (tok) {
-    const headers = new Headers(init.headers || undefined);
-    if (!headers.has("X-Friend-Token")) headers.set("X-Friend-Token", tok);
-    init.headers = headers;
+  let res = await fetch(API_BASE + path, _withFriendToken(init));
+  // 401 = not authenticated (a token is required). Ask for it and reload once so
+  // the whole page re-boots with the token. 403 is left alone: it means
+  // authenticated-but-not-permitted (an owner-only route).
+  // The whole page boots in parallel, so guard on _reloadedForToken BEFORE
+  // prompting: otherwise a second in-flight 401 would prompt again mid-reload.
+  if (res.status === 401 && !_reloadedForToken) {
+    if (friendToken()) _sessionRemove("megatool_friend_token");  // stored token was rejected
+    if (promptForFriendToken()) {
+      _reloadedForToken = true;
+      location.reload();
+    }
   }
-  const res = await fetch(API_BASE + path, init);
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -375,7 +431,13 @@ async function loadMarketOverview() {
   let d;
   try {
     const [idxResult] = await Promise.all([
-      loadIndexChart().then(() => null).catch((e) => { $("#ov-index-meta").innerHTML = `<span class="down">${esc(e.message)}</span>`; return null; }),
+      loadIndexChart().then(() => null).catch((e) => {
+        const msg = String((e && e.message) || e);
+        $("#ov-index-meta").innerHTML = /no stored index/i.test(msg)
+          ? `<span class="down">No stored NEPSE index series in this deployment</span>`
+          : `<span class="down">${esc(msg)}</span>`;
+        return null;
+      }),
       api("/api/market/dashboard").then((res) => { d = res; return res; }),
     ]);
   } catch (e) {
@@ -580,9 +642,14 @@ async function loadMarketOverview() {
     $$(".reveal").forEach((el) => { if (!el.classList.contains("in")) obs.observe(el); });
   } catch (e) { /* IntersectionObserver unsupported - graceful fallback */ }
 
-  $("#overview-banner").textContent =
-    `Computed from the latest stored trading day (${d.breadth.as_of}) — not a live quote. ` +
-    `Live source: ${live.provider || "none"} (status ${live.status || "unknown"}).`;
+  // An empty store must say so, not print "(undefined)" or imply a live quote.
+  const noStoredData = !d.breadth.as_of && !(idx.latest != null);
+  $("#overview-banner").textContent = noStoredData
+    ? "No stored market data in this deployment — every panel below is empty. " +
+      "Ingest NEPSE history (or place a prepared market database on the persistent disk) " +
+      "to populate the dashboard. This is not a live quote and nothing here is fabricated."
+    : `Computed from the latest stored trading day (${d.breadth.as_of}) — not a live quote. ` +
+      `Live source: ${live.provider || "none"} (status ${live.status || "unknown"}).`;
 
   applyDashLayout();
   refreshTicker();
@@ -1577,7 +1644,15 @@ async function loadChart() {
     $("#export-csv").onclick = () => exportCsv(symbol, data.bars);
     saveAutosave();   // §8K: persist only when the explicit switch is ON
   } catch (e) {
-    errEl.textContent = `Could not load ${symbol}: ${e.message}`;
+    const msg = String((e && e.message) || e);
+    // A 404 "no stored history" is a MISSING-DATA state, not a broken route or a
+    // blocked request: the endpoint exists and answered. Say so plainly so a
+    // bare "404" is never mistaken for a missing route.
+    errEl.textContent = /no stored history/i.test(msg)
+      ? `No stored market data for ${symbol} in this deployment — the market database is empty. ` +
+        `Ingest NEPSE history (or place a prepared database on the persistent disk) to chart it. ` +
+        `The API is reachable and the route is correct.`
+      : `Could not load ${symbol}: ${msg}`;
   }
 }
 

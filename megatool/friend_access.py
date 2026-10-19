@@ -6,6 +6,9 @@ origin. This module defines that slice and enforces it.
 
 MODEL
 -----
+* **Static frontend** (any path not under ``/api/``) → **public**. The HTML, JS,
+  CSS, vendored chart library and brand assets are downloaded by every visitor
+  and hold no secrets; gating them would 401 the whole site.
 * **Loopback (127.0.0.1/::1/localhost)** → the owner. Full access, unchanged.
 * **Any other client** → a friend. Must present a valid shared read-only token
   (``X-Friend-Token`` or ``Authorization: Bearer``); the request must also match
@@ -63,22 +66,40 @@ REQUIRE_AUTH_ENV = "MEGATOOL_REQUIRE_AUTH"
 
 #: EXPLICIT allowlist of (METHOD, path-regex) exposed to friend tokens.
 #: Everything not listed here is denied for non-loopback clients.
+#:
+#: SCOPE (expanded 2026-10-19): the *public research surface* — the dashboard,
+#: charts, screeners, workbench, fundamentals, Sasto Share, catalogue, ideas,
+#: corporate events, market intelligence and bounded read-only compute — so an
+#: authenticated user can actually use the app. Personal data (portfolio,
+#: journal, watchlists, screens, experiments, written-PDF, research workspace,
+#: agent, snapshots, query history) is NOT here and stays owner-only via
+#: FRIEND_DENIED_PREFIXES. Deny-by-default is preserved: an unlisted route is
+#: still refused.
 FRIEND_ROUTES: tuple[tuple[str, str], ...] = (
-    # meta / source health
+    # meta / source health / status
     ("GET", r"^/api/health$"),
     ("GET", r"^/api/status$"),
     ("GET", r"^/api/sources$"),
+    ("GET", r"^/api/collector/status$"),
+    ("GET", r"^/api/gonepse/status$"),
+    ("GET", r"^/api/live/(status|market|quotes)$"),
     # quotes + reference data
     ("GET", r"^/api/quotes$"),
     ("GET", r"^/api/securities$"),
-    # market snapshot / quality / regime
+    ("GET", r"^/api/sectors$"),
+    # market snapshot / dashboard / quality / regime / breadth / seasonality
     ("GET", r"^/api/dashboard$"),
+    ("GET", r"^/api/market/dashboard$"),
+    ("GET", r"^/api/market/ribbon$"),
     ("GET", r"^/api/quality$"),
     ("GET", r"^/api/regime$"),
     ("GET", r"^/api/regime/history$"),
+    ("GET", r"^/api/breadth/history$"),
+    ("GET", r"^/api/seasonality/[A-Za-z0-9._-]+$"),
     # published index series (read-only market data)
     ("GET", r"^/api/indices$"),
     ("GET", r"^/api/indices/[A-Za-z0-9 ._&()+-]+$"),
+    ("GET", r"^/api/indices/[A-Za-z0-9 ._&()+-]+/(ohlc|structure)$"),
     # per-symbol bars + analytics (read-only)
     ("GET", r"^/api/bars/[A-Za-z0-9._-]+$"),
     ("GET", r"^/api/bars/[A-Za-z0-9._-]+/(weekly|monthly)$"),
@@ -86,14 +107,14 @@ FRIEND_ROUTES: tuple[tuple[str, str], ...] = (
         "GET",
         r"^/api/bars/[A-Za-z0-9._-]+/"
         r"(indicator|structure|fibonacci|levels|elliott|harmonic|patterns|candles|statistics"
-        r"|relative-strength)$",
+        r"|relative-strength|swing-workbench|volume-profile|gaps|breakouts|trailing-stop)$",
     ),
     ("GET", r"^/api/indicators$"),
     # descriptive statistics over public market data
     ("GET", r"^/api/stats/correlation$"),
     # screening / ranking / strategies / bounded compute
     ("GET", r"^/api/screen/presets$"),
-    ("GET", r"^/api/screen/export\.csv$"),
+    ("GET", r"^/api/screen/export\.(csv|pdf|xlsx)$"),
     ("POST", r"^/api/screen$"),
     ("POST", r"^/api/rank$"),
     ("GET", r"^/api/strategies$"),
@@ -102,12 +123,34 @@ FRIEND_ROUTES: tuple[tuple[str, str], ...] = (
     # public fundamentals + floorsheet summaries
     ("GET", r"^/api/fundamentals/summary$"),
     ("GET", r"^/api/fundamentals/compare$"),
-    ("GET", r"^/api/fundamentals/[A-Za-z0-9._-]+$"),
-    ("GET", r"^/api/fundamentals/[A-Za-z0-9._-]+/ratios$"),
+    ("GET", r"^/api/fundamentals/(eps-rankings|revisions|as-of)$"),
+    # A symbol never shadows the reserved literal "import" (a private write).
+    ("GET", r"^/api/fundamentals/(?!import$)[A-Za-z0-9._-]+$"),
+    ("GET", r"^/api/fundamentals/[A-Za-z0-9._-]+/(ratios|eps-growth|ttm-eps|historical-pe)$"),
     ("GET", r"^/api/floorsheet/sessions$"),
     ("GET", r"^/api/floorsheet/summary$"),
     ("GET", r"^/api/floorsheet/trend$"),
+    # Sasto Share (read-only market analytics)
+    ("GET", r"^/api/sastoshare/(pulse|movers|rotation|dividends)$"),
+    ("GET", r"^/api/sastoshare/(valuation|valuation-history|risk|volatility)/[A-Za-z0-9._-]+$"),
+    ("POST", r"^/api/sastoshare/backtest-vs-hold$"),
+    # forecasts / catalogue / ideas / corporate events / market intelligence
     ("GET", r"^/api/forecast/models$"),
+    ("POST", r"^/api/forecast$"),
+    ("POST", r"^/api/forecast/(compare|rolling)$"),
+    ("GET", r"^/api/catalog/summary$"),
+    ("GET", r"^/api/catalog/[A-Za-z0-9._-]+$"),
+    ("GET", r"^/api/catalog/tool/.+$"),
+    ("GET", r"^/api/ideas$"),
+    ("GET", r"^/api/ideas/[A-Za-z0-9._-]+$"),
+    ("GET", r"^/api/corporate-events$"),
+    ("GET", r"^/api/corporate-events/(calendar|coverage)$"),
+    ("GET", r"^/api/market-intelligence/(health|sources|source-health)$"),
+    # bounded analysis compute (read-only over public market data)
+    ("POST", r"^/api/analysis/run$"),
+    ("POST", r"^/api/fundamental/run$"),
+    ("GET", r"^/api/kronos/status$"),
+    ("POST", r"^/api/kronos/(forecast|evaluate)$"),
 )
 
 #: Always-public liveness probes. These disclose no private data and must answer
@@ -115,7 +158,11 @@ FRIEND_ROUTES: tuple[tuple[str, str], ...] = (
 #: active (a 401 would mark the deployment unhealthy and trigger a rollback).
 PUBLIC_PROBES: tuple[str, ...] = ("/api/health",)
 
-#: Documented as NEVER friend-facing (personal data / write / admin).
+#: Documented as NEVER friend-facing (personal data / write / admin). These are
+#: owner-only: refused to every non-loopback client, with or without a token.
+#: The public research surface is enumerated in FRIEND_ROUTES; anything not
+#: there is denied by default, and these prefixes are denied *explicitly* so a
+#: future allowlist edit cannot accidentally publish personal data.
 FRIEND_DENIED_PREFIXES: tuple[str, ...] = (
     "/api/portfolio",
     "/api/journal",
@@ -126,10 +173,19 @@ FRIEND_DENIED_PREFIXES: tuple[str, ...] = (
     "/api/screens",
     "/api/written-pdf",
     "/api/research",
+    "/api/research-desk",
     "/api/agent",
-    "/api/news/import",
+    "/api/snapshots",
+    "/api/query",
+    "/api/templates",
+    "/api/reconciliation",
+    "/api/kronos/experiments",
+    "/api/news",
     "/api/fundamentals/import",
     "/api/floorsheet/import",
+    "/api/corporate-events/import",
+    "/api/market-intelligence/import",
+    "/api/market-intelligence/collect",
 )
 
 _COMPILED = tuple((method, re.compile(pattern)) for method, pattern in FRIEND_ROUTES)
@@ -253,6 +309,14 @@ class FriendAccessMiddleware:
             return await self.app(scope, receive, send)
 
         path = scope.get("path", "/")
+
+        # The static frontend is PUBLIC: index.html, the JS/CSS bundles, the
+        # vendored chart library and the brand assets are downloaded by every
+        # visitor and contain no secrets (see netlify.toml). Only the API is
+        # gated. Without this the boundary answers "/" with 401/403 and the whole
+        # site shows {"error":"authentication required for friend access"}.
+        if not path.startswith("/api/"):
+            return await self.app(scope, receive, send)
 
         # Liveness probes are always public (see PUBLIC_PROBES), so a hosting
         # provider's health check never 401s and triggers a rollback.

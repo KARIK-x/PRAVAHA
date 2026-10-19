@@ -16,6 +16,20 @@
 [build]
   publish = "web/static"
 
+# Proxy the API to the always-on backend so a Netlify-hosted frontend works
+# same-origin. Without this, the page's `fetch("/api/…")` hits Netlify itself and
+# returns 404 (the empty `<meta name="megatool-api-base">` means same-origin).
+# The proxy is server-side, so the browser sees one origin and CORS is not
+# involved; the X-Friend-Token header is forwarded to the backend.
+#
+# UPDATE the host if the Render service URL changes. The token is NOT here — it
+# is entered at runtime and kept in sessionStorage.
+[[redirects]]
+  from = "/api/*"
+  to = "https://pravaha-hkwt.onrender.com/api/:splat"
+  status = 200
+  force = false
+
 [[headers]]
   for = "/*"
   [headers.values]

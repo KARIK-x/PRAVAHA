@@ -40,6 +40,15 @@ def app() -> FastAPI:
     def _i():
         return {"ok": True}
 
+    # The static frontend (non-/api/ paths) must be reachable without a token.
+    @a.get("/")
+    def _root():
+        return "<!doctype html><title>PRAVAHA</title>"
+
+    @a.get("/app.js")
+    def _js():
+        return "// pravaha app bundle"
+
     a.add_middleware(fa.FriendAccessMiddleware)
     return a
 
@@ -347,6 +356,93 @@ def test_require_auth_is_off_by_default(monkeypatch):
     assert fa.require_auth() is True
     monkeypatch.setenv(fa.REQUIRE_AUTH_ENV, "0")
     assert fa.require_auth() is False
+
+
+# ------------------------------- static frontend + public market surface (2026-10-19)
+def test_static_frontend_is_public_even_when_auth_is_required(app, monkeypatch):
+    """The deployed site must load without a token; only the API is gated.
+
+    Regression for the production defect where GET / returned
+    {"error":"authentication required for friend access"} and the whole site
+    failed to render.
+    """
+    monkeypatch.setenv(fa.REQUIRE_AUTH_ENV, "1")
+    monkeypatch.delenv(fa.FRIEND_TOKEN_ENV, raising=False)
+    c = _client(app, "10.0.0.5")
+    assert c.get("/").status_code == 200
+    assert c.get("/app.js").status_code == 200
+    # The API is still gated: no token → 401.
+    assert c.get(SAFE_GET).status_code == 401
+
+
+def test_static_frontend_is_public_with_a_token_too(app, monkeypatch):
+    monkeypatch.setenv(fa.FRIEND_TOKEN_ENV, TOKEN)
+    c = _client(app, "10.0.0.5")
+    assert c.get("/").status_code == 200
+    assert c.get("/app.js").status_code == 200
+
+
+def test_non_api_path_is_never_gated_even_without_a_boundary(app, monkeypatch):
+    monkeypatch.delenv(fa.FRIEND_TOKEN_ENV, raising=False)
+    monkeypatch.delenv(fa.REQUIRE_AUTH_ENV, raising=False)
+    assert _client(app, "10.0.0.5").get("/").status_code == 200
+
+
+def test_public_market_surface_is_readable_with_a_token():
+    """Every public dashboard/chart route the frontend calls must be allowed."""
+    for path in (
+        "/api/market/dashboard",
+        "/api/market/ribbon",
+        "/api/breadth/history",
+        "/api/seasonality/NABIL",
+        "/api/indices/NEPSE/ohlc",
+        "/api/indices/NEPSE/structure",
+        "/api/bars/NABIL/swing-workbench",
+        "/api/bars/NABIL/volume-profile",
+        "/api/bars/NABIL/gaps",
+        "/api/bars/NABIL/breakouts",
+        "/api/bars/NABIL/trailing-stop",
+        "/api/sectors",
+        "/api/sastoshare/pulse",
+        "/api/sastoshare/valuation/NABIL",
+        "/api/fundamentals/NABIL/ttm-eps",
+        "/api/fundamentals/eps-rankings",
+        "/api/catalog/summary",
+        "/api/catalog/scanner",
+        "/api/catalog/tool/scanner/foo",
+        "/api/ideas",
+        "/api/corporate-events",
+        "/api/market-intelligence/sources",
+        "/api/kronos/status",
+        "/api/screen/export.xlsx",
+    ):
+        assert fa.friend_allowed("GET", path) is True, path
+    # Bounded compute stays available.
+    assert fa.friend_allowed("POST", "/api/analysis/run") is True
+    assert fa.friend_allowed("POST", "/api/forecast") is True
+
+
+def test_expanded_allowlist_did_not_open_personal_data():
+    """The wider public surface must not include any personal record route."""
+    for path in (
+        "/api/portfolio",
+        "/api/journal",
+        "/api/watchlists",
+        "/api/screens",
+        "/api/experiments",
+        "/api/written-pdf/records",
+        "/api/research/workspace/NABIL",
+        "/api/agent/tools",
+        "/api/snapshots",
+        "/api/query/history",
+        "/api/templates",
+        "/api/kronos/experiments",
+        "/api/reconciliation/datasets",
+        "/api/research-desk/evidence",
+    ):
+        assert fa.private_record_route(path) is True, path
+        assert fa.friend_allowed("GET", path) is False, path
+        assert fa.friend_allowed("POST", path) is False, path
 
 
 def test_startup_notice_fails_closed_when_require_auth_has_no_token(monkeypatch):

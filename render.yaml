@@ -1,65 +1,67 @@
 # render.yaml — Render Blueprint for PRAVAHA (NEPSE Analytics Platform).
 #
-# Creates ONE web service plus a persistent disk. The application is a single
-# FastAPI process that also serves the static frontend, and it writes a DuckDB
-# market store + SQLite state database to MEGATOOL_DATA_DIR. DuckDB is
-# single-writer, so the API and any data-collection job must share one disk —
-# do NOT scale this service to multiple instances.
+# FREE PLAN ($0/mo), NO persistent disk.
+#
+# The application is a single FastAPI process that also serves the static
+# frontend, and it reads a DuckDB market store + SQLite state database from
+# MEGATOOL_DATA_DIR. On the Free plan there is NO persistent disk, so the data
+# is SEEDED AT BUILD TIME into the repository's own `data/` directory. Render
+# keeps the build filesystem for the life of a deploy, so the seeded market
+# history is present at runtime and survives restarts/spin-downs. It is
+# rebuilt (and re-seeded) on the next deploy.
+#
+# If you later move to a paid instance with a persistent disk, mount it and set
+# MEGATOOL_DATA_DIR to the mount path, and the seed step becomes optional.
 #
 # Nothing here deploys on its own: apply this Blueprint from the Render
 # dashboard when you are ready. No secret VALUE is stored in this file.
 #
-# SECURITY: MEGATOOL_REQUIRE_AUTH=1 makes the API fail CLOSED. While the boundary
-# is active (require-auth and/or a token), every non-loopback request is refused
-# unless it carries the token, and private records (portfolio, journal, PDF
-# journal) are owner-only — never served to a non-loopback client. The generated
-# token is visible only in the Render dashboard; paste it once per browser
-# session into the console (sessionStorage is per-tab and never written to disk):
-#     sessionStorage.setItem("megatool_friend_token", "<token from dashboard>")
-# The token grants read-only access to the public allowlist only. See
-# docs/DEPLOYMENT_RENDER.md.
+# SECURITY: MEGATOOL_REQUIRE_AUTH=1 makes the API fail CLOSED for non-loopback
+# clients; the static frontend stays public (see megatool/friend_access.py).
+# Private records (portfolio, journal, PDF journal) are owner-only.
 
 services:
   - type: web
     name: pravaha
     runtime: python
-    plan: starter              # a persistent disk requires a paid instance type
+    plan: free
     region: oregon             # change to the region nearest you
     branch: main
     autoDeploy: false
-    buildCommand: pip install -r requirements.txt
+    # Seed real data at build time. Each step is tolerant of failure so a
+    # network hiccup on a public dataset never breaks the build — the app still
+    # boots and reports an honest empty state.
+    buildCommand: >-
+      pip install -r requirements.txt &&
+      (python -m megatool.cli fetch --quiet || echo "WARN: price fetch failed; continuing") &&
+      (python -m megatool.cli fetch-index || echo "WARN: index fetch failed; continuing") &&
+      (python -m megatool.cli fetch-sectors || echo "WARN: sector fetch failed; continuing")
     startCommand: python -m megatool.cli serve --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health   # always public (see megatool/friend_access.py)
     envVars:
       # --- runtime ---------------------------------------------------------
       - key: PYTHON_VERSION
         value: "3.12.3"        # must satisfy pyproject: >=3.12,<3.14
-      # --- bind + storage --------------------------------------------------
+      # --- bind ------------------------------------------------------------
       - key: MEGATOOL_HOST
         value: 0.0.0.0
-      - key: MEGATOOL_DATA_DIR
-        value: /var/data       # must match the disk mountPath below
+      # MEGATOOL_DATA_DIR is deliberately UNSET on the Free plan: it defaults
+      # to <repo>/data, which is where the build step seeds the data.
       # --- access control (fail closed) ------------------------------------
       - key: MEGATOOL_REQUIRE_AUTH
         value: "1"
       - key: MEGATOOL_FRIEND_TOKEN
         generateValue: true    # Render generates the secret; never committed
-      # Do NOT trust loopback on a hosted deployment: there is no legitimate
-      # loopback client, and if Render's proxy ever presented a loopback source
-      # address, trusting it would treat every request as the owner. The app
-      # makes no loopback self-calls, so 0 is strictly safer here.
+      # Do NOT trust loopback on a hosted deployment (see docs/DEPLOYMENT_RENDER.md).
       - key: MEGATOOL_FRIEND_TRUST_LOOPBACK
         value: "0"
-      # Set this to the exact deployed origin if you split the frontend off
-      # (e.g. https://your-site.netlify.app). Leave unset for same-origin.
+      # The split frontend origin (Netlify). Needed only if the browser calls
+      # this API cross-origin; the shipped netlify.toml proxies /api/* instead,
+      # which needs no CORS. Set to your exact origin if you change that.
       - key: MEGATOOL_FRIEND_ORIGIN
-        sync: false
+        value: https://pravahanepse.netlify.app
       # --- external data gates (off unless you explicitly authorise) -------
       - key: MEGATOOL_NEPSE_API_AUTHORIZED
         value: "0"
       - key: MEGATOOL_INTEGRATION_AUTHORIZED
         value: "0"
-    disk:
-      name: pravaha-data
-      mountPath: /var/data
-      sizeGB: 5
