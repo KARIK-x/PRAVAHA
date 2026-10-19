@@ -62,7 +62,12 @@ MUTATING_POSTS: dict[str, str] = {
     "/api/portfolio/transactions": "appends a real ledger transaction",
     "/api/floorsheet/import": "writes floor-sheet rows",
     "/api/fundamentals/import": "writes fundamentals rows",
+    "/api/news/import": "writes imported news records to the SQLite store",
     "/api/written-pdf/review": "moves a transcription record's verification status",
+    "/api/watchlists": "creates a watchlist in the app SQLite store",
+    "/api/experiments": "saves a research experiment in the app SQLite store",
+    "/api/screens": "saves a custom analytical rule in the app SQLite store",
+    "/api/alerts/acknowledge": "marks alert_history rows acknowledged in the app SQLite store",
 }
 
 
@@ -94,6 +99,12 @@ def read_only_posts(symbol: str) -> dict[str, tuple[str, Any]]:
         ),
         "/api/forecast": ("POST", {"symbol": symbol, "model": "naive", "horizon": 5}),
         "/api/forecast/compare": ("POST", {"symbol": symbol, "horizon": 5}),
+        # Small windows so a symbol with modest history still yields origins
+        # (train_min + holdout points are all the route requires).
+        "/api/forecast/rolling": (
+            "POST",
+            {"symbol": symbol, "model": "naive", "train_min": 10, "holdout": 3, "step": 3},
+        ),
         "/api/research/ask": ("POST", {"symbol": symbol, "question": "trend"}),
         "/api/planning": (
             "POST",
@@ -113,6 +124,19 @@ def read_only_posts(symbol: str) -> dict[str, tuple[str, Any]]:
             },
         ),
     }
+
+
+# Client-side transport bounds for the POST probes. The default below is a
+# *transport* limit, not an assertion — but one read-only route is slower than
+# it by design. Measured 2026-10-13: /api/walk-forward took 58.4 s, 62.8 s and
+# 80.5 s across three runs for the same payload (12 quarterly periods x 10
+# ranking permutations). Instrumenting the store showed **373 reads totalling
+# 3.71 s = 5.9% of wall time, with 94.1% spent in pure computation**, so this
+# is intrinsic cost rather than a stall. Against a flat 60 s bound the gate
+# reported "unexpected" roughly half the time while every substantive check
+# still held. The bound is raised for this route alone; the expected status,
+# the response-shape checks and the skip rules are all unchanged.
+_EXTRA_TIMEOUT = {"/api/walk-forward": 300.0}
 
 
 def _request(
@@ -239,7 +263,9 @@ def run(base: str) -> dict[str, Any]:
                 )
                 continue
             _, payload = posts[path]
-            st, b, secs = _request(base, concrete, payload)
+            st, b, secs = _request(
+                base, concrete, payload, timeout=_EXTRA_TIMEOUT.get(concrete, 60.0)
+            )
             results.append(_row(method, path, st, b, secs, {200}, note))
 
     unexpected = [r for r in results if not r["ok"]]

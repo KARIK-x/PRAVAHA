@@ -15,6 +15,7 @@ from megatool.fundamentals import (
     KNOWN_FIELDS,
     FundamentalError,
     FundamentalRecord,
+    compute_symbol_ratios,
     fundamentals_summary,
     import_records,
     query_symbol,
@@ -22,6 +23,7 @@ from megatool.fundamentals import (
     ratio_pb,
     ratio_pe,
     records_from_rows,
+    review_source,
 )
 
 PERIOD = date(2026, 3, 31)
@@ -153,6 +155,29 @@ def test_rows_to_records_happy_path():
 def test_rows_reject_missing_required_column():
     with pytest.raises(FundamentalError, match="source"):
         records_from_rows([{"symbol": "NABIL", "field": "eps", "value": 1}])
+
+
+def test_zero_value_is_a_value_not_a_missing_column():
+    """A real 0 must survive; only blank/None is missing.
+
+    Regression: ``row.get(c, "") or ""`` collapses ``0`` to ``""``, so a P/E of
+    exactly zero (a company with no earnings) or a nil dividend was reported as
+    a missing column and the entire file was refused.
+    """
+    rows = [
+        {"symbol": "NABIL", "field": "eps", "value": 0.0, "source": "s"},
+        {"symbol": "NABIL", "field": "pe", "value": 0, "unit": "ratio", "source": "s"},
+    ]
+    out = records_from_rows(rows)
+    assert [r.value for r in out] == [0.0, 0.0]
+    assert all(r.field in ("eps", "pe") for r in out)
+
+
+def test_blank_value_is_still_rejected_as_missing():
+    """The other half of the rule: '' and None remain missing."""
+    for bad in ("", None, "   "):
+        with pytest.raises(FundamentalError, match="missing required column"):
+            records_from_rows([{"symbol": "NABIL", "field": "eps", "value": bad, "source": "s"}])
 
 
 def test_rows_reject_bad_date():
@@ -456,3 +481,319 @@ def test_ratio_cannot_present_revenue_divided_by_price_as_pe():
     revenue = rec(field="revenue", value=5000.0)
     with pytest.raises(FundamentalError):
         ratio_pe(500.0, revenue, price_as_of=PRICE_DATE)
+
+
+# ------------------------------------------------- ratio assistant (F10)
+@pytest.fixture()
+def store(tmp_path):
+    import numpy as np
+    import pandas as pd
+
+    from megatool.market_store import MarketStore
+
+    s = MarketStore(tmp_path / "market.duckdb")
+    closes = np.linspace(200.0, 250.0, 30)
+    s.upsert_bars(
+        pd.DataFrame(
+            {
+                "symbol": ["NABIL"] * 30,
+                "trading_date": pd.bdate_range(end="2026-10-12", periods=30),
+                "open": closes,
+                "high": closes * 1.01,
+                "low": closes * 0.99,
+                "close": closes,
+                "volume": [10_000] * 30,
+                "turnover": closes * 10_000,
+                "source": ["SYNTHETIC-TEST-FIXTURE"] * 30,
+                "retrieved_at": [pd.Timestamp("2026-10-12")] * 30,
+                "validation_status": ["valid"] * 30,
+            }
+        )
+    )
+    yield s
+    s.close()
+
+
+def test_ratio_report_derives_pe_pb_and_yield_from_stored_inputs(conn, store):
+    import_records(
+        [
+            rec(field="eps", value=25.0),
+            rec(field="net_worth_per_share", value=50.0),
+            rec(field="dps", value=10.0),
+        ],
+        conn,
+    )
+    report = compute_symbol_ratios(conn, store, "nabil")
+    assert report["status"] == "ok"
+    assert report["price"]["value"] == pytest.approx(250.0)
+    assert report["price"]["date"] == "2026-10-12"
+    assert report["ratios"]["pe"]["value"] == pytest.approx(10.0)
+    assert report["ratios"]["pb"]["value"] == pytest.approx(5.0)
+    assert report["ratios"]["dividend_yield_pct"]["value"] == pytest.approx(4.0)
+    # reported vs derived is explicit on every figure.
+    assert report["ratios"]["pe"]["kind"] == "derived"
+    inp = report["ratios"]["pe"]["inputs"][0]
+    assert inp["kind"] == "reported" and inp["field"] == "eps"
+    assert inp["verification"] == "verified" and inp["period_end"] == "2026-03-31"
+    assert {f["field"] for f in report["reported_fields"]} == {
+        "eps",
+        "net_worth_per_share",
+        "dps",
+    }
+
+
+def test_ratio_report_carries_the_refusal_reason_for_unreviewed_inputs(conn, store):
+    import_records([rec(field="eps", value=25.0, verification="extracted")], conn)
+    report = compute_symbol_ratios(conn, store, "NABIL")
+    pe = report["ratios"]["pe"]
+    assert pe["value"] is None
+    assert "extracted" in pe["unavailable_reason"]
+    # Missing inputs state their own reason instead of being omitted.
+    assert report["ratios"]["pb"]["value"] is None
+    assert (
+        "no net_worth_per_share or book_value_per_share record"
+        in (report["ratios"]["pb"]["unavailable_reason"])
+    )
+    assert report["ratios"]["dividend_yield_pct"]["value"] is None
+
+
+def test_ratio_report_never_invents_a_price(conn, store):
+    import_records([rec(field="eps", value=25.0)], conn)
+    # The stored symbol is NABIL; GHOST has no bars at all.
+    report = compute_symbol_ratios(conn, store, "GHOST")
+    assert report["price"]["value"] is None
+    assert "no usable stored close for GHOST" in report["price"]["unavailable_reason"]
+    for name, r in report["ratios"].items():
+        assert r["value"] is None, name
+        assert "no usable stored close" in r["unavailable_reason"]
+
+
+def test_ratio_report_on_unknown_symbol_is_explicit_no_data(conn, store):
+    report = compute_symbol_ratios(conn, store, "NEVER")
+    assert report["status"] == "no_data"
+    assert report["reported_fields"] == []
+    assert all(r["value"] is None for r in report["ratios"].values())
+
+
+# ---------------------------------------------------------------- F10 routes
+def test_ratios_and_compare_routes(tmp_path, monkeypatch):
+    import numpy as np
+    import pandas as pd
+    from fastapi.testclient import TestClient
+
+    from megatool.api import create_app
+    from megatool.market_store import MarketStore
+
+    store = MarketStore(tmp_path / "market.duckdb")
+    closes = np.linspace(200.0, 250.0, 30)
+    for sym in ("NABIL", "ADBL"):
+        store.upsert_bars(
+            pd.DataFrame(
+                {
+                    "symbol": [sym] * 30,
+                    "trading_date": pd.bdate_range(end="2026-10-12", periods=30),
+                    "open": closes,
+                    "high": closes * 1.01,
+                    "low": closes * 0.99,
+                    "close": closes,
+                    "volume": [10_000] * 30,
+                    "turnover": closes * 10_000,
+                    "source": ["SYNTHETIC-TEST-FIXTURE"] * 30,
+                    "retrieved_at": [pd.Timestamp("2026-10-12")] * 30,
+                    "validation_status": ["valid"] * 30,
+                }
+            )
+        )
+    from megatool.db import get_conn, init_app_db
+
+    init_app_db()  # isolated app DB (conftest points PATHS at tmp)
+    with get_conn() as conn:
+        import_records(
+            [
+                rec(symbol="NABIL", field="eps", value=25.0),
+                rec(symbol="NABIL", field="dps", value=10.0),
+                rec(symbol="ADBL", field="eps", value=20.0),
+            ],
+            conn,
+        )
+    app = create_app(store=store)
+    with TestClient(app) as client:
+        d = client.get("/api/fundamentals/NABIL/ratios").json()
+        assert d["ratios"]["pe"]["value"] == pytest.approx(10.0)
+        assert d["ratios"]["dividend_yield_pct"]["value"] == pytest.approx(4.0)
+        # /compare must not be swallowed by the /{symbol} parameterised route.
+        cmp = client.get("/api/fundamentals/compare", params={"symbols": "NABIL,ADBL"})
+        assert cmp.status_code == 200
+        reports = cmp.json()["symbols"]
+        assert [r["symbol"] for r in reports] == ["NABIL", "ADBL"]
+        assert reports[1]["ratios"]["pe"]["value"] == pytest.approx(12.5)
+        # An over-long request is rejected rather than silently truncated.
+        too_many = ",".join(["X"] * 11)
+        assert (
+            client.get("/api/fundamentals/compare", params={"symbols": too_many}).status_code == 400
+        )
+    store.close()
+
+
+# --------------------------------------------------------------- bulk review
+def _extracted(symbol="AAA", field="eps", value=10.0, unit="NPR", source="yonepse/financials.json"):
+    return {
+        "symbol": symbol,
+        "field": field,
+        "value": value,
+        "unit": unit,
+        "period_end": "2026-03-31",
+        "period_label": "2026-03-31",
+        "source": source,
+        "verification": "extracted",
+    }
+
+
+def test_review_source_promotes_only_that_source(conn):
+    recs = records_from_rows(
+        [
+            _extracted("AAA"),
+            _extracted("BBB", source="other/source.json"),
+        ]
+    )
+    import_records(recs, conn)
+    out = review_source(conn, "yonepse/financials.json")
+    assert out == {"source": "yonepse/financials.json", "level": "reviewed", "promoted": 1}
+    levels = {
+        r["symbol"]: r["verification"]
+        for r in query_symbol(conn, "AAA") + query_symbol(conn, "BBB")
+    }
+    assert levels["AAA"] == "reviewed"
+    assert levels["BBB"] == "extracted"  # a different source is untouched
+
+
+def test_review_source_refuses_a_bad_level_or_empty_source(conn):
+    import_records(records_from_rows([_extracted()]), conn)
+    with pytest.raises(FundamentalError):
+        review_source(conn, "yonepse/financials.json", level="extracted")
+    with pytest.raises(FundamentalError):
+        review_source(conn, "  ")
+
+
+def test_review_source_is_idempotent(conn):
+    import_records(records_from_rows([_extracted()]), conn)
+    assert review_source(conn, "yonepse/financials.json")["promoted"] == 1
+    # Already reviewed -> nothing left to promote, and no error.
+    assert review_source(conn, "yonepse/financials.json")["promoted"] == 0
+
+
+# --- Historical P/E lookahead prevention tests ---
+
+def test_eps_available_as_of_returns_latest_before_date(db_path):
+    """eps_available_as_of returns the most recent EPS on or before as_of."""
+    import sqlite3
+    from datetime import date
+    from megatool.fundamentals import eps_available_as_of
+    from megatool.db import init_app_db
+    init_app_db(db_path)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    # Insert test EPS records
+    conn.execute("INSERT INTO fundamentals (symbol, field, value, period_end, period_label, unit, source, verification, retrieved_at) VALUES (?, 'eps', ?, ?, ?, 'NPR', 'test', 'reviewed', '2026-01-01')", ("TESTCO", 10.0, "2025-01-15", "Q1"))
+    conn.execute("INSERT INTO fundamentals (symbol, field, value, period_end, period_label, unit, source, verification, retrieved_at) VALUES (?, 'eps', ?, ?, ?, 'NPR', 'test', 'reviewed', '2026-01-01')", ("TESTCO", 12.0, "2025-04-15", "Q2"))
+    conn.execute("INSERT INTO fundamentals (symbol, field, value, period_end, period_label, unit, source, verification, retrieved_at) VALUES (?, 'eps', ?, ?, ?, 'NPR', 'test', 'reviewed', '2026-01-01')", ("TESTCO", 14.0, "2025-07-15", "Q3"))
+    conn.commit()
+    # As of 2025-05-01, should return Q2 (April)
+    rec = eps_available_as_of(conn, "TESTCO", date(2025, 5, 1))
+    assert rec is not None
+    assert rec.value == 12.0
+    assert rec.period_end == date(2025, 4, 15)
+    conn.close()
+
+
+def test_eps_available_as_of_returns_none_when_no_eps(db_path):
+    """eps_available_as_of returns None when no EPS available before as_of."""
+    import sqlite3
+    from datetime import date
+    from megatool.fundamentals import eps_available_as_of
+    from megatool.db import init_app_db
+    init_app_db(db_path)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("INSERT INTO fundamentals (symbol, field, value, period_end, period_label, unit, source, verification, retrieved_at) VALUES (?, 'eps', ?, ?, ?, 'NPR', 'test', 'reviewed', '2026-01-01')", ("TESTCO2", 10.0, "2025-06-15", "Q1"))
+    conn.commit()
+    # As of 2025-01-01, no EPS available
+    rec = eps_available_as_of(conn, "TESTCO2", date(2025, 1, 1))
+    assert rec is None
+    conn.close()
+
+
+def test_historical_pe_lookahead_prevention(db_path):
+    """historical_pe does not use future-reported EPS."""
+    import sqlite3
+    from datetime import date
+    from megatool.fundamentals import historical_pe
+    from megatool.db import init_app_db
+    init_app_db(db_path)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    # Insert EPS records
+    conn.execute("INSERT INTO fundamentals (symbol, field, value, period_end, period_label, unit, source, verification, retrieved_at) VALUES (?, 'eps', ?, ?, ?, 'NPR', 'test', 'reviewed', '2026-01-01')", ("TESTCO3", 10.0, "2025-01-15", "Q1 2025"))
+    conn.execute("INSERT INTO fundamentals (symbol, field, value, period_end, period_label, unit, source, verification, retrieved_at) VALUES (?, 'eps', ?, ?, ?, 'NPR', 'test', 'reviewed', '2026-01-01')", ("TESTCO3", 12.0, "2025-04-15", "Q2 2025"))
+    conn.commit()
+    # Historical PE as of 2025-02-01 should use Q1 EPS (10.0), not Q2 (12.0)
+    result = historical_pe(conn, "TESTCO3", 500.0, date(2025, 2, 1))
+    assert result["pe"] is not None
+    assert result["eps_used"] == 10.0
+    assert result["eps_period_end"] == "2025-01-15"
+    # Historical PE as of 2025-05-01 should use Q2 EPS (12.0)
+    result2 = historical_pe(conn, "TESTCO3", 500.0, date(2025, 5, 1))
+    assert result2["pe"] is not None
+    assert result2["eps_used"] == 12.0
+    conn.close()
+
+
+def test_historical_pe_no_eps_available(db_path):
+    """historical_pe returns None when no EPS available."""
+    import sqlite3
+    from datetime import date
+    from megatool.fundamentals import historical_pe
+    from megatool.db import init_app_db
+    init_app_db(db_path)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("INSERT INTO fundamentals (symbol, field, value, period_end, period_label, unit, source, verification, retrieved_at) VALUES (?, 'eps', ?, ?, ?, 'NPR', 'test', 'reviewed', '2026-01-01')", ("TESTCO4", 10.0, "2025-06-15", "Q1"))
+    conn.commit()
+    result = historical_pe(conn, "TESTCO4", 500.0, date(2025, 1, 1))
+    assert result["pe"] is None
+    assert "no EPS record available" in result["reason"]
+    conn.close()
+
+
+def test_historical_pe_negative_eps(db_path):
+    """historical_pe refuses negative EPS."""
+    import sqlite3
+    from datetime import date
+    from megatool.fundamentals import historical_pe
+    from megatool.db import init_app_db
+    init_app_db(db_path)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("INSERT INTO fundamentals (symbol, field, value, period_end, period_label, unit, source, verification, retrieved_at) VALUES (?, 'eps', ?, ?, ?, 'NPR', 'test', 'reviewed', '2026-01-01')", ("TESTCO5", -5.0, "2025-01-15", "Q1"))
+    conn.commit()
+    result = historical_pe(conn, "TESTCO5", 500.0, date(2025, 2, 1))
+    assert result["pe"] is None
+    assert "not positive" in result["reason"]
+    conn.close()
+
+
+def test_historical_pe_stale_eps(db_path):
+    """historical_pe refuses stale EPS (>400 days)."""
+    import sqlite3
+    from datetime import date
+    from megatool.fundamentals import historical_pe
+    from megatool.db import init_app_db
+    init_app_db(db_path)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("INSERT INTO fundamentals (symbol, field, value, period_end, period_label, unit, source, verification, retrieved_at) VALUES (?, 'eps', ?, ?, ?, 'NPR', 'test', 'reviewed', '2026-01-01')", ("TESTCO6", 10.0, "2024-01-15", "Q1"))
+    conn.commit()
+    result = historical_pe(conn, "TESTCO6", 500.0, date(2026, 1, 1))
+    assert result["pe"] is None
+    assert "stale" in result["reason"]
+    conn.close()

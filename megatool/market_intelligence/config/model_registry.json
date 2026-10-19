@@ -1,0 +1,13 @@
+{"registry_version": "1.0.0",
+ "routes": {"en": "lexicon-v1", "ne": "lexicon-v1", "ne_roman": "lexicon-v1", "mixed": "lexicon-v1", "unknown": "lexicon-v1", "default": "lexicon-v1"},
+ "models": [
+  {"model_id": "lexicon-v1", "model_version": "1.0.0", "status": "active",
+   "description": "Dependency-free curated lexicon baseline (EN + Devanagari NE + romanized NE) with negation/intensifier handling. Transparent and auditable; limited recall.",
+   "languages": ["en", "ne", "ne_roman", "mixed"]},
+  {"model_id": "nepse-sentiment-analyzer", "model_version": "unknown", "status": "deferred",
+   "description": "robinGiri2024/nepse-sentiment-analyzer on HF: Keras BiLSTM-CNN, 5-class, ~1.5MB weights, MIT license per model card. Self-reported ~95% validation accuracy is NOT independently verified. Deferred: requires TensorFlow (heavy for 8GB M1), preprocessing spec incomplete on the card. Adapter: sentiment/transformer_adapter.py (mock-tested).",
+   "languages": ["ne"]},
+  {"model_id": "finbert", "model_version": "unknown", "status": "deferred",
+   "description": "ProsusAI/finbert (English financial sentiment). Deferred: English-only; heavy torch dependency; lexicon baseline covers the English lane for now.",
+   "languages": ["en"]}
+ ]}

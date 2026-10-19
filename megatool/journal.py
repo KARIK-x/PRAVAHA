@@ -389,3 +389,94 @@ def grade_entry(entry_id: int, db_path=None) -> dict[str, Any] | None:
     return plan_outcome(
         e["entry_price"], e["planned_invalidation"], e["planned_target"], e["exit_price"]
     )
+
+
+def reflection_context(entry_id: int, db_path=None) -> dict[str, Any]:
+    """Deterministic reflection material for one entry — computed locally.
+
+    The entry as recorded, its plan grade (if closeable), and the journal's
+    own statistics. Nothing here involves a model: this is the AI-independent
+    half of the reflection feature.
+    """
+    e = get_entry(entry_id, db_path)
+    stats = journal_stats(db_path)
+    return {
+        "entry": e,
+        "plan_grade": grade_entry(entry_id, db_path),
+        "journal_stats": {
+            k: stats.get(k)
+            for k in ("closed", "wins", "losses", "win_rate_pct", "avg_r")
+            if k in stats
+        },
+        "kind": "deterministic",
+        "note": "Computed locally from the journal; independent of any AI.",
+    }
+
+
+def reflect(
+    entry_id: int,
+    *,
+    provider: str | None = None,
+    authorize_private: bool = False,
+    db_path=None,
+    provider_instance: Any = None,
+) -> dict[str, Any] | None:
+    """Deterministic reflection context plus an OPTIONAL AI reflection.
+
+    Privacy contract: journal content is private. Without
+    ``authorize_private=True`` no model is invoked at all — the caller gets
+    only the local deterministic context and an explicit ``not_authorized``
+    status. With the flag, the configured provider is used and the recipient
+    (local Ollama vs hosted OpenRouter) is named in the response, so the owner
+    always knows where their journal entry went. Returns ``None`` when the
+    entry does not exist.
+    """
+    try:
+        ctx = reflection_context(entry_id, db_path)
+    except JournalError:
+        return None
+
+    if not authorize_private:
+        return {
+            "entry_id": entry_id,
+            "deterministic": ctx,
+            "ai_interpretation": {
+                "status": "not_authorized",
+                "text": None,
+                "reason": (
+                    "journal content is private; no AI call was made. Pass "
+                    "authorize_private=true to send this entry's context to "
+                    "the configured provider (local Ollama keeps it on this "
+                    "machine)."
+                ),
+                "recipient": "none — no model call was made",
+            },
+        }
+
+    from megatool.agent import ToolResult, interpret
+
+    tr = ToolResult(
+        tool="journal",
+        status="ok",
+        private=True,
+        summary=f"journal entry {entry_id} for {ctx['entry'].get('symbol', '?')}",
+        provenance="local journal (SQLite app DB); private",
+        data=ctx,
+    )
+    ai = interpret(
+        f"Reflect on journal entry {entry_id}: what went as planned, what did "
+        "not, and what is worth checking next time. Ground every statement in "
+        "the entry's own recorded fields.",
+        [tr],
+        provider=provider,
+        include_private=True,
+        provider_instance=provider_instance,
+    )
+    if ai.get("status") == "ok":
+        pname = str(ai.get("provider") or "").lower()
+        ai["recipient"] = (
+            "local machine (Ollama)" if "ollama" in pname else f"hosted ({ai.get('provider')})"
+        )
+    else:
+        ai["recipient"] = "none — no model call was made"
+    return {"entry_id": entry_id, "deterministic": ctx, "ai_interpretation": ai}

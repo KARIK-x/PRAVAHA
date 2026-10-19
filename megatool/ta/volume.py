@@ -7,8 +7,10 @@ import numpy as np
 from megatool.ta.core import (
     IndicatorMeta,
     IndicatorResult,
+    ema,
     register,
     rolling_mean,
+    rolling_sum,
 )
 
 
@@ -62,7 +64,11 @@ def obv(data: dict[str, np.ndarray]) -> IndicatorResult:
         warmup=lambda p: p["period"],
         reference="Quinn and Weigand, 1990s.",
         formula="raw money flow = typical price * volume; MFI = 100 - 100/(1+money ratio)",
-        notes="Often called a 'volume-weighted RSI'; ranges 0-100.",
+        notes="Often called a 'volume-weighted RSI'; ranges 0-100. A window "
+        "with no positive and no negative money flow (constant typical price, "
+        "or zero volume) has a money ratio of 0/0, which is undefined: MFI is "
+        "left as NaN and reported as insufficient_data rather than being given "
+        "a directional value.",
     )
 )
 def mfi(data: dict[str, np.ndarray], period: int = 14) -> IndicatorResult:
@@ -70,6 +76,15 @@ def mfi(data: dict[str, np.ndarray], period: int = 14) -> IndicatorResult:
     v = _require_volume(data, "mfi")
     mf = tp * v
     n = len(tp)
+    out = np.full(n, np.nan)
+    if n < period + 1:
+        return IndicatorResult(
+            name="mfi",
+            params={},
+            values={"mfi": out},
+            insufficient_data=True,
+            message=f"mfi({period}) needs at least {period + 1} bars, got {n}",
+        )
     pos = np.zeros(n)
     neg = np.zeros(n)
     for i in range(1, n):
@@ -78,12 +93,17 @@ def mfi(data: dict[str, np.ndarray], period: int = 14) -> IndicatorResult:
         elif tp[i] < tp[i - 1]:
             neg[i] = mf[i]
 
-    out = np.full(n, np.nan)
     for i in range(period, n):
         p = pos[i - period + 1 : i + 1].sum()
         ng = neg[i - period + 1 : i + 1].sum()
+        # `p > 0` is load-bearing. When BOTH sums are zero the money ratio is
+        # 0/0, which is undefined, so the honest result is NaN. Without that
+        # guard a window with no flow at all (constant typical price, or zero
+        # volume) reported 100 - a claim of maximum buying pressure produced by
+        # nothing happening. `ng == 0 && p > 0` really is 100: purely positive
+        # flow is the maximum by definition.
         if ng == 0:
-            out[i] = 100.0
+            out[i] = 100.0 if p > 0 else np.nan
         else:
             out[i] = 100.0 - 100.0 / (1.0 + p / ng)
     return IndicatorResult(name="mfi", params={}, values={"mfi": out})
@@ -147,6 +167,7 @@ def relative_volume(data: dict[str, np.ndarray], baseline: int = 20) -> Indicato
         warmup=lambda p: p["period"] - 1,
         reference="Simple moving average of volume.",
         formula="SMA(volume, n)",
+        notes="Simple moving average of volume; a flat/missing volume series makes the average flat or NaN.",
     )
 )
 def volume_sma(data: dict[str, np.ndarray], period: int = 20) -> IndicatorResult:
@@ -184,3 +205,101 @@ def vwap_bands(data: dict[str, np.ndarray], period: int = 20) -> IndicatorResult
             continue
         out[i] = pp.sum() / vv.sum()
     return IndicatorResult(name="vwap_bands", params={}, values={"vwap": out})
+
+
+@register(
+    IndicatorMeta(
+        name="cmf",
+        label="Chaikin Money Flow",
+        category="volume",
+        params={"period": 20},
+        inputs=("high", "low", "close", "volume"),
+        outputs=("cmf",),
+        warmup=lambda p: p["period"] - 1,
+        reference="Marc Chaikin.",
+        formula="MFV = (((close-low) - (high-close)) / (high-low)) * volume; "
+        "CMF = sum(MFV, period) / sum(volume, period)",
+        notes="Bounded -1..1 where defined. A bar whose high equals its low has an "
+        "undefined CLV (0/0); its contribution is treated as 0 rather than guessed.",
+    )
+)
+def cmf(data: dict[str, np.ndarray], period: int = 20) -> IndicatorResult:
+    high, low, c = data["high"], data["low"], data["close"]
+    v = _require_volume(data, "cmf").astype(float)
+    rng = high - low
+    with np.errstate(invalid="ignore", divide="ignore"):
+        clv = ((c - low) - (high - c)) / rng
+    clv = np.where(rng == 0, 0.0, clv)
+    clv = np.where(np.isnan(rng), np.nan, clv)
+    mfv = clv * v
+    mfv = np.where(np.isnan(mfv), np.nan, mfv)
+    num = rolling_sum(mfv, period)
+    vv = rolling_sum(v, period)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out = num / vv
+    return IndicatorResult(name="cmf", params={}, values={"cmf": out})
+
+
+@register(
+    IndicatorMeta(
+        name="chaikin_oscillator",
+        label="Chaikin Oscillator",
+        category="volume",
+        params={"fast": 3, "slow": 10},
+        inputs=("high", "low", "close", "volume"),
+        outputs=("chaikin_oscillator",),
+        warmup=lambda p: p["slow"] - 1,
+        reference="Marc Chaikin: the MACD of the Accumulation/Distribution line.",
+        formula="Chaikin Osc = EMA(ad_line, fast) - EMA(ad_line, slow)",
+        notes="A MACD of the Accumulation/Distribution line; positive means accumulation pressure.",
+    )
+)
+def chaikin_oscillator(
+    data: dict[str, np.ndarray], fast: int = 3, slow: int = 10
+) -> IndicatorResult:
+    high, low, c = data["high"], data["low"], data["close"]
+    v = _require_volume(data, "chaikin_oscillator").astype(float)
+    if fast >= slow:
+        raise ValueError(f"chaikin_oscillator: fast ({fast}) must be < slow ({slow})")
+    with np.errstate(invalid="ignore", divide="ignore"):
+        clv = ((c - low) - (high - c)) / (high - low)
+    clv = np.where((high - low) == 0, 0.0, clv)
+    mfv = clv * v
+    mfv = np.where(np.isnan(high + low + c + v), np.nan, mfv)
+    n = len(c)
+    ad = np.zeros(n)
+    for i in range(1, n):
+        ad[i] = ad[i - 1] + (0.0 if np.isnan(mfv[i]) else mfv[i])
+    osc = ema(ad, fast) - ema(ad, slow)
+    return IndicatorResult(name="chaikin_oscillator", params={}, values={"chaikin_oscillator": osc})
+
+
+@register(
+    IndicatorMeta(
+        name="volume_roc",
+        label="Volume Rate of Change",
+        category="volume",
+        params={"period": 14},
+        inputs=("close", "volume"),
+        outputs=("volume_roc",),
+        warmup=lambda p: p["period"],
+        reference="Percentage change in volume against `period` bars earlier.",
+        formula="VROC = 100*(volume[t] - volume[t-period]) / volume[t-period]",
+        notes="A zero historical volume makes the ratio undefined (NaN), not zero.",
+    )
+)
+def volume_roc(data: dict[str, np.ndarray], period: int = 14) -> IndicatorResult:
+    v = _require_volume(data, "volume_roc").astype(float)
+    n = len(v)
+    out = np.full(n, np.nan)
+    if n <= period:
+        return IndicatorResult(
+            name="volume_roc",
+            params={},
+            values={"volume_roc": out},
+            insufficient_data=True,
+            message=f"volume_roc({period}) needs at least {period + 1} bars, got {n}",
+        )
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out[period:] = 100.0 * (v[period:] - v[:-period]) / v[:-period]
+    return IndicatorResult(name="volume_roc", params={}, values={"volume_roc": out})

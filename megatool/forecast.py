@@ -411,6 +411,204 @@ def compare_models(
     }
 
 
+def rolling_origin(
+    values: np.ndarray | pd.Series,
+    model: str = "naive",
+    train_min: int = 20,
+    holdout: int = 5,
+    step: int = 5,
+    params: dict[str, Any] | None = None,
+    dates: list[str] | None = None,
+) -> dict[str, Any]:
+    """Chronological rolling-origin evaluation: the walk-forward of forecasting.
+
+    Unlike :func:`run_forecast`'s single hold-out (one sample), this advances
+    the evaluation origin forward in time repeatedly:
+
+    * origin at cut ``c``: fit on ``series[:c]``, score on ``series[c:c+holdout]``;
+    * origins start at ``train_min`` and advance by ``step``;
+    * every origin's model sees only data STRICTLY BEFORE its own hold-out,
+      so there is no way for a future value to leak into an earlier origin's
+      fit (the property is asserted by ``test_rolling_origin_never_sees_a_future_value``).
+
+    Each origin is scored against the naive last-value baseline, exactly like
+    :func:`run_forecast`, and the summary reports how often the model beat it.
+    """
+    if model not in MODELS:
+        raise ForecastError(f"unknown model {model!r}; known: {', '.join(sorted(MODELS))}")
+    spec = MODELS[model]
+    merged = {**spec["params"], **(params or {})}
+    unknown = set(merged) - set(spec["params"])
+    if unknown:
+        raise ForecastError(
+            f"{model}: unknown parameter(s) {sorted(unknown)}; allowed {sorted(spec['params'])}"
+        )
+
+    holdout = int(holdout)
+    step = int(step)
+    train_min = int(train_min)
+    if holdout < 1:
+        raise ForecastError("holdout must be >= 1")
+    if step < 1:
+        raise ForecastError("step must be >= 1")
+    if train_min < 3:
+        raise ForecastError("train_min must be >= 3")
+
+    raw = np.asarray(values.to_numpy() if isinstance(values, pd.Series) else values, dtype=float)
+    finite = np.isfinite(raw)
+    series = raw[finite]
+    date_list = None if dates is None else [str(d) for d in dates]
+    if date_list is not None:
+        if len(date_list) != len(raw):
+            raise ForecastError(f"dates has {len(date_list)} entries but the series has {len(raw)}")
+        date_list = [d for d, keep in zip(date_list, finite, strict=True) if keep]
+
+    need = train_min + holdout
+    if len(series) < need:
+        raise ForecastError(
+            f"rolling-origin needs at least {need} finite points "
+            f"(train_min {train_min} + holdout {holdout}), got {len(series)}"
+        )
+    if model == "seasonal_naive":
+        period = int(merged["period"])
+        if period > train_min:
+            raise ForecastError(
+                f"seasonal_naive period {period} exceeds train_min {train_min}: "
+                "the training window could not hold one full cycle at every origin"
+            )
+
+    cuts = list(range(train_min, len(series) - holdout + 1, step))
+    origins: list[dict[str, Any]] = []
+    skills: list[float] = []
+    model_rmses: list[float] = []
+    naive_rmses: list[float] = []
+    undefined_naive = 0
+
+    for cut in cuts:
+        train = series[:cut]
+        test = series[cut : cut + holdout]
+        predicted = _fit(model, train, holdout, merged)
+        baseline = _naive_forecast(train, holdout)
+        m_err = rmse(test, predicted)
+        n_err = rmse(test, baseline)
+        model_rmses.append(m_err)
+        naive_rmses.append(n_err)
+        if n_err == 0 or model == "naive":
+            skill: float | None = None
+            if n_err == 0:
+                undefined_naive += 1
+        else:
+            skill = m_err / n_err
+            skills.append(skill)
+        row: dict[str, Any] = {
+            "origin_index": cut,
+            "train_points": cut,
+            "test_points": holdout,
+            "model_rmse": round(m_err, 6),
+            "naive_rmse": round(n_err, 6),
+            "skill_ratio": None if skill is None else round(skill, 6),
+        }
+        if date_list is not None:
+            row["train_end_date"] = date_list[cut - 1]
+            row["holdout_dates"] = [date_list[cut + i] for i in range(holdout)]
+        origins.append(row)
+
+    n_origins = len(origins)
+    beating = sum(1 for s in skills if s < 1.0)
+    share = (100.0 * beating / len(skills)) if skills else None
+    mean_skill = float(np.mean(skills)) if skills else None
+    median_skill = float(np.median(skills)) if skills else None
+
+    warnings: list[str] = []
+    if n_origins < 3:
+        warnings.append(
+            f"only {n_origins} evaluation origin(s): this is barely more than a "
+            "single hold-out window, not a distribution of results"
+        )
+    if holdout < 10:
+        warnings.append(
+            f"hold-out windows of {holdout} point(s) are noisy; per-origin skill "
+            "ratios on such short windows are not evidence"
+        )
+    if undefined_naive:
+        warnings.append(
+            f"{undefined_naive} origin(s) had a flat hold-out (naive baseline "
+            "perfect), so no skill ratio exists there"
+        )
+
+    if model == "naive":
+        verdict = (
+            "BASELINE: this IS the naive last-value forecast evaluated at every "
+            "origin. It has no skill ratio of its own; use it as the bar others "
+            "must clear."
+        )
+    elif not skills:
+        verdict = (
+            "UNDETERMINED: no origin produced a defined skill ratio (flat "
+            "hold-outs), so nothing can be said about this model on this series."
+        )
+    elif share == 100.0:
+        verdict = (
+            f"BEATS NAIVE ON ALL {len(skills)} ORIGINS (mean RMSE ratio "
+            f"{mean_skill:.2f}). Repeatedly winning on one series is still one "
+            "series: it is not proof of a tradeable edge on other symbols or "
+            "in future data."
+        )
+    elif share is not None and share >= 50.0:
+        verdict = (
+            f"MIXED: beats the naive baseline on {beating} of {len(skills)} "
+            f"origins (mean RMSE ratio {mean_skill:.2f}). Inconsistent - no "
+            "demonstrated skill."
+        )
+    else:
+        verdict = (
+            f"NO DEMONSTRATED SKILL: beats the naive baseline on only {beating} "
+            f"of {len(skills)} origins (mean RMSE ratio {mean_skill:.2f}). The "
+            "last-value forecast was the better forecast on most windows."
+        )
+
+    return {
+        "model": model,
+        "label": spec["label"],
+        "params": merged,
+        "train_min": train_min,
+        "holdout": holdout,
+        "step": step,
+        "points_used": int(len(series)),
+        "series_start": str(date_list[0]) if date_list else "0",
+        "series_end": str(date_list[-1]) if date_list else str(len(series) - 1),
+        "origins": origins,
+        "summary": {
+            "origins": n_origins,
+            "origins_with_skill": len(skills),
+            "origins_beating_naive": beating,
+            "share_beating_naive_pct": None if share is None else round(share, 4),
+            "mean_skill_ratio": None if mean_skill is None else round(mean_skill, 6),
+            "median_skill_ratio": None if median_skill is None else round(median_skill, 6),
+            "mean_model_rmse": round(float(np.mean(model_rmses)), 6),
+            "mean_naive_rmse": round(float(np.mean(naive_rmses)), 6),
+        },
+        "verdict": verdict,
+        "assumptions": [
+            f"Model: {spec['label']} with params {merged}; fit window is always "
+            f"the {train_min}+ points strictly before each hold-out.",
+            f"Each of the {n_origins} origins scores {holdout} unseen point(s), "
+            f"advancing {step} point(s) at a time - a chronological, "
+            "expanding-window evaluation. No origin ever sees its own hold-out, "
+            "and no random split of time series is used.",
+            "The comparison baseline is the naive 'last value' forecast at each "
+            "origin. Beating it consistently on one series is still not proof of "
+            "a tradeable edge.",
+            "Prices are UNADJUSTED for bonus/rights issues.",
+            "No transaction costs are modelled (this is price forecasting, not "
+            "a strategy backtest).",
+            "This is a statistical evaluation of past data, not a forecast, a "
+            "recommendation, or investment advice.",
+        ],
+        "warnings": warnings,
+    }
+
+
 def naive_drift_check(values: np.ndarray | pd.Series) -> dict[str, Any]:
     """How close is this series to a random walk? Runs a rough unit-root check.
 

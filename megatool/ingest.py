@@ -116,6 +116,7 @@ def ingest(
 
     all_first: list[str] = []
     all_last: list[str] = []
+    succeeded: list[str] = []
 
     for i, symbol in enumerate(wanted, start=1):
         if progress is not None:
@@ -132,6 +133,7 @@ def ingest(
             continue
 
         result.symbols_succeeded += 1
+        succeeded.append(symbol)
         result.rows_read += int(r["rows"])
         result.rows_inserted += int(r["inserted"])
         result.rows_updated += int(r["updated"])
@@ -140,7 +142,10 @@ def ingest(
         all_first.append(str(r["first_date"]))
         all_last.append(str(r["last_date"]))
 
-    if update_securities and result.symbols_succeeded:
+    # Only symbols that actually delivered bars join the security master: a
+    # master row claims "we have data for this", and a failed fetch is not
+    # data. (One success must not smuggle the failed symbols in with it.)
+    if update_securities and succeeded:
         rows = [
             {
                 "symbol": s,
@@ -150,7 +155,7 @@ def ingest(
                 "first_seen": started.replace(tzinfo=None),
                 "last_updated": utcnow().replace(tzinfo=None),
             }
-            for s in wanted
+            for s in succeeded
         ]
         try:
             store.upsert_securities(rows)
@@ -178,9 +183,16 @@ def _persist(result: IngestResult, db_path: Path | None) -> None:
     """Write an immutable ingestion-log row. Never raises into the caller."""
     import json
 
-    ok = result.symbols_succeeded > 0
     failed_all = result.symbols_failed > 0 and result.symbols_succeeded == 0
-    status = "failed" if failed_all else ("partial" if result.symbols_failed else "success")
+    # A run that achieved nothing (list_symbols failed, empty universe) is
+    # NOT a success: it must read "failed" so the log never claims a good run
+    # that stored zero rows.
+    if result.symbols_succeeded and not failed_all and not result.symbols_failed:
+        status = "success"
+    elif result.symbols_succeeded:
+        status = "partial"
+    else:
+        status = "failed"
     # Losing the log must not lose the data.
     with contextlib.suppress(Exception):
         log_ingestion(
@@ -208,7 +220,6 @@ def _persist(result: IngestResult, db_path: Path | None) -> None:
             },
             db_path,
         )
-    _ = ok
 
 
 def ingest_local_csv(

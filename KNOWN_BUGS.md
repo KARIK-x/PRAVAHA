@@ -480,3 +480,358 @@ depressed by `weight × 100/n` for everyone:
 * n = 369 (real store): 0.27 percentile points → **0.04** score points.
 
 Pinned by `test_inverted_factor_never_reaches_100_for_the_best_symbol`.
+
+---
+
+## Session 19 — chart workspace, Kronos, replay, autosave (fixed)
+
+**B-74 — the OHLCV strip opened empty on a fresh load.** `bindOhlcvLegend(chart)` was called before `state.chartBars` was assigned, so the fallback "last bar" render read an empty/previous array and the strip stayed hidden until the first crosshair move. Fix: bind after `state.chartBars = bars`, so the strip opens on the last bar. Also added the timeframe label (`Daily/Weekly/Monthly`) and a per-bar change guard so a moving pointer does not rebuild the strip dozens of times per second.
+
+**B-75 — the drawing-rail popover described tools inside their name.** `RAIL_GROUPS` jammed the description into `name` ("Ray — extends right through anchor 2") and the popover rendered a single line. Fix: split into `name` + `d`, render a two-line left-aligned item (name + description), widen to 332 px, add open animation (skipped under `prefers-reduced-motion`), thin scrollbar, head count.
+
+**B-76 — the per-drawing "Visible" checkbox did nothing.** `renderDrawings()` and `anchorHitAt()`/`drawingBodyHit()` never read `d.hidden`, so hiding an individual drawing left it on screen and still grabbable. Fix: skip hidden drawings in all three places. A master "Hide drawings" switch (`state.drawVisible`) was already wired to the drawer checkbox; a matching toolbar button was added to the Draw popover (§6).
+
+**B-77 — forecast candles were amber-only.** `drawForecastOverlay` painted every forecast candle `#f7b500`/`#b47800`, so a predicted candle never read as bullish/bearish. Fix: bodies use the app's native `#26a69a`/`#ef5350` with amber wicks/borders, plus a fixed `#kf-chip` "PREDICTED" badge on the chart stage.
+
+**B-78 — the main-chart Kronos run had no stale guard.** A forecast finishing after a symbol reload painted on the new chart. Fix: a `state.kronosSeq` token incremented on every reload/run; stale responses are dropped with an explicit status line, and `drawForecastOverlay` also rejects a symbol mismatch. Timeframe is now enforced (daily only) with an honest block message.
+
+**B-79 — fullscreen hid the toolbar.** `requestFullscreen` targeted `#chart-stage`, leaving every chart control unreachable while expanded. Fix: fullscreen targets `#view-charts`, so the toolbar, popovers, drawer and stage all stay usable; chart height recomputed on change; Esc exits.
+
+**B-80 — indicator catalog had no favourites or templates.** Fix: ★ toggle per row persisted in `mt-ind-favs`; a `favs` filter category; save/apply/delete template buttons persisted in `mt-ind-templates` (checkbox sets only, no computation).
+
+**B-81 — no replay or autosave surface.** Fix: `#pop-replay` rebuilds a candles+volume-only chart whose rendered series contains only bars up to the cursor (future bars are simply absent), with Start/Play/Pause/Step/Back/Stop; `#pop-chartset` exposes an explicit autosave switch (`mt-autosave-enabled`) that restores the last symbol/timeframe/range/style only when on.
+
+**B-82 — chart style only offered candles/line.** Fix: `#chart-type` now offers Candles, Bars (OHLC), Line, Area — all native series types, all still drive drawings, the legend and panes.
+
+**B-83 — new drawing tools (Schiff pitchfork, Gann fan).** Schiff pitchfork: handle price halved toward mid(BC) (flattened fork, documented). Gann fan: leg-relative rays at 1/8 fractions of the anchor leg — angles follow the chart's own price scale, NOT absolute degrees (honestly documented as an approximation; NEPSE charts have no uniform bar/price ratio).
+
+**B-84 — custom indicator formula editor (§28).** Sandboxed DSL: recursive-descent parser + AST evaluator, whitelisted functions only (sma, ema, rsi, atr, bb_upper, bb_lower, abs, min, max) and series (close, open, high, low, volume). No eval, no arbitrary code — unknown identifiers rejected at parse time. Test/plot, save per symbol, auto-apply on chart load. `window.alert(1)` correctly rejected ("Error: invalid number").
+
+**B-85 — loadSymbols overwrote typed symbols.** `loadSymbols()` unconditionally set `#symbol-input` to the first security, racing with the user's typed input and `page.fill`. Fixed: only set the default when the input is empty.
+
+**B-86 — research dashboard init crash.** `#totals` element was missing from index.html but `loadMarketOverview()` wrote to it → "Cannot set properties of null". Fixed: added the element + null guard. Verified: overview loads, 4 totals, 11 gainers/losers/active, 0 console errors.
+
+**B-87 — Kronos flat forecast caused by greedy decoding.** `forecast()` and `evaluate()` used `top_k=1` when `sample_count==1` (greedy), causing autoregressive model collapse to the mean after ~3 steps (forecast return std 0.99% vs historical 1.52%, 26 consecutive equal closes at context 256). Fix: changed to `top_k=0` (nucleus sampling, `top_p=0.9`) in both functions. Verified: unique closes 29→48, consec equal 12→0, return std 0.9882%→1.1818%, inference 2.146s→0.749s. All 2331 tests pass. `sample_count>1` (multi-sample averaging) worsens collapse (0.579% std) — do not use. Temperature T=1.0 is appropriate (T=1.2 overshoots to 2.337%).
+
+**B-88 — Kronos frontend did not expose temperature/sample_count controls.** The UI only sent `symbol, variant, context_len, pred_len`. Temperature and sample_count defaulted to T=1.0, sample_count=1. The backend now uses nucleus sampling by default (top_k=0), so the default forecast is no longer flat. UI controls for temperature/sample_count remain a future enhancement.
+
+---
+
+## 2026-10-18 — chart workbench session 26 (fixed)
+
+**B-89 — chart view HTML carried parse-level defects.** The chart work exposed
+three structural defects in `web/static/index.html`: a duplicated `chart-meta`
+element id, a malformed `</h2>` terminator, and a missing `</nav>` (plus a
+stray `</footer>`). Fix: repaired all four sites; the document now parses with
+0 errors and element cross-checks run clean. No behaviour changed beyond
+restoring valid markup.
+
+**B-90 — trend indicators with non-band output names were routed to panes.**
+After the display-hint rewrite, the placement fallback keyed on output names
+(`mid|middle|upper|lower|value`), so single-output `ema`/`sma`/`wma`… landed in
+their own pane instead of overlaying price. Fix: documented `indPlacement()`
+rules — momentum/volume → pane; trend → overlay except ADX/Aroon/linreg-slope/
+supertrend; volatility overlays only for pure upper+middle+lower band groups
+(Bollinger's ratio outputs keep it in a pane so they cannot wreck the price
+scale); price-unit "other" series overlay. Browser-verified matrix: 28 overlay
+/ 53 pane across all 81 indicators; `ema` on NABIL now draws 1 overlay series,
+0 panes.
+
+**B-91 — a hidden indicator's pane was force-visible after reload.** `addPane`
+force-unhides a pane container to measure it before constructing the chart, so
+a hidden instance's pane became visible until the next reload. Fix: `drawPane`
+re-applies `el.hidden = !visible` after the pane loop. Browser-verified: a
+layout with a hidden `rsi(9)` instance renders its pane hidden while the
+visible `ema(33)` instance overlays price.
+
+(Caught before shipping, no register entry: `swing_workbench` initially
+assigned the `find_breaks(...)` output to the structure field — a list-vs-dict
+bug found while reading the swing interfaces; fixed before the first test run.)
+
+---
+
+## 2026-10-18 — chart workbench session 27 (fixed)
+
+All seven entries below were found by reading the drawing/chart code and then
+reproduced with real trusted pointer and keyboard events in a live browser
+(playwright-cli) on NABIL and the NEPSE index. Statuses are from that run.
+
+**B-92 — the eraser only hit-tested anchors, so drawings appeared not to erase.**
+The eraser path in `onChartClick` called `anchorHitAt(x, y, 16)` and nothing
+else, so the user had to click a ~2px target at a line's start (and single-anchor
+tools — hline/hray/vline/crossline/text/note/flag/price_label — had a target
+only at their single anchor). Fix: `drawingBodyHit()` now tests *visible
+geometry* with per-tool handling (hline/hray span the pane width from the
+anchor, vline spans the pane height, crossline both axes, text-like tools are a
+point, every other tool is its anchor-to-anchor segment chain using a shared
+`ptSegDist`), and the eraser picks the nearest of body and anchor.
+Verified: clicking the middle of a NABIL trendline deletes it (1 → 0), status
+"Drawing erased (Undo restores it)."
+
+**B-93 — there was no Delete/Backspace handler for drawings.** The only delete
+affordances were the eraser and the drawing-list × button. Fix: a document
+keydown handler deletes the selected drawing, or — with nothing selected — the
+drawing under the pointer; it is guarded so it never fires while typing
+(INPUT/TEXTAREA/SELECT/contenteditable), only inside the chart view, and only
+when something is actually targeted; locked drawings refuse and say so.
+Verified: Delete removed the selected drawing; Delete and Backspace with
+`#symbol-input` focused changed nothing.
+
+**B-94 — dragging a drawing also panned the chart, so lines slid away from the
+cursor.** `bindDrawings()` attached `mousedown` in the bubble phase, by which
+time lightweight-charts had already begun its own pan for the same gesture: the
+drawing moved *and* the chart scrolled. The drag mapping also used
+`coordinateToTime()`, which returns null between bars and in the empty space
+right of the last bar — so a drag near the edge silently stopped. Fix: the
+listener is capture-phase and takes the gesture with
+`preventDefault + stopPropagation` when a drawing is hit; the move path uses
+`barIndexAtX()` (logical coordinate, rounded and clamped to the data range)
+instead of exact time matching.
+Verified: a three-step drag moved the anchors (t1 2026-01-27 → 2026-05-19,
+p1 503.43 → 549.54) while the visible logical range stayed 0 → 249, unchanged.
+
+**B-95 — a selected drawing had no on-chart feedback, and placement tools
+hijacked drags.** `state.drawSelectId` was rendered only as a "selected" pill in
+the drawing list. Fix: `refreshSelectionMarkers()` paints numbered anchor
+handles for the selected drawing (merged into the single `flushMarkers()` call,
+since lightweight-charts allows one marker batch per series), and
+`drawPointer` refuses to start a drag while a placement tool or the eraser is
+active — a mousedown near an existing anchor now plants the next anchor instead
+of moving the old drawing. Escape clears the selection.
+Verified: select → 2 selection markers; drag with a placement tool active does
+not move the drawing.
+
+**B-96 — merely selecting a drawing pushed a no-op undo entry.**
+`drawPointer("down")` called `pushDrawHistory()` on every mousedown, so a click
+that only selected a drawing consumed an undo slot and cleared the redo stack.
+Fix: the snapshot is taken on the first real move (`state.drawDrag.pushed`), and
+the release message distinguishes "selected" from "moved".
+Verified: select leaves the undo stack at 1 and the redo stack at 0;
+erase → Cmd+Z → Cmd+Shift+Z each behave.
+
+**B-97 — the index chart threw two 404s into the browser console.**
+`loadChartInsights()` asked `/api/bars/NEPSE/patterns` and
+`/api/bars/NEPSE/statistics`, which serve individual securities.
+Fix: the index is answered directly ("n/a for the index" with the reason) and the
+patterns panel renders an explanatory empty state instead of requesting.
+Verified: console reads **0 errors / 0 warnings** after loading the NEPSE index
+and then NABIL.
+
+**B-98 — the index was blanket-restricted to close-only chart types, and
+placeholder rows were fabricated into O = H = L = C candles.** Two coupled
+defects. (a) `INDEX_ALLOWED_TYPES` disabled candlesticks/bars/hollow/Heikin for
+the index even though `index_ohlc_history` holds **2,217 genuine OHLC rows
+(2016-11-28 → 2026-10-15, each with turnover)**. (b) The frontend mapping turned
+every placeholder row (`open = null`) into `open = high = low = close`, which the
+close-only chart types merely hid — exactly the "do not present fabricated
+receipts as genuine candles" failure mode, and it also fed the OHLC legend,
+magnet snapping and indicator inputs. Fix: the mapping preserves NULL OHLC and
+`ohlc_status`; candle/bar/hollow/Heikin render placeholder rows **and** rows the
+source flagged `invalid` as whitespace (a gap, never a fabricated or
+inconsistent body); Heikin Ashi chains only across genuine rows and resets at a
+gap; chart-type availability is now driven by the data
+(`genuine_ohlc_count` for the index, `hasBody()` for a security) with the reason
+in the option tooltip; the legend shows "no OHLC body (close-only/invalid row)"
+and labels the index's owned turnover `T/O`. The API now also returns
+`genuine_first_date` / `genuine_last_date` and the meta line quotes them.
+Verified: NEPSE renders **750 / 750 genuine** candles over 3 years, meta reads
+"index · 2217 OHLC / 3079 close-only · candles from 2016-11-28", 20 in-window
+`invalid` rows are gaps, and `tests/test_index_ohlc_history.py` covers the new
+fields (15 tests pass).
+
+**B-99 — the viewport was reset by unrelated actions.** `showView()` called
+`fitContent()` every time the user navigated to Charts, and `loadChart()` ended
+with an unconditional `fitContent()`, so toggling an analysis layer or adding an
+indicator discarded the zoom. Fix: navigation no longer fits (autoSize covers a
+container-size change; Fit is an explicit button) and `loadChart()` captures the
+visible logical range when the symbol + timeframe are unchanged and restores it
+after the rebuild.
+Verified: zoom to {81.8, 167.2} → toggle Support/Resistance (10 lines drawn of
+73 zones) → range byte-identical.
+
+## 2026-10-18 — chart workbench session 28 (fixed)
+
+**B-100 — adding an indicator re-framed the chart.** `addPane()` subscribed the
+pane's time scale to the price chart **and** the price chart to the pane, so the
+first `setData()` on a new pane (or the pane's own fit) pushed its range back
+onto the price chart and threw away the user's zoom — observed `{76.53, 165.67}` →
+`{165.67, …}`. The pane↔price sync is now **one-directional** (price → pane,
+seeded by `syncPaneToPrice()` after `setData`), and `addToChartFromCatalog()`
+captures and restores `getVisibleLogicalRange()` around every add. No
+`fitContent` on add. Verified: zoom `{80,200}` → add overlay `ma_cross` → range
+byte-identical; add pane `percent_b` → range byte-identical; then pan and the
+pane follows (`{120.98,230}`). `docs/evidence/wb21-viewport-preserved.png`.
+
+**B-101 — support/resistance and Fibonacci axis labels overlapped.** When many
+levels sat within a few percent, their price-axis labels stacked and became
+illegible. Fix: caps `MAX_OVERLAY_LINES=8`, `MAX_OVERLAY_LABELS=4`,
+`OVERLAY_LABEL_MIN_GAP=0.012` so nearby levels are thinned and separated.
+Verified: `resistance @ 554 [550-556]` and `zone @ 562` no longer collide.
+
+**B-102 — the verification generator could silently promote every indicator to
+`reference`.** `scripts/generate_indicator_info.py` scored a test as "numeric
+reference" by block text, so a naive helper defined next to the global
+`@pytest.mark.parametrize("name", ALL_INDICATORS)` invariant tests caused the
+whole registry to be labelled `reference`. Fix: an explicit `INVARIANT_TESTS`
+set forces those tests to coverage-only, and `verification_map()` also parses
+`SPARSE_PIVOT_INDICATORS` so sparse exclusions are declared, never silent.
+Regenerated: **49 reference / 41 invariants / 2 sparse / 0 none**.
+
+**B-103 — the catalogue/audit generator was not reproducible.** It hard-asserted
+`sum == 81` and `28 overlay / 53 pane`, so after the registry grew to 92 it would
+fail (or, if the asserts were bypassed, emit an 81-row doc). Fix: counts,
+placement and the verification split are computed from the live registry; the
+placement mirror is still asserted, now against the browser-verified
+`{overlay: 33, pane: 59}`; and the catalogue's **Verification** section is emitted
+from the same scanner the UI uses, so the doc and the UI can never disagree.
+
+**B-104 — the market ticker showed placeholder text, not stored values.**
+`renderTicker()` printed a hard-coded demo string. Fix: a real
+`GET /api/market/ribbon` (most recent stored trading day) feeds a horizontally
+scrolling strip with category headers, a freshness badge, pause/resume
+(`localStorage['mt-ribbon-paused']`) and click-to-load; categories with no honest
+source are returned in `unavailable` with a stated reason. 8 API tests added.
+
+**B-105 — the Elliott Wave controls did nothing visible.** The buttons toggled
+state but drew nothing. Fix: `runElliottAndDraw()` claims a candidate
+(`CANDIDATE_ONLY`, stating pivot count and confidence) and draws the 5 wave
+labels + connecting line, with a status line and an erase action; the viewport is
+unchanged and manual labels survive `eraseElliottAnnotations()`. Never fabricates
+wave labels.
+
+**B-106 — objects on the chart could not be enumerated or removed once drawn.**
+Markers/lines from patterns, candles, S/R, pivots, Elliott and harmonics had no
+single owner view. Fix: a unified `Objects` manager (`#obj-pane`, draggable and
+resizable) lists every visible object with its owner and a full plain-language
+description, plus Hide/Remove; marker provenance is stored in `state.markerMeta`
+(keyed `time|position|shape|text`) so LWC renderer payloads are untouched.
+
+### Session-28 defects and gaps still open (not fixed)
+
+* **No persistent right composition rail.** The reference NEPSE Alpha chart page
+  (#94, #99) keeps an indicator/analysis/composition panel docked at the right;
+  here those live in drawers and popovers. Reachable, just not a docked rail.
+* **No chart-scanner thumbnail grid.** The pattern *detector* computes
+  double top/bottom, H&S etc. per symbol; the reference (#50, #51) shows a tiled
+  grid of detected-pattern thumbnails, which is not built.
+* **No canvas context menu** on a drawing (edit is via the drawing list / a
+  prompt), and no multi-chart grid or pane drag-out (unchanged from session 27).
+* **Ribbon symbol names**: `security_master` is empty in the dev store, so the
+  ribbon shows tickers without company names — the API is correct, the name
+  source is absent (data-dependency, not a fabricated value).
+* **Ribbon freshness is daily only.** NEPSE has no intraday feed here, so the
+  badge reads "NEPSE <date> · delayed" rather than a live tick; the `relvol`
+  category is honestly `unavailable` (no intraday volume baseline).
+
+### Session-27 defects and gaps still open (not fixed)
+
+* **Pane layout is per-instance, not per-workspace.** Height and collapsed state
+  persist on the indicator instance; pane **order** cannot be changed and panes
+  cannot be dragged into a separate window. Nothing is faked — there is no
+  drag-drop and no "mobile pane" toggle in the UI.
+* **Four independent `Escape` listeners** (chat panel, drawing cancel/selection,
+  drawers + fullscreen, palette/clear modal). Each has a distinct, idempotent
+  effect and they run in a fixed order, but they are not centralised in one
+  dispatcher.
+* **Palette catalogue entries without an implementation** (Stock Heat Map,
+  Alpha Rider, Multi Chart, Foot Print, Smart Money Holding, Trading Simulator,
+  Minervini, CAN-SLIM, Draw To Scan, MTF Scan, Trade Monitor, Divergences, the
+  three AI-signal entries, Shareholder Watchlist, Chart Share, Chart Calendar,
+  Smart Money Holding) are listed **disabled with the reason** rather than
+omitted, so the search stays honest and their absence is discoverable.
+
+## 2026-10-18 — chart workbench session 30 (fixed / upgraded)
+
+* **Scanner promotion rule** — `scripts/generate_indicator_info.py` only promoted an
+  indicator to `reference` when its covering block was `numeric=True` AND the
+  indicator had never been covered by an earlier (invariant) test. The
+  `test_no_lookahead_full_series_equals_prefix` block covers every registered
+  indicator first, locking them all at `invariants`, so later numeric tests could
+  never promote. Fixed: a numeric test now always promotes, even over an earlier
+  invariant result. Verification map moved 49/41/2 → **62/28/2**.
+* **Aroon warm-up index** — `test_aroon_exact` asserted the first valid bar at
+  index 4, but aroon's warm-up is `period` (first valid at index 5). Corrected
+  to index 5 (up=100, down=0 on a rising series).
+* **Metadata gaps filled** — 5 empty references (`median_price`, `standard_deviation`,
+  `typical_price`, `weighted_close`, `zscore`), 11 empty notes, and 36 parameter
+  names without a `VARIABLES` description. Regenerated `indicator_info.js`: 92
+  entries, 0 empty references/notes/formulas.
+* **5 genuinely new advanced-analysis capabilities** added and tested:
+  rolling beta (`megatool/stats.py`), time-series volatility percentile
+  (`megatool/stats.py`), multi-timeframe confluence table
+  (`megatool/ta/multitimeframe.py`), descriptive technical rating
+  (`megatool/ta/confluence.py`, new module), S/R strength scoring
+  (`megatool/ta/levels.py`). `tests/test_advanced_analysis.py` (16 tests, all pass).
+
+### Session-30 open gaps
+
+* 3 indicators remain at the invariants level (`adx`, `keltner`, `supertrend`) —
+  only finite/first-valid checks, no hand-computed reference value.
+* The 5 new capabilities are pure functions + tests; they are not yet wired to a
+  frontend view or API route (backend-ready, integration pending).
+* Quick-layer toggles and per-marker suppression remain session-only (carried
+  from session 29).
+
+## 2026-10-18 — chart workbench session 29 (fixed)
+
+**B-107 — the quick-layer overlays and oscillator panes were invisible to the
+Objects manager.** The chart-toolbar toggles (`SMA 20/50`, `EMA 20`, `Bollinger`,
+`Volume`, `RSI pane`, `MACD pane`, `Swings`, `Close-based pivots`) created real
+Lightweight-Charts series and panes, but `addOverlay`/`addPane` returned them to
+callers that discarded the handles, so nothing tracked them and
+`collectChartObjects()` never listed them — verified missing by the session-28
+read-only pass. Fix: `loadChart` now registers one `state.quickObjects` descriptor
+per toolbar toggle (`{id,label,type,owner,checkbox,series|seriesList|paneId|markerOwner}`),
+and the manager gained a **Quick layers** group wired to `quickObjectHidden`,
+`toggleQuickObject` and `removeQuickObject`. Hide flips the real series/pane
+visibility; Remove unchecks the toggle, deletes the real primitive
+(`removeSeries` / pane `chart.remove()` + element cleared), drops the markers it
+owns and refilters `state.markers`. Browser-verified: `quick-rsi` remove → pane
+chart gone + element hidden + checkbox off + row gone; `quick-swings` owned 27
+markers, Hide hid them, Remove dropped all 27 and the toggle.
+`docs/evidence/wb24-objects-quick.png`.
+
+**B-108 — candlestick markers leaked across symbols.** `state.candleMarkers` was
+only reset inside `runCandles()`, so a symbol with the candlestick layer **off**
+inherited the previous symbol's letters (stale objects in the manager, letters
+armed for dates the new symbol never traded). Fix: `destroyCharts()` resets
+`state.candleMarkers` (and `state.quickObjects`). Verified: NABIL (layer on) → 122
+candle markers; load ADBL (no layers) → 0.
+
+**B-109 — pattern markers were lost on reload.** `applyChartLayers()` re-rendered
+the panel with `renderPatternPanel()`, which needs an in-memory scan
+(`patternData`); after a reload `patternData` is null, so a persisted `patterns`
+layer drew **nothing**. Fix: the layer path now calls `loadPatternPanel(symbol)`
+(fetch + draw). Verified: enable `patterns` → 9 markers/9 series → **full page
+reload** → 9 markers/9 series reconstructed from the persisted layer flag.
+
+**B-110 — the pattern overlay checkbox leaked across symbols.** `applyChartLayers`
+set `#pattern-overlay.checked = true` when the layer was on but never cleared it,
+and `loadChartInsights()` always loads the pattern panel, so leaving a symbol with
+patterns on and opening one with the layer off still drew the new symbol's
+markers. Fix: the checkbox is synced to **this** symbol's flag (`checked =
+!!L.patterns`) before `loadChartInsights` runs. Verified: NABIL (patterns on) → 9
+markers; switch to ADBL (no layers) → 0 markers, overlay unchecked.
+
+**B-111 — the object manager's duplicate/orphan safety was unmeasured.** Repeated
+reloads could in principle accumulate objects. Verified across three full page
+reloads: `quick`/`markers`/`candle`/`pat`/`groups` counts byte-identical each run.
+
+### Session-29 defects and gaps still open (not fixed)
+
+* **Quick-layer toggles are not persisted per symbol**, so a **swing-marker**
+  quick layer cannot reconstruct after a reload (its own configuration is not
+  stored; the toolbar checkboxes reset to their HTML defaults). This is honest
+  behaviour, not a fabricated restore: the *persistent* equivalent is the
+  right-hand analysis layers (candles / patterns / Elliott / harmonic / S/R /
+  Fib / profile), which **do** reconstruct from `mt-chart-layers-<symbol>`
+  (verified, B-109). Reported in `REMAINING_BLOCKERS.md` §23.
+* **Per-marker suppression is session-only.** Hiding or removing an individual
+  detector marker is not persisted; a reload rebuilds the detector's full set from
+  its persisted layer flag. Persisting individual suppressions would store
+  transient UI state against recomputed output, which requirement 6 forbids, so it
+  is deliberately not persisted and labelled as such.
+* **The Fib-specific viewport behaviour is now measured** (B-107..B-111 family):
+  manual `fib_retracement`/`fib_extension` and automatic `fib` were each measured
+  in normal **and** expanded chart mode (see `TEST_RESULTS.md` §29). It is still
+  **browser-measured**, not covered by the offline pytest suite.

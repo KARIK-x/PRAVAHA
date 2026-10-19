@@ -32,10 +32,39 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+@contextmanager
+def temporary_app_db() -> Iterator[Path]:
+    """Point the application SQLite store at a throwaway file.
+
+    Building the app initialises the schema, so an inspection that is meant to
+    be read-only must redirect the app store or it would migrate the operator's
+    real ``data/processed/megatool_state.sqlite``. Restores the previous value on
+    exit, including when there was none.
+    """
+    from megatool.config import APP_DB_ENV
+
+    previous = os.environ.get(APP_DB_ENV)
+    with tempfile.TemporaryDirectory(prefix="route_inventory_") as tmp:
+        target = Path(tmp) / "route_inventory_state.sqlite"
+        os.environ[APP_DB_ENV] = str(target)
+        try:
+            yield target
+        finally:
+            if previous is None:
+                os.environ.pop(APP_DB_ENV, None)
+            else:
+                os.environ[APP_DB_ENV] = previous
+
 
 #: POST routes that mutate persistent state. Kept identical to the table in
 #: ``smoke_live.py``; a mismatch would mean one tool probes what the other
@@ -46,7 +75,12 @@ MUTATING_POSTS: dict[str, str] = {
     "/api/portfolio/transactions": "appends a real ledger transaction",
     "/api/floorsheet/import": "writes floor-sheet rows",
     "/api/fundamentals/import": "writes fundamentals rows",
+    "/api/news/import": "writes imported news records to the SQLite store",
     "/api/written-pdf/review": "moves a transcription record's verification status",
+    "/api/watchlists": "creates a watchlist in the app SQLite store",
+    "/api/experiments": "saves a research experiment in the app SQLite store",
+    "/api/screens": "saves a custom analytical rule in the app SQLite store",
+    "/api/alerts/acknowledge": "marks alert_history rows acknowledged in the app SQLite store",
 }
 
 #: Mutating non-POST routes. DELETE/PATCH always mutate by definition.
@@ -54,24 +88,30 @@ MUTATING_OTHER: dict[str, str] = {
     "/api/journal/{entry_id}": "PATCH edits / DELETE removes a journal entry",
     "/api/portfolio/manual/{symbol}": "DELETE removes a manual holding",
     "/api/portfolio/transactions/{tx_id}": "DELETE removes a ledger transaction",
+    "/api/watchlists/{name}": "PATCH edits / DELETE removes a watchlist",
+    "/api/experiments/{exp_id}": "DELETE removes a saved experiment",
+    "/api/screens/{screen_id}": "PATCH edits / DELETE removes a saved screen",
 }
 
 
 def _build_spec() -> dict:
     """Build the app in-process and return its OpenAPI spec.
 
-    A throwaway in-memory MarketStore is enough: FastAPI only needs the route
-    table, and building it never reads the real DuckDB file.
+    A throwaway in-memory MarketStore is enough for the route table, and the
+    **application SQLite store is redirected to a temporary file**: building the
+    app runs the schema migrations, and an inspection tool must never migrate or
+    write the operator's real state database.
     """
     from megatool.api import create_app
     from megatool.market_store import MarketStore
 
-    store = MarketStore(":memory:")
-    try:
-        app = create_app(store=store)
-        return app.openapi()
-    finally:
-        store.close()
+    with temporary_app_db():
+        store = MarketStore(":memory:")
+        try:
+            app = create_app(store=store)
+            return app.openapi()
+        finally:
+            store.close()
 
 
 def _classify(method: str, path: str) -> tuple[str, str]:

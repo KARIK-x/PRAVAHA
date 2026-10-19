@@ -1,0 +1,23 @@
+{
+  "database_path": "data/market_intelligence.db",
+  "collection": {
+    "enabled": true,
+    "dry_run_default": true,
+    "max_items_per_source": 25,
+    "request_timeout_s": 15,
+    "max_response_bytes": 2000000,
+    "max_retries": 2,
+    "min_interval_per_domain_s": 2.0,
+    "user_agent": "NEPSE-MarketIntelligence/0.1 (+personal research; respects robots.txt)"
+  },
+  "deduplication": {"near_threshold": 0.8, "shingle_k": 5},
+  "clustering": {"window_hours": 72, "similarity_threshold": 0.45},
+  "sentiment": {"registry": "config/model_registry.json"},
+  "social": {
+    "adapter": "x_api_v2",
+    "max_requests_per_day": 100,
+    "max_records_per_run": 200,
+    "note": "credentials ONLY via X_BEARER_TOKEN environment variable"
+  },
+  "api": {"host": "127.0.0.1", "port": 8080, "max_limit": 200}
+}

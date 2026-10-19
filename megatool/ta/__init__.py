@@ -8,7 +8,18 @@ Importing this package registers every built-in indicator. Use::
 """
 
 # Importing the modules populates the registry via their @register decorators.
-from megatool.ta import momentum, trend, volatility, volume  # noqa: E402,F401
+from megatool.ta import (  # noqa: E402,F401
+    extra,
+    momentum,
+    momentum2,
+    other,
+    trend,
+    trend2,
+    volatility,
+    volatility2,
+    volume,
+    volume2,
+)
 from megatool.ta.core import (
     IndicatorMeta,
     IndicatorResult,

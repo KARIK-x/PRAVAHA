@@ -90,6 +90,7 @@ def donchian(data: dict[str, np.ndarray], period: int = 20) -> IndicatorResult:
         warmup=lambda p: max(p["period"] - 1, p["atr_period"]),
         reference="Chester Keltner, 1960; ATR variant popularised by Linda Raschke.",
         formula="middle = EMA(n); upper/lower = middle +/- multiplier * ATR(atr_period)",
+        notes="EMA middle with ATR-scaled bands — the ATR variant, not the original SMA/range version.",
     )
 )
 def keltner(
@@ -128,15 +129,12 @@ def historical_volatility(
     data: dict[str, np.ndarray], period: int = 20, trading_days: int = 250
 ) -> IndicatorResult:
     c = data["close"]
-    n = len(c)
-    out = np.full(n, np.nan)
     with np.errstate(divide="ignore", invalid="ignore"):
         logret = np.log(c / shift(c, 1))
-    for i in range(period, n):
-        w = logret[i - period + 1 : i + 1]
-        if np.any(np.isnan(w)):
-            continue
-        out[i] = float(np.std(w, ddof=1)) * np.sqrt(trading_days) * 100.0
+    # Reuse the vectorised rolling std instead of a per-window np.std loop; the
+    # loop made this the dominant cost of a full-universe factor ranking.
+    sd = rolling_std(logret, period, ddof=1)
+    out = sd * np.sqrt(trading_days) * 100.0
     return IndicatorResult(name="historical_volatility", params={}, values={"hv": out})
 
 
@@ -151,6 +149,7 @@ def historical_volatility(
         warmup=lambda p: 1,
         reference="J. Welles Wilder (1978).",
         formula="TR = max(H-L, |H-Pc|, |L-Pc|)",
+        notes="Single-bar true range; the first bar has no previous close, so TR[0] is NaN.",
     )
 )
 def true_range_ind(data: dict[str, np.ndarray]) -> IndicatorResult:

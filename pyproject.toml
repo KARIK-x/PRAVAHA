@@ -58,6 +58,13 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Owner-approved 2026-10-13: this is a separate, untracked owner research
+# folder (survey notes, a Google Forms script, a research report) that is not
+# Mega Tool source code, so it is out of scope for Python lint/format checks.
+# `extend-exclude` is deliberate over `exclude`: `exclude` REPLACES ruff's
+# built-in skips (.git, .venv, ...), whereas this only adds one path. Nothing
+# under this folder is linted, formatted, renamed or otherwise touched.
+extend-exclude = ["AI Trading Nipsy", "vendor"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

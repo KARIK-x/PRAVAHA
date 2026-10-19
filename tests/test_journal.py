@@ -275,3 +275,86 @@ def test_notes_survives_an_update(db):
     eid = create_entry(BASE, db)
     assert update_entry(eid, {"notes": "added later"}, db) is True
     assert get_entry(eid, db)["outcome_notes"] == "added later"
+
+
+# ------------------------------------------------------- AI reflection (F5)
+from megatool.journal import reflect, reflection_context  # noqa: E402
+
+
+class _StubProvider:
+    """Captures prompts; no network. Mimics a LOCAL Ollama provider."""
+
+    provider_name = "ollama"
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def complete(self, prompt, *, system=None, max_tokens=None, temperature=0.0):
+        self.prompts.append(prompt)
+
+        class _Out:
+            text = "stub reflection grounded in the entry"
+            provider = "ollama"
+            model = "stub-1"
+
+        return _Out()
+
+
+def test_reflection_context_is_local_and_deterministic(db):
+    eid = _closed(db, "A", 100, 120, 90, 120)
+    ctx = reflection_context(eid, db)
+    assert ctx["entry"]["symbol"] == "A"
+    assert ctx["plan_grade"]["result"] == "target"
+    assert ctx["kind"] == "deterministic"
+    assert "independent of any AI" in ctx["note"]
+
+
+def test_reflect_without_authorization_never_calls_a_model(db):
+    eid = _closed(db, "A", 100, 120, 90, 120)
+    stub = _StubProvider()
+    out = reflect(eid, authorize_private=False, db_path=db, provider_instance=stub)
+    assert out is not None
+    ai = out["ai_interpretation"]
+    assert ai["status"] == "not_authorized" and ai["text"] is None
+    assert "no model call was made" in ai["recipient"]
+    assert stub.prompts == [], "private journal content must not reach any model"
+    assert out["deterministic"]["plan_grade"]["result"] == "target"
+
+
+def test_reflect_with_authorization_sends_to_the_named_recipient(db):
+    eid = _closed(db, "A", 100, 120, 90, 120)
+    stub = _StubProvider()
+    out = reflect(eid, authorize_private=True, db_path=db, provider_instance=stub)
+    ai = out["ai_interpretation"]
+    assert ai["status"] == "ok" and ai["text"]
+    assert ai["recipient"] == "local machine (Ollama)"
+    assert len(stub.prompts) == 1
+    # The prompt carries the entry's own recorded thesis (private, authorized).
+    assert "Base broken on volume" in stub.prompts[0]
+
+
+def test_reflect_missing_entry_is_none(db):
+    assert reflect(9999, db_path=db) is None
+
+
+# ---------------------------------------------------------------- F5 route
+def test_reflect_route_defaults_to_no_model_call(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from megatool.api import create_app
+    from megatool.market_store import MarketStore
+
+    store = MarketStore(tmp_path / "market.duckdb")
+    init_app_db()  # isolated app DB (conftest points PATHS at tmp)
+    eid = create_entry(BASE, db_path=None)
+    app = create_app(store=store)
+    with TestClient(app) as client:
+        d = client.post(f"/api/journal/{eid}/reflect", json={}).json()
+        assert d["ai_interpretation"]["status"] == "not_authorized"
+        assert d["deterministic"]["entry"]["symbol"] == "NABIL"
+        # authorize_private with no provider configured → honest disabled status
+        d2 = client.post(f"/api/journal/{eid}/reflect", json={"authorize_private": True}).json()
+        assert d2["ai_interpretation"]["status"] == "disabled"
+        assert d2["ai_interpretation"]["recipient"] == "none — no model call was made"
+        assert client.post("/api/journal/9999/reflect", json={}).status_code == 404
+    store.close()

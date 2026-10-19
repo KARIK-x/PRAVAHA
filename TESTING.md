@@ -3,7 +3,43 @@
 Every claim in this file was verified by executing the named command on the project
  MacBook (macOS, Python 3.12, `uv`-managed environment).
 
-## Baseline (2026-10-12)
+## Baseline (2026-10-13, latest run)
+
+| Command | Result |
+| --- | --- |
+| `.venv/bin/python -m pytest -p no:warnings` | **1105 passed**, 48.49 s, exit 0 |
+| `node --check web/static/app.js` | clean, exit 0 |
+| `python scripts/route_inventory.py` | **50 routes**, all covered, exit 0 |
+| `python scripts/smoke_live.py` | **40 probed · 40 expected · 0 unexpected · 10 writes skipped**, exit 0 |
+| `ruff check .` | **clean**, exit 0 |
+| `ruff format --check .` | **exit 1 — one file**: `AI Trading Nipsy/MEGA_TOOL_RESEARCH_REPORT.md` |
+
+> **The one red gate is not project code.** `AI Trading Nipsy/` is an **untracked
+> owner folder** that appeared after the previous baseline; ruff scans every
+> `.md`, so it reaches code fences inside that research report. The file was
+> **deliberately left unmodified** — reformatting the owner's own untracked
+> document in order to turn a gate green is precisely the silent tampering this
+> project forbids. Every tracked project file formats clean. If the owner wants
+> the gate green, the right fix is to exclude that folder in `pyproject.toml`,
+> which is an owner decision, not something to do unilaterally.
+>
+> Earlier baselines in this file recorded `ruff check` failing with 81 errors in
+> the candlestick/summary files. **Those were fixed**; the gate has been clean
+> since. That history is kept below rather than rewritten.
+
+
+### Tests added 2026-10-13 (796 → 982, +186)
+
+| File | Tests | What it covers |
+| --- | ---: | --- |
+| `tests/test_candles.py` | 104 | 15 candlestick patterns: positives, near-miss negatives, reversed directions, zero-range candles, invalid/non-finite OHLC, short history, tolerance boundaries |
+| `tests/test_api.py` | 115 *(was 101)* | +8 Fibonacci/S-R route tests (values round-trip through the shared module, 50% family label, caveats, `min_touches` default, 404/400/422) |
+| `tests/test_levels.py` | 24 | S/R zone clustering: hand-worked zones, input-order independence, tolerance boundary, ATR fallback, `min_touches`, no `confidence` key |
+| `tests/test_fibonacci.py` | 23 | Levels hand-computed from the formula (not by re-calling the code), anchor mirroring, convention labelling, invalid anchors |
+| `tests/test_workspace.py` | 16 | Dated non-live overview, `NOT_STARTED` honesty on filtered modules, failure visibility, no `confidence`/`buy`/`sell` in the payload |
+| `tests/test_market_store_concurrency.py` | 5 | **B-19 regression**: locked-helper contract, a source guard forbidding unlocked reads, 8-thread stress asserting no exception and no mixed results |
+
+### Baseline (2026-10-12) — superseded, kept for the progression
 
 | Command | Result |
 | --- | --- |
@@ -89,6 +125,13 @@ it pins down so a future reader can tell what it protects against.
 
 | Test | Defect it holds the line on |
 | --- | --- |
+| `test_indicators.py::test_rsi_flat_series_is_undefined` | RSI reported **100** (max bullish) on a series that never moved — `0/0` treated as `+∞` (B-23) |
+| `test_indicators.py::test_mfi_no_money_flow_is_undefined` | MFI reported **100** when there was no money flow at all — same `0/0` shape (B-24) |
+| `test_indicators.py::test_rsi_flat_series_is_neither_0_nor_100` | Guards against "fixing" the above by substituting the other directional value |
+| `test_indicators.py::test_mfi_rising_prices_report_exactly_100` | Guards against the new `p > 0` guard overreaching into genuine all-positive flow |
+| `test_summary.py::test_engine_itself_reports_mfi_as_undefined_not_100` | The summary layer must not be hiding an engine defect behind a mask |
+| `test_indicators.py::test_rsi_flat_tail_retains_prior_momentum` | Pins Wilder momentum retention through a flat tail as *intended*, so nobody "fixes" it into a new bug |
+| `test_scanner.py::test_flat_symbol_reports_rsi_as_unavailable_not_overbought` | A flat symbol matched `rsi > 70` screens because the engine returned 100 |
 | `test_audit_a_fixes.py::test_holdout_dates_stay_attached_to_their_values_when_a_close_is_nan` | Forecast hold-out rows were misdated when a close was NaN |
 | `test_audit_a_fixes.py::test_a_typo_field_is_rejected_not_silently_dropped` | A typo'd journal field was accepted with 200 and silently dropped |
 | `test_audit_a_fixes.py::test_a_closed_thesis_only_entry_does_not_crash_the_stats_endpoint` | Stats endpoint crashed with 500 on a legal entry |

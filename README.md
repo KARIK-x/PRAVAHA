@@ -34,8 +34,9 @@ Stop the server with `Ctrl-C`.
 
 | Area | What you get |
 | --- | --- |
-| **Data** | 514,018 real daily bars across 372 symbols (1995 → 2026-10-09), every row carrying its source and retrieval time. Physically impossible rows (high below low, zero or negative price) are excluded from every calculation while `suspect` rows are kept and disclosed |
+| **Data** | 514,018 real daily bars across 372 symbols (1995 → 2026-10-09), every row carrying its source and retrieval time. Rows flagged `invalid` are excluded from every calculation, and `suspect` rows are kept and disclosed. **Two gaps are known and not yet fixed:** all 115 rows whose `high < low` are excluded (that part is sound), but 40,446 bars whose `open` or `close` falls outside `[low, high]` and 10 bars carrying a zero price are still read as-is — they are flagged, not dropped. See B-20/B-21 in `KNOWN_BUGS.md` |
 | **Charting** | Candles, volume and 28 indicators, aligned to price by trading date; swing points and market structure (HH/HL/LH/LL, breaks) drawn as markers |
+| **Research workspace** | One card in the existing Research tab composes overview, swing structure, Fibonacci retracements/extensions, support–resistance zones, candlestick detections, the research report and data quality into a single dated payload — each module reporting its own real state and elapsed time, one failing without hiding the others. No completion percentage is shown, because none is measurable |
 | **Scanner** | 19 metrics, 4 presets, composable AND/OR filter trees |
 | **Backtesting** | Own long/flat engine: next-bar-open fills, fees and slippage, a buy-and-hold benchmark, and every assumption printed with the result |
 | **Research assistant** | A deterministic rules engine that answers *descriptive* questions with the window and definition behind every number, and refuses to predict or recommend |

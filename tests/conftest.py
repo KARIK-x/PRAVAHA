@@ -20,10 +20,15 @@ def _isolate_databases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rows into the owner's real ``data/processed/`` databases, mixing fixture
     data with genuine records. This guard makes that failure impossible
     instead of relying on every test remembering to pass a path.
-    """
-    from megatool.config import Paths
 
-    monkeypatch.setattr(Paths, "app_db", property(lambda self: tmp_path / "isolated_state.sqlite"))
+    The application store is redirected through the supported
+    ``MEGATOOL_APP_DB`` environment override rather than by replacing the
+    property, so the override that read-only tooling depends on is itself
+    exercised by the suite.
+    """
+    from megatool.config import APP_DB_ENV, Paths
+
+    monkeypatch.setenv(APP_DB_ENV, str(tmp_path / "isolated_state.sqlite"))
     monkeypatch.setattr(
         Paths, "market_db", property(lambda self: tmp_path / "isolated_market.duckdb")
     )

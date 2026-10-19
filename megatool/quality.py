@@ -31,6 +31,7 @@ F_VOL_SPIKE = "volume_spike"
 F_PRICE_JUMP = "price_jump"
 F_STALE = "stale_series"
 F_MISSING_VOLUME = "missing_volume"
+F_NON_POSITIVE = "non_positive_price"
 
 #: A day-on-day close move larger than this fraction is flagged for review.
 #: NEPSE applies a ~10% daily band for most scrips, so 25% is well beyond it.
@@ -54,6 +55,7 @@ FLAG_HELP: dict[str, str] = {
     F_DUPLICATE_DATE: "Another row already exists for this trading date.",
     F_NON_MONOTONIC_DATE: "Row is not strictly after the previous row's date.",
     F_ZERO_PRICE: "High is zero.",
+    F_NON_POSITIVE: "A price field (open/high/low/close) was zero - impossible for a traded price.",
     F_VOL_SPIKE: "Volume exceeded 8x the trailing 20-day median volume.",
     F_PRICE_JUMP: "Absolute close-to-close move exceeded 25% - verify against a "
     "corporate action (split/bonus) before trusting the series.",
@@ -80,6 +82,7 @@ FLAG_SEVERITY: dict[str, str] = {
     F_HIGH_LOW_INVERTED: "hard",
     F_ZERO_PRICE: "hard",
     F_CLOSE_OUTSIDE: "review",
+    F_NON_POSITIVE: "review",
     F_DUPLICATE_DATE: "review",
     F_NON_MONOTONIC_DATE: "review",
     F_VOL_SPIKE: "review",
@@ -187,6 +190,18 @@ def validate_bar(
 
     if high is not None and high == 0:
         flags.append(F_ZERO_PRICE)
+
+    # A zero in any OHLC field is physically impossible for a traded
+    # price. Before B-21 only ``high == 0`` was checked (F_ZERO_PRICE),
+    # so a zero ``open``/``low``/``close`` was invisible: it reached
+    # every calculation and could drag an all-time low, ATR, %B or a
+    # support level to zero. The row is flagged, not excluded - whether
+    # zero prices should be treated as invalid is the owner's data-policy
+    # decision (register R1: note B-20's 2026-10-13 ruling covered the
+    # open=previous-close convention, and whether it ALSO covers
+    # F_NON_POSITIVE is exactly the open question). See B-21 / T-31.
+    if any(p is not None and p == 0 for p in (open_, high, low, close)):
+        flags.append(F_NON_POSITIVE)
 
     # Range containment is only checkable when both bounds are present.
     if low is not None and high is not None:

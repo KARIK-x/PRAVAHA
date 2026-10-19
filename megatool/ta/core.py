@@ -50,6 +50,11 @@ class IndicatorMeta:
     reference: str = ""
     formula: str = ""
     notes: str = ""
+    #: Optional display hint for chart consumers:
+    #: "overlay" = every output belongs on the price chart (e.g. a moving
+    #: average family), "pane" = the outputs belong in a separate synced pane
+    #: (oscillators). Empty = let the consumer decide from category/outputs.
+    display: str = ""
 
     def resolved_output_warmup(self, params: dict[str, Any] | None = None) -> dict[str, int]:
         """Warm-up for every declared output, falling back to the overall figure.
@@ -79,6 +84,7 @@ class IndicatorMeta:
             "reference": self.reference,
             "formula": self.formula,
             "notes": self.notes,
+            "display": self.display,
         }
 
 
@@ -286,16 +292,47 @@ def rolling_mean(values: np.ndarray, period: int) -> np.ndarray:
 
 
 def rolling_std(values: np.ndarray, period: int, ddof: int = 1) -> np.ndarray:
-    """Population/sample rolling standard deviation, NaN until a full window."""
+    """Rolling standard deviation, NaN until a full finite window.
+
+    Vectorised with cumulative sums rather than a per-window Python loop: the
+    previous implementation called ``np.std`` once per bar, which dominated the
+    factor-ranking runtime (37,800 calls for a 60-symbol universe). The
+    computation is mean-centred first because ``E[x^2] - E[x]^2`` loses
+    precision on price series, where a large mean carries a small variance.
+
+    Semantics are unchanged: a window containing any non-finite value is NaN, the
+    divisor is ``period - ddof``, and output before a full window is NaN.
+    """
     n = len(values)
     out = np.full(n, np.nan)
-    if period <= 1 or n < period:
+    if period <= 1 or n < period or period - ddof <= 0:
         return out
-    for i in range(period - 1, n):
-        w = values[i - period + 1 : i + 1]
-        if np.any(np.isnan(w)):
-            continue
-        out[i] = float(np.std(w, ddof=ddof))
+    x = np.asarray(values, dtype=float)
+    finite = np.isfinite(x)
+    # Centre on the mean of the finite values so the sums-of-squares stay well
+    # conditioned (variance is shift-invariant).
+    if not finite.any():
+        return out
+    centre = float(x[finite].mean())
+    xc = np.where(finite, x - centre, 0.0)
+    xz = np.where(finite, x, 0.0)
+
+    csum = np.cumsum(xz)
+    csq = np.cumsum(xc * xc)
+    cnt = np.cumsum(finite.astype(np.int64))
+    wsum = csum.copy()
+    wsq = csq.copy()
+    wcnt = cnt.copy()
+    wsum[period:] -= csum[:-period]
+    wsq[period:] -= csq[:-period]
+    wcnt[period:] -= cnt[:-period]
+
+    mean = wsum / period
+    # sum of squared deviations from the window mean: the centred square sum
+    # minus the shift correction period*(mean - centre)^2.
+    ss = np.maximum(wsq - period * (mean - centre) ** 2, 0.0)
+    var = ss / (period - ddof)
+    out = np.where(wcnt == period, np.sqrt(var), np.nan)
     return out
 
 

@@ -3,79 +3,329 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Mega Tool — NEPSE Research Terminal</title>
-<!-- Inline SVG favicon: no extra request, so the app works fully offline. -->
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230e1a2b'/%3E%3Cpath d='M6 22l6-7 5 4 4-6 5 5' stroke='%233ddc97' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
-<link rel="stylesheet" href="/styles.css" />
+<!-- Backend API base for a cross-origin deployment (Netlify frontend → always-on
+     backend). Empty = same origin. Replace with the backend's public https URL
+     after deployment; this is not a secret. -->
+<meta name="megatool-api-base" content="" />
+<title>PRAVAHA — NEPSE Analytics Platform</title>
+<meta name="description" content="PRAVAHA — NEPSE Analytics Platform. Insights today. A brighter tomorrow." />
+<meta name="theme-color" content="#06110F" />
+<meta name="application-name" content="PRAVAHA" />
+<meta name="apple-mobile-web-app-title" content="PRAVAHA" />
+<!-- Favicon is the PRAVAHA symbol mark, not the full square lockup. -->
+<link rel="icon" type="image/png" sizes="64x64" href="/brand/pravaha-symbol-64.png" />
+<link rel="icon" type="image/png" sizes="128x128" href="/brand/pravaha-symbol-128.png" />
+<link rel="apple-touch-icon" sizes="192x192" href="/brand/pravaha-appicon-192.png" />
+<link rel="stylesheet" href="/styles.css?v=wb17" />
 <script src="/vendor/lightweight-charts.standalone.js"></script>
 </head>
 <body>
-<header class="topbar">
-  <div class="brand">
-    <span class="logo">MT</span>
-    <div>
-      <h1>Mega Tool</h1>
-      <p class="sub">Local NEPSE research terminal</p>
+<div class="shell">
+<aside class="sidebar" id="sidebar">
+  <div class="side-brand">
+    <a class="brand-lock" href="#overview" aria-label="PRAVAHA — NEPSE Analytics Platform">
+      <span class="brand-mark"><img src="/brand/pravaha-symbol-128.png" alt="PRAVAHA" width="34" height="34" /></span>
+      <span>
+        <span class="brand-name">PRAVAHA</span>
+        <span class="brand-tag">NEPSE Analytics Platform</span>
+      </span>
+    </a>
+  </div>
+  <nav class="nav" id="nav">
+    <div class="nav-group">
+      <span class="nav-label">Market</span>
+      <button data-view="overview" class="active">Dashboard</button>
+      <button data-view="watchlists">Watchlists</button>
     </div>
+    <div class="nav-group">
+      <span class="nav-label">Charting</span>
+      <button data-view="charts">Charting</button>
+    </div>
+    <div class="nav-group">
+      <span class="nav-label">Discover</span>
+      <button data-view="screener">More Scanners</button>
+      <button data-view="ideas">Ideas</button>
+      <button data-view="tracing">Tracing</button>
+    </div>
+    <div class="nav-group">
+      <span class="nav-label">Portfolio</span>
+      <button data-view="portfolio">Portfolios</button>
+      <button data-view="journal">Journal</button>
+    </div>
+    <div class="nav-group">
+      <span class="nav-label">Research</span>
+      <button data-view="research">Research</button>
+      <button data-view="marketintel">Market Intelligence</button>
+      <button data-view="fundamentals">Fundamentals</button>
+      <button data-view="floorsheet">Floor Sheet</button>
+      <button data-view="pdf">PDF Journal</button>
+    </div>
+    <div class="nav-group">
+      <span class="nav-label">Workbench</span>
+      <button data-view="breadth">Breadth History</button>
+      <button data-view="sea">Seasonality</button>
+      <button data-view="swingw">Swing Bench</button>
+    </div>
+    <div class="nav-group">
+      <span class="nav-label">Algorithms</span>
+      <button data-view="backtest">My Algorithms</button>
+      <button data-view="workshop">Algorithm Workshop</button>
+      <button data-view="templates">Templates</button>
+    </div>
+    <div class="nav-group">
+      <span class="nav-label">Kronos AI</span>
+      <button data-view="forecaster">AI Forecaster</button>
+      <button data-view="kronos">Kronos AI</button>
+    </div>
+    <div class="nav-group">
+      <span class="nav-label">Data</span>
+      <button data-view="data">Data &amp; Quality</button>
+    </div>
+    <div class="nav-group">
+      <span class="nav-label">NEW</span>
+      <button data-view="nu">Company Universe</button>
+      <button data-view="nse">Sector Explorer</button>
+      <button data-view="nprof">Company Profiles</button>
+      <button data-view="neps">EPS Rankings</button>
+      <button data-view="nepsh">EPS History &amp; Growth</button>
+      <button data-view="nttm">TTM EPS Analysis</button>
+      <button data-view="ncmp">Fundamentals Comparison</button>
+      <button data-view="nscr">Financial Screener</button>
+      <button data-view="nelig">Margin Eligibility</button>
+      <button data-view="ncov">Data Coverage</button>
+    </div>
+    <div class="nav-group">
+      <span class="nav-label">KIMI</span>
+      <button data-view="kimi">KIMI Research</button>
+    </div>
+    <div class="nav-group">
+      <span class="nav-label">Sasto Share</span>
+      <button data-view="sastoshare">Market Pulse</button>
+      <button data-view="ssmovers">Movers &amp; Sparklines</button>
+      <button data-view="ssvaluation">Valuation</button>
+      <button data-view="ssrisk">Risk &amp; Volatility</button>
+      <button data-view="ssrotation">Sector Rotation</button>
+      <button data-view="ssdividends">Dividends</button>
+      <button data-view="ssstrategy">Strategy vs Buy &amp; Hold</button>
+    </div>
+  </nav>
+  <p class="nav-note">Not financial advice<br>historical data only</p>
+</aside>
+
+<div class="content">
+<header class="topbar">
+  <div class="search-wrap">
+    <input id="global-symbol" list="symbol-list" placeholder="Search a symbol — e.g. NABIL" autocomplete="off" spellcheck="false" />
+    <span class="search-hint">Enter opens the chart</span>
   </div>
   <div id="freshness" class="freshness">Checking data…</div>
 </header>
-
-<nav class="nav" id="nav">
-  <button data-view="overview" class="active">Overview</button>
-  <button data-view="charts">Charts</button>
-  <button data-view="screener">Screener</button>
-  <button data-view="backtest">Backtest</button>
-  <button data-view="data">Data &amp; Quality</button>
-  <button data-view="floorsheet">Floor Sheet</button>
-  <button data-view="research">Research</button>
-  <button data-view="portfolio">Portfolio</button>
-  <button data-view="journal">Journal</button>
-  <button data-view="pdf">PDF Journal</button>
-  <button data-view="fundamentals">Fundamentals</button>
-  <span class="nav-spacer"></span>
-  <span class="nav-note">Not financial advice · historical data only</span>
-</nav>
+  <div class="ticker" id="ticker" aria-label="NEPSE market ribbon">
+    <span class="tick-badge" id="tick-badge">NEPSE</span>
+    <div class="tick-view">
+      <div class="tick-track" id="tick-track">
+        <span class="hint" style="padding-left:14px">Checking market data…</span>
+      </div>
+    </div>
+    <button class="ctb-btn ghost tick-pause" id="tick-pause" title="Pause the scrolling ribbon" aria-pressed="false">&#10074;&#10074;</button>
+  </div>
+  <main id="views">
 
 <main>
   <!-- ------------------------------------------------------------ OVERVIEW -->
   <section id="view-overview" class="view active">
-    <div class="banner" id="overview-banner">
+    <div class="banner ov-banner" id="overview-banner">
       Loading market snapshot…
     </div>
-    <div class="grid">
-      <div class="card">
+
+    <!-- Market barometer + sector visuals (computed from the same stored data the cards below use) -->
+    <div class="grid" style="margin-bottom:14px">
+      <div class="viz-chart-card reveal">
+        <div class="viz-chart-head">
+          <h2>Market barometer</h2>
+          <span class="pill" id="ov-gauge-sub">—</span>
+        </div>
+        <div id="ov-gauge" class="viz-host"></div>
+        <p class="viz-metric-note" id="ov-gauge-note">
+          A deterministic 0–100 index combining the advance/decline ratio and the share of
+          symbols above their 50-day moving average, both computed from the latest stored
+          session. It is a transparent transform of those two inputs — <b>not</b> an external
+          sentiment feed, and not a prediction.
+        </p>
+        <div id="ov-battery-breakdown" style="margin-top:10px"></div>
+      </div>
+      <div class="viz-chart-card">
+        <div class="viz-chart-head">
+          <h2>Sector performance</h2>
+          <span class="hint" id="ov-sector-chart-meta"></span>
+        </div>
+        <div id="ov-sector-chart" class="viz-host"></div>
+        <div class="viz-chart-head" style="margin-top:12px">
+          <h2>Turnover share</h2>
+          <span class="hint" id="ov-donut-meta"></span>
+        </div>
+        <div id="ov-sector-donut" class="viz-host"></div>
+        <p class="viz-metric-note">
+          Average percent change and turnover-share by sector, both from the same stored
+          session as the sector table below. Sectors with no turnover are omitted from the
+          donut rather than shown as empty slices.
+        </p>
+      </div>
+    </div>
+
+    <!-- Top market strip (live) -->
+    <div class="card wide live-strip" id="live-strip">
+      <div class="live-head">
+        <span class="live-dot" id="live-dot" aria-hidden="true"></span>
+        <b>Live market</b>
+        <span class="pill pill-info" id="live-badge">checking…</span>
+        <span class="hint live-src" id="live-source"></span>
+        <button id="live-refresh" class="ghost live-refresh">Refresh now</button>
+      </div>
+      <div id="live-stats" class="stat-row"></div>
+      <p class="hint" id="live-hint">Checking for a live provider…</p>
+    </div>
+
+    <!-- Hero: KPI strip + big NEPSE index chart -->
+    <div class="ov-hero" id="ov-hero">
+      <div id="ovkpis" class="kpis"></div>
+      <div class="ov-chart-card">
+        <div class="ov-chart-head">
+          <b>NEPSE index — stored official history</b>
+          <div class="ov-range">
+            <select id="ov-range" aria-label="Index range">
+              <option value="60">3 months</option>
+              <option value="120" selected>6 months</option>
+              <option value="250">1 year</option>
+              <option value="750">3 years</option>
+              <option value="0">All (1997→)</option>
+            </select>
+            <span id="ov-index-meta" class="hint">Loading…</span>
+          </div>
+        </div>
+        <div id="ov-chart" class="chartbox xbig"></div>
+        <div id="ov-chart-note" class="chart-meta"></div>
+      </div>
+    </div>
+
+    <!-- breadth + sector + movers -->
+    <div class="ov-grid">
+      <div class="card ov-panel">
         <h2>Market breadth</h2>
         <div id="breadth" class="stat-row"></div>
+        <div class="breadth-bar" id="breadth-bar"></div>
         <p class="hint" id="breadth-hint"></p>
+        <div id="totals" class="stat-row ov-totals"></div>
       </div>
-      <div class="card">
-        <h2>Totals (latest stored day)</h2>
-        <div id="totals" class="stat-row"></div>
+      <div class="card ov-panel">
+        <h2>Moving-average participation</h2>
+        <div id="ov-ma" class="stat-row"></div>
+        <p class="hint" id="ov-ma-hint"></p>
       </div>
-      <div class="card wide">
+      <div class="card ov-panel ov-wide">
+        <h2>Valuation — P/E distribution (stored fundamentals)</h2>
+        <div id="ov-val" class="stat-row"></div>
+        <p class="hint" id="ov-val-hint"></p>
+      </div>
+      <div class="viz-chart-card ov-panel ov-wide" style="margin-bottom:14px">
+        <div class="viz-chart-head">
+          <h2>Fundamental map — P/E vs P/B</h2>
+          <label class="hint" style="display:flex;align-items:center;gap:6px;margin-left:auto">
+            <input type="checkbox" id="ov-fundmap-size" /> Size dots by market cap
+          </label>
+          <span class="hint" id="ov-fundmap-meta"></span>
+        </div>
+        <div id="ov-fundmap" class="viz-host" style="height:340px"></div>
+        <p class="viz-metric-note" id="ov-fundmap-note">
+          Each dot is one symbol with a stored close and usable P/E and P/B (derived from the
+          latest stored fundamentals). Colour is the sector; click a dot to open its chart.
+          Non-positive ratios are excluded rather than plotted as negatives.
+        </p>
+      </div>
+      <div class="card ov-panel ov-wide">
+        <h2>Sector performance (live, today's session)</h2>
+        <div id="ov-sectors" class="tablewrap"><div class="empty">Loading sector data…</div></div>
+      </div>
+      <div class="card ov-panel ov-wide">
+        <div class="ov-chart-head">
+          <h2>Turnover heatmap — session</h2>
+          <span id="ov-heat-meta" class="hint"></span>
+        </div>
+        <div id="ov-heat" class="heat-grid" aria-label="Turnover-weighted market heatmap"></div>
+        <p class="hint" id="ov-heat-note"></p>
+      </div>
+      <div class="card ov-panel">
         <h2>Top gainers</h2>
         <div id="gainers" class="tablewrap"></div>
       </div>
-      <div class="card wide">
+      <div class="card ov-panel">
         <h2>Top losers</h2>
         <div id="losers" class="tablewrap"></div>
       </div>
-      <div class="card wide">
+      <div class="card ov-panel">
         <h2>Most active by turnover</h2>
         <div id="active" class="tablewrap"></div>
       </div>
+      <div class="card ov-wide ov-muted">
+        <h2>Data quality &amp; regime</h2>
+        <p class="hint">
+          Historical index = official NEPSE (binayabaral/NEPSE_INDEX.csv). Live =
+          delayed public mirror (see <b>Data &amp; Quality</b>). No index value
+          is fabricated: the hero chart is the official stored series only.
+        </p>
+        <div id="regime" class="stat-row"></div>
+        <p class="hint" id="regime-hint"></p>
+        <div id="dash-index" class="stat-row"></div>
+      </div>
+    </div>
+
+    <div class="controls" style="margin-top:14px">
+      <details>
+        <summary>Customise dashboard panels (show / hide / reorder)</summary>
+        <div id="dash-picker" class="rb-tree"></div>
+      </details>
+      <button id="dash-reset" class="ghost">Reset layout</button>
+    </div>
+    <div class="card wide" data-panel="alerts">
+      <h2>Alerts</h2>
+      <p class="hint">
+        Evaluate alert conditions against stored bars. A condition is
+        <code>{key, symbol, params}</code>; keys: price_above, price_below,
+        volume_spike, momentum_above, momentum_below, new_high, new_low,
+        regime_change. Alerts describe stored signals — never a live quote and
+        never a prediction.
+      </p>
+      <textarea id="al-conditions" rows="4" spellcheck="false">[
+  {"key": "price_above", "symbol": "NABIL", "params": {"threshold": 600}, "severity": "info"},
+  {"key": "regime_change", "severity": "critical", "cooldown_minutes": 1440}
+]</textarea>
+      <div class="controls">
+        <button id="al-run">Evaluate</button>
+        <button id="al-clear" class="ghost">Clear history (re-arm)</button>
+      </div>
+      <div id="al-result" class="hint"></div>
+      <div id="al-history" class="tablewrap"><div class="empty">No alerts recorded yet.</div></div>
     </div>
   </section>
 
+
   <!-- --------------------------------------------------------------- CHARTS -->
   <section id="view-charts" class="view">
-    <div class="controls">
-      <label>Symbol
-        <input id="symbol-input" list="symbol-list" placeholder="NABIL" />
+    <!-- ================= chart toolbar: compact, grouped, labelled ============= -->
+    <div class="ctb" id="chart-toolbar">
+      <div class="ctb-group">
+        <span class="ctb-label">Symbol</span>
+        <input id="symbol-input" list="symbol-list" placeholder="NABIL" autocomplete="off" spellcheck="false" />
         <datalist id="symbol-list"></datalist>
-      </label>
-      <label>Range
+        <button id="load-chart" class="ctb-btn primary">Load</button>
+      </div>
+      <div class="ctb-group">
+        <span class="ctb-label">Timeframe</span>
+        <select id="tf-select">
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+        </select>
         <select id="range">
           <option value="60">3 months</option>
           <option value="120" selected>6 months</option>
@@ -83,23 +333,778 @@
           <option value="750">3 years</option>
           <option value="0">All</option>
         </select>
-      </label>
-      <label class="chk"><input type="checkbox" id="ind-sma" checked /> SMA 20/50</label>
-      <label class="chk"><input type="checkbox" id="ind-ema" /> EMA 20</label>
-      <label class="chk"><input type="checkbox" id="ind-bb" /> Bollinger</label>
-      <label class="chk"><input type="checkbox" id="ind-vol" checked /> Volume</label>
-      <label class="chk"><input type="checkbox" id="ind-rsi" checked /> RSI pane</label>
-      <label class="chk"><input type="checkbox" id="ind-macd" /> MACD pane</label>
-      <label class="chk"><input type="checkbox" id="ind-swings" /> Swings</label>
-      <button id="load-chart">Load</button>
-      <button id="export-csv" class="ghost">Export CSV</button>
+      </div>
+      <div class="ctb-group">
+        <span class="ctb-label">Chart</span>
+        <select id="chart-type" title="Bar rendering style — the chart is rebuilt on change; indicators, comparison symbols and drawings re-apply">
+          <option value="candles">Candles</option>
+          <option value="hollow">Hollow candles</option>
+          <option value="heikin">Heikin Ashi (display transform)</option>
+          <option value="bars">Bars (OHLC)</option>
+          <option value="line">Line</option>
+          <option value="line_markers">Line with markers</option>
+          <option value="step">Step line</option>
+          <option value="area">Area</option>
+          <option value="baseline">Baseline</option>
+          <option value="column">Column (close)</option>
+        </select>
+      </div>
+      <div class="ctb-group">
+        <button class="ctb-btn" id="pop-indicators-btn" aria-haspopup="true">Indicators</button>
+        <button class="ctb-btn" id="pop-compare-btn" aria-haspopup="true">Compare</button>
+        <button class="ctb-btn" id="pop-draw-btn" aria-haspopup="true">Draw</button>
+        <button class="ctb-btn" id="chart-drawer-toggle" aria-pressed="false">Analysis</button>
+        <button class="ctb-btn" id="pop-objects-btn" title="Every object drawn on this chart — indicators, analysis layers and annotations — with its owner and a remove control">Objects</button>
+        <button class="ctb-btn" id="pop-kronos-btn" aria-haspopup="true">Kronos&nbsp;AI</button>
+        <button class="ctb-btn" id="pop-replay-btn" aria-haspopup="true">Replay</button>
+        <button class="ctb-btn" id="pop-chartset-btn" aria-haspopup="true" title="Chart settings">&#9881;</button>
+        <button class="ctb-btn" id="chart-search" title="Search symbols, indicators, drawing tools, views and actions (Cmd/Ctrl+K)">&#8981; Search</button>
+        <button class="ctb-btn ghost" id="chart-clear" title="Clear chart drawings, indicators or analysis layers — always asks first">Clear</button>
+      </div>
+      <div class="ctb-spacer"></div>
+      <div class="ctb-group">
+        <button class="ctb-btn" id="chart-fit" title="Fit all loaded data to the screen">Fit</button>
+        <button class="ctb-btn" id="chart-zoom-in" title="Zoom in">+</button>
+        <button class="ctb-btn" id="chart-zoom-out" title="Zoom out">&#8722;</button>
+        <button class="ctb-btn" id="chart-fullscreen" title="Expanded chart (Esc exits)">&#x2922;</button>
+        <button class="ctb-btn ghost" id="export-csv" title="Download the loaded bars as CSV">CSV</button>
+      </div>
+        
+    
+
+
+<div class="ctb-pop" id="pop-draw" hidden>
+      <div class="ctb-cells" id="draw-cells"></div>
+      <div class="ctb-cells" id="draw-modes" style="border-top:1px solid var(--line); margin-top:6px; padding-top:6px;">
+        <label>Magnet
+          <select id="dr-magnet" style="width:auto">
+            <option value="off">Off (free placement)</option>
+            <option value="weak">Weak (snap if near OHLC)</option>
+            <option value="strong">Strong (snap to OHLC)</option>
+          </select>
+        </label>
+        <label class="chk"><input type="checkbox" id="dr-stay" checked /> Stay in tool</label>
+        <button class="ctb-btn ghost" id="draw-toggle" title="Hide every drawing overlay at once — nothing is deleted, click again to restore">Hide drawings</button>
+        <button class="ctb-btn ghost" id="draw-lockall" title="Lock every drawing: nothing can be dragged or erased">Lock all</button>
+        <button class="ctb-btn ghost" id="draw-unlockall" title="Unlock every drawing">Unlock all</button>
+        <span class="hint">Esc cancels the pending anchor / tool.</span>
+      </div>
     </div>
+<div class="ctb-pop" id="pop-replay" hidden>
+      <div class="ctb-pop-head">
+        <b>Replay</b>
+        <span class="hint">Moves through stored bars in order; the replay chart
+          shows only bars up to the cursor, so future data cannot leak. Analysis
+          layers, pattern overlays, forecasts and manual drawings are hidden
+          during replay and return when you stop.</span>
+      </div>
+      <div class="ctb-cells">
+        <button class="ctb-btn" id="rp-start" title="Start replay from the middle of the loaded window">Start</button>
+        <button class="ctb-btn ghost" id="rp-play" title="Autoplay forward (interval by speed)">Play</button>
+        <button class="ctb-btn ghost" id="rp-pause" hidden title="Pause autoplay">Pause</button>
+        <button class="ctb-btn ghost" id="rp-step" title="Advance one bar">Step +1</button>
+        <button class="ctb-btn ghost" id="rp-back" title="Step back one bar">Back −1</button>
+        <label>Speed
+          <select id="rp-speed" style="width:auto">
+            <option value="900">1×</option>
+            <option value="450">2×</option>
+            <option value="220">4×</option>
+          </select>
+        </label>
+        <button class="ctb-btn ghost" id="rp-stop" hidden title="End replay and restore the full chart">Stop</button>
+      </div>
+      <div class="hint" id="rp-status">Replay is off.</div>
+    </div>
+<div class="ctb-pop" id="pop-chartset" hidden>
+      <div class="ctb-pop-head">
+        <b>Chart settings</b>
+        <span class="hint">Persistence lives in this browser only — never on a server.</span>
+      </div>
+      <div class="ctb-cells">
+        <label class="chk"><input type="checkbox" id="autosave-chk" /> Autosave chart context</label>
+        <span class="hint" id="autosave-note">Off — the app will not restore a symbol/timeframe after a reload.</span>
+      </div>
+    </div>
+<div class="ctb-pop" id="pop-kronos" hidden>
+      <div class="ctb-pop-head">
+        <b>Kronos forecast</b>
+        <span class="hint">Official weights on stored daily bars. A forecast is a
+          model output — it is never observed price and never a live feed.</span>
+      </div>
+      <div class="ctb-cells">
+        <label>Model
+          <select id="kf-variant">
+            <option value="base">Base</option>
+            <option value="small">Small</option>
+            <option value="mini">Mini</option>
+          </select>
+        </label>
+        <label>Context
+          <input id="kf-context" type="number" min="12" max="2048" value="256" step="12" />
+          <span class="hint" id="kf-cx-hint">≤ 512 bars (≤ 2048 for Mini)</span>
+        </label>
+        <label>Horizon
+          <input id="kf-pred" type="number" min="1" max="64" value="10" step="1" />
+        </label>
+        <button class="ctb-btn" id="kf-run">Run</button>
+        <button class="ctb-btn ghost" id="kf-hide" hidden>Hide</button>
+        <button class="ctb-btn ghost" id="kf-remove" hidden>Remove</button>
+      </div>
+      <div id="kf-status" class="hint"></div>
+    </div>
+</div>
+
+    <!-- Chart meta line: symbol · timeframe · window · source. Written by
+         loadChart() with the fetched data only. -->
     <div id="chart-meta" class="chart-meta"></div>
+
+    <!-- Chart settings: explicit autosave control (§8K). State persists only
+         in this browser's own storage; off means the app stops restoring. -->
+    
+
+    <!-- Kronos forecast popover: real /api/kronos/forecast runs, never
+         illustrative curves. Availability text comes from the model registry. -->
+    
+    <!-- Custom indicator formula editor (sandboxed DSL — no arbitrary code). -->
+    <div class="modal-overlay" id="ind-custom" hidden>
+      <div class="modal" role="dialog" aria-label="Custom indicator formula">
+        <div class="modal-head">
+          <b>Custom indicator formula <span class="hint" id="ind-custom-status"></span></b>
+          <button class="ctb-btn ghost" id="ind-custom-close">&#10005;</button>
+        </div>
+        <div class="modal-controls">
+          <input id="ind-custom-name" placeholder="Name (e.g. MyMomentum)" spellcheck="false" />
+          <select id="ind-custom-color" aria-label="Color">
+            <option value="#f0b90b">Amber</option>
+            <option value="#4c8dff">Blue</option>
+            <option value="#e040fb">Purple</option>
+            <option value="#26a69a">Green</option>
+          </select>
+        </div>
+        <textarea id="ind-custom-formula" rows="3" spellcheck="false"
+          placeholder="e.g. (close - sma(20)) / atr(14)"></textarea>
+        <p class="hint">
+          Sandboxed DSL: only whitelisted functions (sma, ema, rsi, atr, bb_upper,
+          bb_lower, abs, min, max) and the series (close, open, high, low, volume)
+          with + − * / and parentheses. No arbitrary code is executed. Warm-up
+          bars render as gaps.
+        </p>
+        <div class="controls">
+          <button class="ctb-btn" id="ind-custom-test">Test / plot</button>
+          <button class="ctb-btn ghost" id="ind-custom-save">Save for symbol</button>
+          <button class="ctb-btn ghost" id="ind-custom-remove">Remove selected</button>
+        </div>
+        <div id="ind-custom-list" class="tablewrap"></div>
+        <div id="ind-custom-error" class="hint"></div>
+      </div>
+    </div>
+    <div class="modal-overlay" id="ind-catalog" hidden>
+      <div class="modal" role="dialog" aria-label="Indicator catalog">
+        <div class="modal-head">
+          <b>Indicator catalog <span class="hint" id="ind-catalog-count"></span></b>
+          <button class="ctb-btn ghost" id="ind-catalog-close">&#10005;</button>
+        </div>
+        <div class="modal-controls">
+          <input id="ind-catalog-search" placeholder="Search name, formula, reference…" spellcheck="false" />
+          <select id="ind-catalog-cat" aria-label="Category">
+            <option value="all">All categories</option>
+            <option value="favs">★ Favourites</option>
+            <option value="trend">Trend</option>
+            <option value="momentum">Momentum</option>
+            <option value="volatility">Volatility</option>
+            <option value="volume">Volume / flow</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <p class="hint">Overlays draw on price; momentum/volume indicators open a synced pane below. All values are computed from <b>stored daily bars</b> for the currently loaded symbol; warm-up rows are honest gaps, never zeros.</p>
+        <div id="ind-catalog-list" class="tablewrap catalog-list"></div>
+      </div>
+    </div>
+
+    <!-- Indicator documentation panel. A floating, draggable, resizable
+         window (not a modal): it opens from the ⓘ button beside any indicator
+         and never blocks the chart or resets the viewport. Its formula section
+         is rendered from the live registry, so it always matches the code. -->
+    <aside class="fp-pane" id="ind-info" hidden aria-label="Indicator documentation">
+      <div class="fp-head">
+        <span class="fp-title" id="ind-info-title">Indicator</span>
+        <span class="fp-head-actions">
+          <button class="ctb-btn" id="ind-info-add" title="Add this indicator to the chart with its default settings">Add to chart</button>
+          <button class="ctb-btn ghost" id="ind-info-close" aria-label="Close">&#10005;</button>
+        </span>
+      </div>
+      <div class="fp-body" id="ind-info-body"></div>
+      <span class="fp-grip" title="Drag to resize"></span>
+    </aside>
+
+    <!-- Chart objects manager. A floating, draggable, resizable window that
+         lists every object drawn on the price chart with its owner, so a label
+         like "BO" can be identified and removed instead of being cryptic. -->
+    <aside class="fp-pane fp-wide" id="obj-pane" hidden aria-label="Chart objects">
+      <div class="fp-head">
+        <span class="fp-title">Chart objects</span>
+        <span class="fp-head-actions">
+          <button class="ctb-btn ghost" id="obj-refresh" title="Re-read the chart's objects">Refresh</button>
+          <button class="ctb-btn ghost" id="obj-close" aria-label="Close">&#10005;</button>
+        </span>
+      </div>
+      <div class="fp-body" id="obj-body"></div>
+      <span class="fp-grip" title="Drag to resize"></span>
+    </aside>
+
+    <!-- Chart Clear: explicit, scoped, undoable. It never touches saved
+         layouts, templates, watchlists, portfolios or journals. -->
+    <div class="modal-overlay" id="clear-modal" hidden>
+      <div class="modal" role="dialog" aria-label="Clear chart">
+        <div class="modal-head">
+          <b>Clear chart <span class="hint" id="clear-symbol"></span></b>
+          <button class="ctb-btn ghost" id="clear-close" aria-label="Close">&#10005;</button>
+        </div>
+        <p class="hint">Nothing is cleared until you press <b>Clear selected</b>. Saved layouts,
+          templates, watchlists, portfolios and journals are never touched. Drawing edits are
+          undoable with Cmd/Ctrl+Z.</p>
+        <div id="clear-options" class="clear-options"></div>
+        <div class="controls">
+          <button class="ctb-btn" id="clear-confirm">Clear selected</button>
+          <button class="ctb-btn ghost" id="clear-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Command palette (Cmd/Ctrl+K): one search box for symbols, indicators,
+         drawing tools, chart types, views, analysis layers and actions. -->
+    <div class="modal-overlay" id="cmdk" hidden>
+      <div class="modal cmdk-modal" role="dialog" aria-label="Search the chart workspace">
+        <div class="modal-controls">
+          <input id="cmdk-input" placeholder="Search symbols, indicators, drawing tools, views and actions…"
+                 spellcheck="false" autocomplete="off" aria-label="Search" />
+          <button class="ctb-btn ghost" id="cmdk-close" aria-label="Close">&#10005;</button>
+        </div>
+        <div id="cmdk-list" class="cmdk-list" role="listbox" aria-label="Results"></div>
+        <div class="cmdk-foot">
+          <span><kbd>&#8593;</kbd><kbd>&#8595;</kbd> navigate</span>
+          <span><kbd>&#8629;</kbd> run</span>
+          <span><kbd>esc</kbd> close</span>
+          <span id="cmdk-count" class="hint"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-stage" id="chart-stage">
+      <div id="chart" class="chartbox big"></div>
+      <!-- Floating overlays live INSIDE the stage so they anchor to the chart
+           area (position: relative), not to the page body. Previously they were
+           siblings of the stage and rendered at top:6px of the whole page,
+           overlapping the toolbar. -->
+      <div id="ohlcv-legend" class="ohlcv-legend" hidden></div>
+      <div class="tool-banner" id="tool-banner" hidden role="status" aria-live="polite">
+        <span class="tb-name" id="tool-banner-name"></span>
+        <span class="tb-text" id="tool-banner-text"></span>
+        <span class="tb-progress" id="tool-banner-progress"></span>
+      </div>
+      <div class="kf-chip" id="kf-chip" hidden><span class="kf-dot"></span><span id="kf-chip-text">PREDICTED</span></div>
+      <div class="cmp-legend" id="cmp-legend" hidden></div>
+      <aside class="chart-drawer" id="chart-drawer" hidden aria-label="Analysis overlays">
+        <div class="cd-head">
+          <b>Analysis layers</b>
+          <button class="ctb-btn ghost" id="chart-drawer-close" title="Close the panel">&#10005;</button>
+        </div>
+        <p class="hint">
+          Every layer starts <b>off</b> so the chart stays clean. Switch one on to
+          fetch it; the count shows how much it found.
+        </p>
+        <div class="cd-layers" id="cd-layers"></div>
+        <div class="cd-actions">
+          <button class="ctb-btn ghost" id="cd-hide-all">Hide all</button>
+        </div>
+        <!-- Render controls: how detector output is drawn, so detections stay
+             available without the chart turning into a label wall (§5.9).
+             Caps are enforced at flush/render time; unhiding is lossless. -->
+        <div class="cd-render" id="cd-render">
+          <h3 class="cd-sub">Render controls</h3>
+          <label class="chk"><input type="checkbox" id="ov-level-lines" checked /> Pattern level lines</label>
+          <label class="chk"><input type="checkbox" id="ov-shape-lines" checked /> Pattern pivot lines</label>
+          <label class="chk"><input type="checkbox" id="ov-pat-markers" checked /> Pattern markers</label>
+          <label class="cd-field">Display mode
+            <select id="ov-display-mode" title="Preset: how much analytical ink the chart shows">
+              <option value="minimal">Minimal — candles + volume only</option>
+              <option value="standard" selected>Standard — top patterns, capped letters</option>
+              <option value="detailed">Detailed — more patterns, more letters</option>
+              <option value="research">Research — everything the detectors found</option>
+            </select>
+          </label>
+          <label class="cd-field">Patterns on chart
+            <select id="ov-max-patterns">
+              <option value="1">1</option>
+              <option value="3" selected>3 (highest quality)</option>
+              <option value="5">5</option>
+              <option value="8">8</option>
+              <option value="12">12 (all)</option>
+            </select>
+          </label>
+          <label class="cd-field">Candle letters
+            <select id="ov-candle-cap">
+              <option value="0">none (minimal)</option>
+              <option value="8">last 8</option>
+              <option value="15" selected>last 15</option>
+              <option value="40">last 40</option>
+              <option value="100000">all</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint">
+          Marker legend: <b>BO</b> = breakout / trigger level from the chart-pattern
+          detector · <b>INV</b> = invalidation level for the same pattern ·
+          <b>SH</b>/<b>SL</b> = confirmed OHLC swing high/low ·
+          <b>CH</b>/<b>CL</b> = close-based pivot (index — no OHLC) ·
+          short letter codes = detected chart-pattern abbreviations.
+          The <b>Objects</b> button on the toolbar lists every one of these with
+          its owner and a remove control.
+        </p>
+        <h3 class="cd-sub">Detected items</h3>
+        <div id="cd-results" class="tablewrap">
+          <div class="empty">Nothing detected yet — enable a layer above.</div>
+        </div>
+      </aside>
+
+      <!-- Indicator manager drawer. Lives inside the chart stage so it anchors
+           to the chart, not the page. It is the one place indicators are added,
+           configured, hidden, reordered, duplicated and removed. -->
+      <aside class="chart-drawer" id="ind-drawer" hidden aria-label="Indicator manager">
+        <div class="cd-head">
+          <b>Indicators</b>
+          <span class="cd-head-actions">
+            <button class="ctb-btn ghost" id="ind-undo" title="Undo the last indicator change (this symbol)">&#8630;</button>
+            <button class="ctb-btn ghost" id="ind-redo" title="Redo the last indicator change">&#8631;</button>
+            <button class="ctb-btn ghost" id="ind-export" title="Download this indicator layout as JSON">Export</button>
+            <button class="ctb-btn ghost" id="ind-import" title="Load an indicator layout JSON">Import</button>
+            <input type="file" id="ind-import-file" accept=".json,application/json" hidden />
+            <button class="ctb-btn ghost" id="ind-drawer-close" title="Close the panel">&#10005;</button>
+          </span>
+        </div>
+        <p class="hint">
+          Overlays draw on price; pane indicators (oscillators, flow) open a synced
+          pane below the chart. Every value is computed from <b>stored daily bars</b>
+          for the loaded symbol — warm-up rows are honest gaps.
+        </p>
+        <div class="ind-search-row">
+          <input id="ind-search" placeholder="Search name, formula, reference…" spellcheck="false" />
+          <select id="ind-cat" aria-label="Category filter">
+            <option value="all">All</option>
+            <option value="favs">&#9733; Favourites</option>
+            <option value="recent">Recent</option>
+            <option value="trend">Trend</option>
+            <option value="momentum">Momentum</option>
+            <option value="volatility">Volatility</option>
+            <option value="volume">Volume / flow</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div id="ind-search-results" class="ind-results"></div>
+        <h3 class="cd-sub">On this chart <span class="hint" id="ind-count"></span></h3>
+        <div id="ind-instances" class="ind-instances"></div>
+        <h3 class="cd-sub">Quick layers</h3>
+        <div class="ctb-cells" id="ind-cells">
+          <label class="chk"><input type="checkbox" id="ind-sma" /> SMA 20/50</label>
+          <label class="chk"><input type="checkbox" id="ind-ema" /> EMA 20</label>
+          <label class="chk"><input type="checkbox" id="ind-bb" /> Bollinger</label>
+          <label class="chk"><input type="checkbox" id="ind-vol" checked /> Volume</label>
+          <label class="chk"><input type="checkbox" id="ind-rsi" /> RSI pane</label>
+          <label class="chk"><input type="checkbox" id="ind-macd" /> MACD pane</label>
+          <label class="chk"><input type="checkbox" id="ind-swings" /> Swings (OHLC)</label>
+          <label class="chk"><input type="checkbox" id="ind-close-swings" disabled /> Close-based pivots (index only)</label>
+        </div>
+        <div class="ctb-cells" id="ind-templates">
+          <span class="hint">Templates:</span>
+          <button class="ctb-btn ghost" id="ind-tpl-save" title="Save the current quick layers + indicator instances under a name (stored in this browser)">Save…</button>
+          <select id="ind-tpl-list" style="width:auto" title="Saved indicator templates"><option value="">— none saved —</option></select>
+          <button class="ctb-btn ghost" id="ind-tpl-apply" title="Apply the selected template and reload the chart">Apply</button>
+          <button class="ctb-btn ghost" id="ind-tpl-del" title="Delete the selected template">&#10005;</button>
+        </div>
+        <div class="cd-actions">
+          <button class="ctb-btn ghost" id="ind-catalog-btn" title="Searchable catalog of every registered, formula-documented indicator">Catalog…</button>
+          <button class="ctb-btn ghost" id="ind-custom-btn" title="Sandboxed formula editor — no arbitrary code execution; only whitelisted indicator functions">Custom formula…</button>
+          <button class="ctb-btn ghost" id="ind-hide-all" title="Hide every pane indicator without deleting anything">Hide panes</button>
+        </div>
+      </aside>
+
+      <!-- Compare drawer: overlay up to three comparison symbols next to the
+           primary. Series are drawn on their own scale; candles keep the price
+           scale. Nothing is interpolated; missing dates are gaps. -->
+      <aside class="chart-drawer" id="cmp-drawer" hidden aria-label="Symbol comparison">
+        <div class="cd-head">
+          <b>Compare symbols</b>
+          <button class="ctb-btn ghost" id="cmp-drawer-close" title="Close the panel">&#10005;</button>
+        </div>
+        <p class="hint">
+          Up to <b>four symbols total</b> (primary + three). Comparison series use
+          their own scale so mixed price levels stay readable; the candles keep
+          the price scale. Missing dates are gaps — never interpolated.
+        </p>
+        <div class="ind-search-row">
+          <input id="cmp-add-symbol" list="symbol-list" placeholder="Add symbol" autocomplete="off" />
+          <button class="ctb-btn" id="cmp-add-btn">Add</button>
+        </div>
+        <label class="cd-field">Mode
+          <select id="cmp-mode">
+            <option value="percent">% change from window start</option>
+            <option value="indexed">Indexed to 100</option>
+            <option value="relative">Relative to NEPSE (ratio × 100)</option>
+            <option value="returns">Rolling return (%)</option>
+            <option value="raw">Raw price (shared left scale)</option>
+          </select>
+        </label>
+        <label class="cd-field">Rolling window (bars, for rolling-return mode)
+          <input id="cmp-return-n" type="number" value="20" min="1" max="500" />
+        </label>
+        <div id="cmp-list"></div>
+        <div class="cd-actions">
+          <button class="ctb-btn ghost" id="cmp-clear">Remove all</button>
+        </div>
+        <div id="cmp-status" class="hint"></div>
+      </aside>
+    </div>
+
     <div id="chart-note" class="chart-meta"></div>
-    <div id="chart" class="chartbox"></div>
-    <div id="rsi-pane" class="chartbox small"></div>
-    <div id="macd-pane" class="chartbox small"></div>
+    <div class="chart-sub">
+      <div id="rsi-pane" class="chartbox small"></div>
+      <div id="macd-pane" class="chartbox small"></div>
+    </div>
     <div id="chart-error" class="error"></div>
+
+    <details class="chart-analysis" id="chart-analysis-panel" open>
+      <summary>
+        <span class="ca-title">Advanced analysis</span>
+        <span class="hint">Candlestick detection, Elliott Wave, harmonic patterns,
+          statistics and correlation run on the chart's own window and appear here
+          or on the chart when a layer is enabled.</span>
+      </summary>
+      <div class="ca-body">
+
+    <div class="card wide" id="card-compare">
+      <h2>Symbol comparison (rebased to 100)</h2>
+      <p class="hint">Normalizes each symbol close to 100 at the first shared date. Uses stored daily bars only; missing observations reported, not interpolated.</p>
+      <div class="controls">
+        <label>Symbols (comma-separated) <input id="cmp-symbols" placeholder="NABIL, NIMB, SANIMA" style="width:22em" /></label>
+        <label>Timeframe <select id="cmp-tf"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label>
+        <label>Bars <input id="cmp-limit" type="number" value="250" min="30" max="750" step="10" style="width:6em" /></label>
+        <button id="cmp-run" class="ctb-btn">Compare</button>
+      </div>
+      <div id="cmp-error" class="hint"></div>
+      <div id="cmp-table" class="tablewrap"></div>
+    </div>
+
+    <div class="card wide" id="card-barspattern">
+      <h2>Bars-pattern feed (OHLCV-derived)</h2>
+      <p class="hint">Detects candlestick patterns on each bar chronologically, with confirmation state. No future data at detection timestamp. Source: stored daily bars.</p>
+      <div class="controls">
+        <label>Symbol <input id="bp-symbol" list="symbol-list" placeholder="NABIL" /></label>
+        <label>Bars <input id="bp-limit" type="number" value="120" min="30" max="750" step="10" style="width:6em" /></label>
+        <button id="bp-run" class="ctb-btn">Detect</button>
+        <button id="bp-export" class="ghost">Export CSV</button>
+      </div>
+      <div id="bp-error" class="hint"></div>
+      <div id="bp-table" class="tablewrap"></div>
+    </div>
+
+    <div class="card wide">
+      <h2>Chart drawings — Fibonacci &amp; levels (manual anchors)</h2>
+      <div class="controls">
+        <label>Drawing tool
+          <select id="draw-tool">
+            <option value="">— off —</option>
+            <option value="trendline">Trendline</option>
+            <option value="ray">Ray (extends right)</option>
+            <option value="extended">Extended line (both directions)</option>
+            <option value="hline">Horizontal line</option>
+            <option value="hray">Horizontal ray (extends right)</option>
+            <option value="vline">Vertical line</option>
+            <option value="crossline">Cross line</option>
+            <option value="channel">Parallel channel</option>
+            <option value="text">Text note</option>
+            <option value="measure">Measure (Δ price, Δ%, bars)</option>
+            <option value="fib_retracement">Fibonacci retracement</option>
+            <option value="fib_extension">Fibonacci extension</option>
+            <option value="rectangle">Rectangle</option>
+            <option value="arrow">Arrow</option>
+            <option value="long_pos">Long position</option>
+            <option value="short_pos">Short position</option>
+          </select>
+
+        </label>
+        <button id="draw-undo" class="ghost">Undo</button>
+        <button id="draw-redo" class="ghost">Redo</button>
+        <button id="draw-clear" class="ghost">Delete all</button>
+        <button id="draw-save" class="ghost">Save for symbol</button>
+        <button id="draw-export" class="ghost">Export JSON</button>
+        <label class="chk"><input type="checkbox" id="draw-visible" checked /> Show drawings</label>
+        <span class="hint" id="draw-status"></span>
+      </div>
+      <p class="hint">
+        Pick a tool, then <b>click twice on the chart</b> to place swing anchor&nbsp;1
+        and anchor&nbsp;2 (a horizontal line needs one click). Drag an anchor to move
+        it. Retracement levels are <code>p2 − ratio·(p2 − p1)</code> between the two
+        anchors; extension levels are <code>p2 + ratio·(p2 − p1)</code>. Drawings are
+        yours — they are <b>not</b> detector output and are never auto-generated.
+        They are stored in this browser per symbol and survive indicator changes.
+      </p>
+      <div id="draw-list" class="tablewrap"></div>
+    </div>
+
+    <div class="card wide">
+      <h2>Chart patterns (rule-based)</h2>
+      <div class="controls">
+        <label class="chk"><input type="checkbox" id="pattern-overlay" checked /> Overlay on chart</label>
+        <button id="pattern-all" class="ghost">All</button>
+        <button id="pattern-none" class="ghost">None</button>
+        <span class="hint" id="pattern-sel-hint"></span>
+      </div>
+      <div id="pattern-picker" class="rb-tree"></div>
+      <p class="hint" id="patterns-hint">Load a chart to detect geometric patterns.</p>
+      <div id="patterns" class="tablewrap"><div class="empty">No chart loaded yet.</div></div>
+    </div>
+
+    <div class="card wide">
+      <h2>Candlestick patterns</h2>
+      <div class="controls">
+        <label>Trend context
+          <input id="candle-trend" type="number" min="1" max="50" value="3" style="width:4em" />
+        </label>
+        <label class="chk"><input type="checkbox" id="candle-require-trend" checked /> Require prior trend</label>
+        <label class="chk"><input type="checkbox" id="candle-markers" checked /> Mark on chart</label>
+        <button id="candle-run">Detect</button>
+        <button id="candle-all" class="ghost">All</button>
+        <button id="candle-none" class="ghost">None</button>
+      </div>
+      <details>
+        <summary>Pattern selection (choose which shapes to look for)</summary>
+        <div id="candle-picker" class="controls" style="gap:6px 14px"></div>
+      </details>
+      <p class="hint" id="candle-hint">
+        Detected shapes are descriptive geometry — a match is <b>not</b> a
+        confirmed reversal and <b>not</b> a forecast. Markers show where the
+        shape completed.
+      </p>
+      <div id="candles" class="tablewrap"><div class="empty">Load a chart, then Detect.</div></div>
+    </div>
+
+    <div class="card wide">
+      <h2>Elliott Wave — candidate counts</h2>
+      <div class="controls">
+        <button id="elliott-run">Analyze</button>
+        <button id="elliott-run-draw" title="Run the analysis and draw the best candidate's pivots and wave labels on the price chart. If the drawn pivots fall outside the current view the chart is scrolled just enough to reveal them; the loaded bar range is never changed.">Analyze &amp; draw on chart</button>
+        <button id="elliott-erase" class="ghost" title="Remove every Elliott annotation from the price chart (manual labels are kept)">Remove chart drawing</button>
+        <button id="elliott-clear" class="ghost">Clear labels</button>
+        <span class="hint" id="elliott-status" role="status"></span>
+        <label>Analysis period
+          <select id="elliott-period">
+            <option value="chart" selected>Same as chart range</option>
+            <option value="0">All stored history</option>
+            <option value="250">Last 250 bars</option>
+            <option value="120">Last 120 bars</option>
+            <option value="60">Last 60 bars</option>
+            <option value="30">Last 30 bars</option>
+          </select>
+        </label>
+        <label>From <input id="elliott-start" type="date" /></label>
+        <label>To <input id="elliott-end" type="date" /></label>
+      </div>
+      <p class="hint" id="elliott-hint">
+        Heuristic candidate counts derived from <b>confirmed</b> swings only.
+        This is an interpretation with alternatives, never a guaranteed forecast.
+        “Confirmed swings considered” is how many pivots the engine examined —
+        it is <b>not</b> the number of wave counts found. The number of counts is
+        the number of rows that follow. The period is applied <b>before</b> swings
+        are found, so you can ask what a count looked like up to a chosen date;
+        <b>Same as chart range</b> keeps the analysis on exactly the bars the chart
+        shows, so a drawn candidate is always on-screen. Pick a candidate and press
+        <b>Draw</b> to plot its pivots and wave labels on the chart.
+      </p>
+      <div id="elliott" class="tablewrap"><div class="empty">Not analyzed yet.</div></div>
+    </div>
+
+    <div class="card wide">
+      <h2>Harmonic patterns — XABCD candidates</h2>
+      <div class="controls">
+        <button id="harmonic-run">Detect</button>
+        <button id="harmonic-clear" class="ghost">Clear</button>
+        <label>Patterns
+          <select id="harmonic-patterns">
+            <option value="">All (Gartley/Bat/Butterfly/Crab/Cypher)</option>
+            <option value="gartley">Gartley only</option>
+            <option value="bat">Bat only</option>
+            <option value="butterfly">Butterfly only</option>
+            <option value="crab">Crab only</option>
+            <option value="cypher">Cypher only</option>
+            <option value="gartley,bat">Gartley + Bat</option>
+          </select>
+        </label>
+        <label>Tolerance ±<input id="harmonic-slack" type="number" step="0.005" min="0" max="0.5" value="0" style="width:5.5em" /></label>
+        <span class="hint" id="harmonic-status" role="status"></span>
+      </div>
+      <p class="hint" id="harmonic-hint">
+        Published ratio bands (Gartley/Bat/Butterfly/Crab/Cypher) measured over
+        confirmed swings. A band match is a <b>candidate</b>, not a confirmed
+        pattern; the actual ratios used to accept it are shown. Tolerance 0 means
+        the published ratios only; a positive value widens every band
+        symmetrically and marks matches as approximate.
+      </p>
+      <div id="harmonic" class="tablewrap"><div class="empty">Not analyzed yet.</div></div>
+    </div>
+
+    <div class="card wide">
+      <h2>Index &amp; relative strength</h2>
+      <div class="controls">
+        <label>Benchmark index
+          <select id="rs-benchmark"><option value="NEPSE">NEPSE</option></select>
+        </label>
+        <label>Window (bars)
+          <input id="rs-window" type="number" value="60" min="2" max="2000" step="5" style="width:5.5em" />
+        </label>
+        <label>Lookback set
+          <input id="rs-lookbacks" type="text" value="20, 60, 120, 250" style="width:9.5em"
+                 placeholder="20, 60, 120, 250" />
+        </label>
+        <button id="run-rs">Compute</button>
+        <label class="chk"><input type="checkbox" id="rs-overlay" /> Overlay ratio line on chart</label>
+        <span class="hint" id="rs-source"></span>
+      </div>
+      <p class="hint">
+        Stock-versus-index relative strength from <b>stored historical</b> series.
+        The ratio is <code>stock_close / index_close</code> rebased to 100 at the
+        first date present in <b>both</b> series (an inner join — missing dates are
+        counted, never forward-filled); the excess return is the stock's
+        window return minus the index's over the same aligned window. Indices come
+        from the supplied published files — this is not a live feed. A security
+        without enough aligned history is reported unavailable with the exact
+        reason, never compared against a substitute index.
+      </p>
+      <div id="rs-out" class="tablewrap"><div class="empty">Load a chart, then press Compute.</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Return statistics</h2>
+      <div id="stats" class="stat-row"></div>
+      <p class="hint" id="stats-hint"></p>
+    </div>
+
+    <div class="card">
+      <h2>Trailing stop (open long)</h2>
+      <div class="controls">
+        <label>Method
+          <select id="ts-method">
+            <option value="chandelier">Chandelier: HH(N) − k·ATR(N)</option>
+            <option value="swing">Swing low of last M bars</option>
+            <option value="pct">Peak close − pct%</option>
+          </select>
+        </label>
+        <label>ATR N <input id="ts-atr-period" type="number" value="22" min="1" max="500" style="width:4.5em" /></label>
+        <label>k <input id="ts-atr-mult" type="number" value="3" min="0.1" max="20" step="0.5" style="width:4.5em" /></label>
+        <label>Swing M <input id="ts-swing" type="number" value="10" min="2" max="500" style="width:4.5em" /></label>
+        <label>Pct <input id="ts-pct" type="number" value="8" min="0.1" max="90" step="0.5" style="width:4.5em" /></label>
+        <button id="run-ts">Compute</button>
+      </div>
+      <p class="hint">
+        A ratcheted stop for one open long: it reads only bars up to each close,
+        can move <b>up</b> never down, and an exit needs a <b>later</b> bar's low
+        at the stop. A research overlay — not a forecast and not a trade.
+      </p>
+      <div id="ts-out" class="tablewrap"><div class="empty">Load a chart, then press Compute.</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Correlation</h2>
+      <div class="controls">
+        <label>Symbols <input id="corr-symbols" placeholder="NABIL, NICA, SCB" /></label>
+        <label>Method
+          <select id="corr-method">
+            <option value="pearson">Pearson</option>
+            <option value="spearman">Spearman</option>
+          </select>
+        </label>
+        <button id="run-corr">Compute</button>
+      </div>
+      <p class="hint" id="corr-hint">Pairwise correlation of stored closes. A
+        descriptive statistic between two price paths — not causation, not a signal.</p>
+      <div id="corr-out" class="tablewrap"></div>
+    </div>
+        </div>
+    </details>
+  </section>
+
+  <!-- ------------------------------------------------------------- TEMPLATES -->
+  <section id="view-templates" class="view">
+    <div class="card wide">
+      <h2>Research templates</h2>
+      <p class="hint">
+        Reusable <b>workflows</b> built from endpoints the platform already
+        serves. A template configures an analysis — it adds no calculation of its
+        own, and it will report missing data rather than substitute for it.
+        Nothing runs until you press <b>Run workflow</b>, and nothing here can
+        place an order.
+      </p>
+      <div class="controls">
+        <label>Template
+          <select id="tpl-pick"><option value="">Loading…</option></select>
+        </label>
+        <label>Symbol <input id="tpl-symbol" list="symbol-list" placeholder="NABIL" /></label>
+        <label>Compare symbols <input id="tpl-symbols" placeholder="NABIL, NICA" /></label>
+        <button id="tpl-run" class="primary">Run workflow</button>
+        <button id="tpl-save" class="ghost">Save a customized copy</button>
+        <button id="tpl-goto" class="ghost">Open in workspace</button>
+      </div>
+      <div id="tpl-info" class="hint">Select a template to see its configured steps.</div>
+      <div id="tpl-error" class="error"></div>
+      <div id="tpl-results"></div>
+      <h3>Saved copies</h3>
+      <p class="hint">
+        A saved copy keeps this template with its symbol(s) in this browser, so
+        you can bring the same workflow back without retyping it. Reprinting a
+        run is deterministic: the same configuration over the same stored history
+        produces the same result.
+      </p>
+      <div id="tpl-copies" class="tablewrap"><div class="empty">No saved template copies yet.</div></div>
+    </div>
+  </section>
+
+  <!-- ----------------------------------------------------------- WATCHLISTS -->
+  <section id="view-watchlists" class="view">    <div class="card wide">
+      <h2>Watchlists</h2>
+      <p class="hint">
+        Named, ordered symbol lists you curate. Values come from the latest
+        <b>stored</b> bar, not a live feed; a symbol with no stored bar shows
+        <b>—</b> and a reason rather than a fabricated zero.
+      </p>
+      <div class="controls">
+        <label>Name
+          <input id="wl-name" placeholder="Core holdings" style="width:14em" />
+        </label>
+        <label class="wide">Symbols (comma-separated)
+          <input id="wl-symbols" placeholder="NABIL, SCB, NTC" style="width:20em" />
+        </label>
+        <button id="wl-create">Create</button>
+        <button id="wl-refresh" class="ghost">Refresh</button>
+      </div>
+      <div id="wl-error" class="error"></div>
+      <div id="wl-list" class="tablewrap"></div>
+    </div>
+
+    <div class="card wide" id="wl-detail-card" style="display:none">
+      <h2 id="wl-detail-title">Watchlist</h2>
+      <div class="controls">
+        <label class="wide">Add symbol
+          <input id="wl-add-symbol" placeholder="HIDCL" style="width:10em" />
+        </label>
+        <button id="wl-add-btn">Add</button>
+        <label>Rename
+          <input id="wl-rename" placeholder="new name" style="width:12em" />
+        </label>
+        <button id="wl-rename-btn" class="ghost">Rename</button>
+        <button id="wl-delete" class="ghost">Delete watchlist</button>
+      </div>
+      <div id="wl-detail-error" class="error"></div>
+      <div id="wl-rows" class="tablewrap"></div>
+    </div>
   </section>
 
   <!-- ------------------------------------------------------------- SCREENER -->
@@ -108,14 +1113,49 @@
       <label>Preset
         <select id="preset"></select>
       </label>
+      <button class="ctb-btn ghost" id="preset-info-btn" type="button" title="What this scanner identifies, its rule, parameters and limitations">&#9432; Info</button>
       <button id="run-screen">Run screen</button>
       <button id="export-screen" class="ghost">Export CSV</button>
     </div>
     <p class="hint" id="preset-desc"></p>
+    <p class="hint" id="screen-stale" hidden style="color:var(--pravaha-caution)">⚠ Results below are from a previous run — press “Run Screen” to refresh for the newly selected scanner.</p>
     <div class="card">
       <h2>Results</h2>
       <div id="screen-summary" class="stat-row"></div>
       <div id="screen-results" class="tablewrap"></div>
+    </div>
+
+    <div class="card wide">
+      <h2>Custom rule builder</h2>
+      <p class="hint">
+        Compose an <b>AND/OR</b> rule from the live metric catalogue, run it
+        against <b>stored</b> history, and save it as a reusable screen. A rule
+        is a validated data tree — nothing here executes code. A metric with no
+        backing data makes a security <i>ineligible</i> with an explanation, not
+        a silent pass.
+      </p>
+      <div class="controls">
+        <label>Match
+          <select id="rb-op"><option value="AND">ALL (AND)</option><option value="OR">ANY (OR)</option></select>
+          of:
+        </label>
+        <button id="rb-add">+ Condition</button>
+        <button id="rb-add-group" class="ghost">+ Group</button>
+        <label>Min bars <input id="rb-minbars" type="number" value="30" min="1" style="width:5em" /></label>
+        <button id="rb-run">Run rule</button>
+      </div>
+      <div id="rb-conditions" class="rb-tree"></div>
+      <div class="controls">
+        <label>Saved rule <select id="rb-saved"></select></label>
+        <button id="rb-load" class="ghost">Load</button>
+        <label>Name <input id="rb-name" style="width:13em" placeholder="my oversold rule" /></label>
+        <button id="rb-save">Save</button>
+        <button id="rb-duplicate" class="ghost">Duplicate</button>
+        <button id="rb-delete" class="ghost">Delete</button>
+      </div>
+      <div id="rb-error" class="error"></div>
+      <p class="hint" id="rb-rendered"></p>
+      <div id="rb-results" class="tablewrap"></div>
     </div>
 
     <div class="card">
@@ -164,6 +1204,7 @@
       <label>Strategy
         <select id="bt-strategy"></select>
       </label>
+      <button class="ctb-btn ghost" id="bt-strategy-info-btn" type="button" title="What this strategy does, its entry/exit logic, parameters, costs and limitations">&#9432; Info</button>
       <span id="bt-params" class="param-row"></span>
       <label>Execution
         <select id="bt-execution">
@@ -202,9 +1243,55 @@
         <div id="bt-trades" class="tablewrap"></div>
       </div>
     </div>
+
+    <div class="card wide">
+      <h2>Saved experiments (reproducible)</h2>
+      <p class="hint">
+        A saved experiment stores the exact request, the result snapshot, a
+        content hash of the configuration, the data cut-off and the engine
+        version. <b>Reproduce</b> re-runs through the same backtest path and
+        reports any drift metric-by-metric instead of asserting success.
+      </p>
+      <div class="controls">
+        <label class="wide">Label
+          <input id="ex-label" placeholder="sma 5/20 baseline" style="width:16em" />
+        </label>
+        <button id="ex-save">Save current run</button>
+        <button id="ex-refresh" class="ghost">Refresh</button>
+      </div>
+      <div id="ex-error" class="error"></div>
+      <div id="ex-list" class="tablewrap"></div>
+      <div class="controls">
+        <label>Compare
+          <select id="ex-a"></select>
+        </label>
+        <label>vs</label>
+        <select id="ex-b"></select>
+        <button id="ex-compare">Compare</button>
+      </div>
+      <div id="ex-compare-out" class="tablewrap"></div>
+    </div>
   </section>
 
   <!-- ----------------------------------------------------------------- DATA -->
+  <section id="view-ideas" class="view">
+    <div class="banner">
+      Screens built on named investment methodologies. A model runs only when every
+      input it needs is stored; otherwise it says which fields are missing rather than
+      producing a score from absent data. Rankings are not recommendations.
+    </div>
+    <div class="grid">
+      <div class="card wide">
+        <h2>Models</h2>
+        <div id="ideas-grid" class="ideas-grid"><div class="hint">Loading models…</div></div>
+      </div>
+      <div class="card wide">
+        <h2 id="ideas-title">Results</h2>
+        <div id="ideas-result" class="tablewrap"><div class="empty">Pick a model above.</div></div>
+      </div>
+    </div>
+  </section>
+
   <section id="view-data" class="view">
     <div class="grid">
       <div class="card">
@@ -214,6 +1301,18 @@
       <div class="card">
         <h2>Data sources</h2>
         <div id="sources" class="tablewrap"></div>
+      </div>
+      <div class="card wide">
+        <h2>Live data sources</h2>
+        <p class="hint">
+          Freshness is measured from each source's own newest observation
+          timestamp, never from the HTTP response. <b>LIVE_VERIFIED</b> requires a
+          sub-minute observation age; <b>DELAYED</b> means within the source's own
+          publication cadence; a source that is configured but not yet reachable is
+          <b>UNAVAILABLE</b>; a gated source is <b>BLOCKED</b>.
+        </p>
+        <div id="live-snapshot" class="stat-row"></div>
+        <div id="live-sources" class="tablewrap"></div>
       </div>
       <div class="card wide">
         <h2>Data quality (per symbol)</h2>
@@ -247,12 +1346,46 @@
       </label>
       <button id="rs-report-btn">Full report</button>
       <button id="rs-ask-btn" class="ghost">Ask</button>
+      <button id="rs-agent-btn" class="ghost">Run tools</button>
+      <button id="rs-export-btn" class="ghost">Export report (Markdown)</button>
       <label>Forecast horizon (days)
         <input id="rs-horizon" type="number" value="5" min="1" max="120" step="1" />
       </label>
       <button id="rs-forecast-btn" class="ghost">Compare forecast models</button>
     </div>
     <div id="rs-error" class="error"></div>
+
+    <!-- ------------------------------------------------- research workspace -->
+    <div class="card wide" id="ws-card">
+      <h2>Stock research workspace</h2>
+      <p class="hint">
+        One symbol, one place: overview, provenance and every analysis module
+        with the state it <b>actually</b> reached — completed, completed with
+        warnings, failed, or blocked by missing data. Nothing here is a live
+        quote, a recommendation, or an invented progress percentage.
+      </p>
+      <div class="controls">
+        <label>Symbol
+          <input id="ws-symbol" list="symbol-list" placeholder="ADBL" />
+        </label>
+        <label>Bars
+          <input id="ws-limit" type="number" value="500" min="30" max="5000" step="10" />
+        </label>
+        <button id="ws-run">Load workspace</button>
+        <button id="ws-jump" class="ghost">Open chart for this symbol</button>
+      </div>
+      <div id="ws-error" class="error"></div>
+      <div id="ws-head" class="chart-meta"></div>
+      <div id="ws-overview" class="stat-row"></div>
+
+      <h3>Module status</h3>
+      <div id="ws-status" class="tablewrap">
+        <div class="empty">Load a symbol to see which analyses ran and how long
+          they took.</div>
+      </div>
+
+      <div id="ws-sections"></div>
+    </div>
 
     <div class="grid">
       <div class="card wide">
@@ -278,6 +1411,20 @@
         </div>
       </div>
       <div class="card wide">
+        <h2>Tool agent</h2>
+        <p class="hint">
+          Routes the question to deterministic tools over stored data
+          (read-only — it never trades). Tool results and any AI interpretation
+          arrive as separate fields. Private data (portfolio, journal) is
+          excluded from any AI prompt unless explicitly authorized; the
+          recipient (local vs hosted) is always named in the response.
+        </p>
+        <label class="chk"><input type="checkbox" id="rs-agent-ai" /> Interpret with AI — sends non-private tool output to the configured provider</label>
+        <div id="rs-agent-out">
+          <div class="empty">Press “Run tools” with a question typed above.</div>
+        </div>
+      </div>
+      <div class="card wide">
         <h2>Forecast model comparison</h2>
         <p class="hint">
           A statistical projection of stored, UNADJUSTED closes — not a prediction
@@ -300,6 +1447,20 @@
     <div class="card">
       <h2>Summary</h2>
       <div id="pf-summary" class="stat-row"></div>
+    </div>
+    <div class="card">
+      <h2>Risk check</h2>
+      <p class="hint">
+        Deterministic metrics from stored history and your own ledger against
+        documented limits (weight, drawdown, volatility). Every breach names its
+        measured value and threshold; no live data is used.
+      </p>
+      <div class="controls">
+        <button id="pf-risk-run" class="ghost">Run risk check</button>
+      </div>
+      <div id="pf-risk-out">
+        <div class="empty">Press “Run risk check” to measure the portfolio against its limits.</div>
+      </div>
     </div>
     <div class="card">
       <h2>Positions (valued at the latest stored close)</h2>
@@ -405,6 +1566,22 @@
       </div>
     </div>
     <div class="card">
+      <h2>Reflection of the selected entry</h2>
+      <p class="hint">
+        Deterministic reflection context is always computed locally from the
+        journal. AI reflection only with the checkbox below — that sends the
+        entry's context to the configured provider, and the response names the
+        recipient. Nothing is sent without that explicit per-request
+        authorization.
+      </p>
+      <div class="controls">
+        <label class="chk"><input type="checkbox" id="jr-reflect-ai" /> authorize AI reflection</label>
+      </div>
+      <div id="jr-reflect">
+        <div class="empty">Entries carry a “Reflect” button.</div>
+      </div>
+    </div>
+    <div class="card">
       <h2>Trade planner (arithmetic only)</h2>
       <div class="controls">
         <label>Entry <input id="plan-entry" type="number" min="0" step="any" /></label>
@@ -456,6 +1633,19 @@
         </select>
       </label>
       <button id="fs-load" class="primary">Analyse</button>
+      <button id="fs-trend" class="ghost">Session trend</button>
+    </div>
+
+    <div class="card">
+      <h2>Activity trend &amp; broker net flow</h2>
+      <p class="hint">
+        Observed prints across the last imported sessions in the current scope
+        (symbol filter above applies). Flow labels are inferences with their
+        basis stated — broker codes are not beneficial owners.
+      </p>
+      <div id="fs-trend-out" class="tablewrap">
+        <div class="empty">Press “Session trend” for the multi-session view.</div>
+      </div>
     </div>
 
     <div class="card">
@@ -550,6 +1740,32 @@
   </section>
 
   <!-- -------------------------------------------------------- FUNDAMENTALS -->
+  <section id="view-marketintel" class="view">
+    <div class="banner">Market Intelligence — NEPSE news/social source registry, collection health, and article browser. Sources: 100 registered (82 verified, 54 with RSS, 18 unavailable). Collection requires network access and source permission review.</div>
+    <div class="controls">
+      <button id="mi-health" class="ctb-btn">Refresh health</button>
+      <button id="mi-import" class="ctb-btn">Import source registry</button>
+      <label>Status filter
+        <select id="mi-status-filter">
+          <option value="">All</option>
+          <option value="VERIFIED">Verified</option>
+          <option value="UNAVAILABLE">Unavailable</option>
+        </select>
+      </label>
+      <label>Group
+        <select id="mi-group-filter">
+          <option value="">All</option>
+          <option value="A">A</option>
+          <option value="B">B</option>
+          <option value="C">C</option>
+        </select>
+      </label>
+    </div>
+    <div id="mi-health-out" class="tablewrap"></div>
+    <div id="mi-sources" class="tablewrap"></div>
+    <div id="mi-error" class="error"></div>
+  </section>
+
   <section id="view-fundamentals" class="view">
     <div class="card">
       <h2>Fundamentals store</h2>
@@ -566,6 +1782,22 @@
         <button id="fund-load">Load</button>
       </div>
       <div id="fund-records" class="tablewrap"></div>
+    </div>
+
+    <div class="card">
+      <h2>Derived ratios (deterministic)</h2>
+      <p class="hint">
+        P/E, P/B and dividend yield computed from stored inputs only — a null
+        always carries its exact reason, never an estimate. One symbol shows
+        its report; a comma-separated list (max 10) compares side by side.
+      </p>
+      <div class="controls">
+        <label>Symbols
+          <input id="ratio-symbols" placeholder="NABIL,ADBL" />
+        </label>
+        <button id="ratio-load">Show ratios</button>
+      </div>
+      <div id="ratio-out" class="tablewrap"><div class="empty">Enter one or more symbols.</div></div>
     </div>
 
     <div class="card">
@@ -588,9 +1820,440 @@
       <div id="fund-error" class="error"></div>
     </div>
   </section>
-</main>
 
-<footer>
+  <!-- ------------------------------------------------------------ FORECASTER -->
+  <section id="view-forecaster" class="view">
+    <div class="banner ov-banner" id="fc-banner">
+      Forecasts run locally with the official Kronos weights on stored NEPSE bars.
+    </div>
+    <div class="ctb" id="fc-toolbar">
+      <div class="ctb-group">
+        <span class="ctb-label">Symbol</span>
+        <input id="fc-symbol" list="symbol-list" placeholder="NIMB" autocomplete="off" spellcheck="false" />
+        <button id="fc-load" class="ctb-btn primary">Run forecast</button>
+      </div>
+      <div class="ctb-group">
+        <span class="ctb-label">Model</span>
+        <select id="fc-variant">
+          <option value="base" selected>Kronos-Base (510M)</option>
+          <option value="small">Kronos-Small</option>
+          <option value="mini">Kronos-Mini</option>
+        </select>
+        <span class="hint" id="fc-variant-note"></span>
+      </div>
+      <div class="ctb-group">
+        <span class="ctb-label">Horizon</span>
+        <select id="fc-pred">
+          <option value="1">1 day</option>
+          <option value="5">5 days</option>
+          <option value="10" selected>10 days</option>
+          <option value="20">20 days</option>
+          <option value="40">40 days</option>
+        </select>
+      </div>
+      <div class="ctb-group">
+        <span class="ctb-label">Context</span>
+        <select id="fc-context">
+          <option value="96">96 bars</option>
+          <option value="128">128 bars</option>
+          <option value="256" selected>256 bars</option>
+          <option value="512">512 bars (max: Base & Small)</option>
+          <option value="1024">1024 bars (Mini)</option>
+          <option value="2048">2048 bars (max: Mini)</option>
+        </select>
+      </div>
+      <div class="ctb-group">
+        <span class="ctb-label">Device</span>
+        <select id="fc-device">
+          <option value="" selected>auto</option>
+          <option value="cpu">cpu</option>
+        </select>
+      </div>
+      <div class="ctb-spacer"></div>
+      <div class="ctb-group">
+        <button class="ctb-btn" id="fc-evaluate" title="Walk-forward score vs naive and drift baselines">Evaluate vs baselines</button>
+        <button class="ctb-btn ghost" id="fc-eval-export" title="Download the per-window evaluation as CSV (chronological, no look-ahead)">Export CSV</button>
+        <button class="ctb-btn ghost" id="fc-status" title="Reload model availability">Model status</button>
+      </div>
+    </div>
+
+    <div class="card wide" id="fc-progress" hidden>
+      <div class="fc-progress" id="fc-progress-bar"><div></div></div>
+      <p class="hint" id="fc-progress-note">Working…</p>
+    </div>
+
+    <div class="card wide" id="fc-report" hidden>
+      <div class="fc-head">
+        <b>Forecast <span id="fc-head-symbol"></span></b>
+        <span class="pill pill-warn">predicted candles — not observed trades</span>
+      </div>
+      <div class="stat-row" id="fc-meta"></div>
+      <div class="fc-legend">
+        <span><span class="lg-swatch observed"></span> observed candles</span>
+        <span><span class="lg-swatch predicted"></span> Kronos-predicted candles</span>
+      </div>
+      <div id="fc-chart" class="fc-chart"></div>
+      <div id="fc-table" class="tablewrap"></div>
+      <div class="controls" id="fc-share-row"></div>
+      <p class="hint" id="fc-notes"></p>
+    </div>
+
+    <div class="card wide" id="fc-eval" hidden>
+      <div class="fc-head"><b>Walk-forward evaluation vs baselines</b>
+        <span class="pill pill-info">chronological — no look-ahead</span></div>
+      <div id="fc-eval-summary" class="stat-row"></div>
+      <div id="fc-eval-table" class="tablewrap"></div>
+      <p class="hint" id="fc-eval-note"></p>
+    </div>
+
+    <div class="card wide">
+      <div class="fc-head"><b>Saved forecasts</b>
+        <button class="ghost" id="fc-list-refresh">Refresh</button></div>
+      <div id="fc-saved" class="tablewrap"><div class="empty">No saved forecast yet.</div></div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------- KRONOS AI -->
+  <section id="view-kronos" class="view">
+    <div class="card wide">
+      <h2>Kronos — financial time-series foundation model</h2>
+      <p class="hint">
+        Kronos (MIT licence) is an open financial foundation model trained on
+        millions of daily candles. A tokenizer quantifies OHLC + volume +
+        amount candles, an autoregressive transformer then samples future
+        candle paths conditioned on a historical window. It <b>forecasts</b>
+        from your stored history — it is not a live NEPSE feed and never
+        replaces observed prices.
+      </p>
+      <div class="stat-row" id="kron-availability"></div>
+      <div id="kron-weights" class="tablewrap"></div>
+    </div>
+
+    <div class="card wide">
+      <h2>Runtime status</h2>
+      <div class="stat-row" id="kron-runtime"></div>
+      <div class="controls">
+        <button id="kron-refresh" class="ghost">Refresh status</button>
+        <button id="kron-unload" class="ghost">Unload resident model</button>
+      </div>
+      <p class="hint" id="kron-runtime-note"></p>
+    </div>
+
+    <div class="card wide">
+      <h2>Model facts</h2>
+      <div class="tablewrap" id="kron-facts"></div>
+      <p class="hint">
+        Official repository: shiyu-coder/Kronos · weights: NeoQuasar/Hugging Face ·
+        vendored model code (MIT) under <code>vendor/kronos</code> with its
+        official regression suite — golden outputs matched at &lt;1e-6 relative
+        error on this machine.
+      </p>
+    </div>
+
+    <div class="card wide">
+      <h2>Limitations, measured honestly</h2>
+      <ul class="hint" id="kron-limits">
+        <li>Forecasts are <b>sampled paths</b>, not certainty: greedily-decoded output is reproducible but still a model sample.</li>
+        <li>Daily NEPSE volatility is small; measured benchmarks here show simple baselines (last-close, drift) can beat the model on MAE — <b>run
+            <em>AI Forecaster → Evaluate vs baselines</em> before trusting any symbol</b>.</li>
+        <li>The model knows nothing about NEPSE circuit rules, corporate actions or news; its context is only past candles.</li>
+        <li>Context is capped at 512 bars by the official architecture.</li>
+      </ul>
+    </div>
+
+    <div class="card wide">
+      <h2>Experiment history</h2>
+      <div class="controls">
+        <button class="ghost" id="kron-exp-refresh">Refresh</button>
+      </div>
+      <div id="kron-experiments" class="tablewrap"><div class="empty">No runs recorded yet — run one from the AI Forecaster.</div></div>
+    </div>
+  </section>
+
+  <!-- --------------------------------------------------- ALGORITHM WORKSHOP -->
+  <section id="view-workshop" class="view">
+    <div class="banner ov-banner" id="ws-banner">
+      Research evaluation of strategies over stored history. Not advice; no orders.
+    </div>
+    <div class="ctb" id="ws-toolbar">
+      <div class="ctb-group">
+        <span class="ctb-label">Symbol</span>
+        <input id="ws-symbol" list="symbol-list" placeholder="NABIL" autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="ctb-group">
+        <span class="ctb-label">Window</span>
+        <select id="ws-range">
+          <option value="250">1 year</option>
+          <option value="500">2 years</option>
+          <option value="750" selected>3 years</option>
+          <option value="0">All</option>
+        </select>
+      </div>
+      <div class="ctb-group">
+        <button id="ws-run" class="ctb-btn primary">Benchmark selected</button>
+        <button id="ws-check-all" class="ctb-btn ghost">Select all</button>
+        <button id="ws-check-none" class="ctb-btn ghost">Clear</button>
+      </div>
+    </div>
+    <div class="card wide">
+      <div class="fc-head"><b>Algorithm library (20 candidates)</b>
+        <span class="hint" id="ws-count"></span></div>
+      <div id="ws-catalogue" class="tablewrap"><div class="empty">Loading catalogue…</div></div>
+      <p class="hint">Performance is measured by the platform's backtest engine
+        (deliberate assumptions: next-open execution, whole units, placeholder
+        fee unless you change it in Backtest). Selection is research output,
+        never a claim of future profit.</p>
+    </div>
+    <div class="card wide" id="ws-results-card" hidden>
+      <div class="fc-head"><b>Benchmark results</b>
+        <span class="hint" id="ws-results-meta"></span></div>
+      <div id="ws-results" class="tablewrap"></div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- TRACING -->
+  <section id="view-tracing" class="view">
+    <div class="banner ov-banner">
+      Tracing: every recorded signal and condition fire, with its evidence and timestamps.
+    </div>
+    <div class="card wide">
+      <div class="fc-head"><b>Alert history</b>
+        <div>
+          <button class="ghost" id="trace-refresh">Refresh</button>
+          <button id="trace-clear" class="ghost" title="Clear history (re-arms all alerts)">Clear history</button>
+        </div></div>
+      <p class="hint">A row is written when a condition fires over stored bars
+        (with what was true at that moment); it re-arms after its own cooldown
+        or when cleared. Nothing here is a live quote or a prediction.</p>
+      <div id="trace-alerts" class="tablewrap"><div class="empty">No alerts recorded.</div></div>
+    </div>
+    <div class="card wide">
+      <div class="fc-head"><b>Journal timeline (traced entries)</b>
+        <button class="ghost" id="trace-journal-refresh">Refresh</button></div>
+      <div id="trace-journal" class="tablewrap"><div class="empty">No journal entries yet.</div></div>
+    </div>
+  </section>
+  <section id="view-breadth" class="view">
+    <div class="banner">
+      Breadth history — % of stored symbols above their 20/50/200-bar SMA,
+      advance/decline counts, A/D volume line, and new highs/lows, computed from
+      the same stored bars the charts use. Every definition is echoed beside the
+      data; a windowed request still uses earlier bars for comparisons.
+    </div>
+    <div class="controls">
+      <label>Start <input id="bh-start" type="date" /></label>
+      <label>End <input id="bh-end" type="date" /></label>
+      <label>SMA windows <input id="bh-windows" value="20,50,200" /></label>
+      <label>High/low window <input id="bh-hl" type="number" value="250" min="2" max="1000" /></label>
+      <button id="bh-load">Load breadth</button>
+      <span id="bh-count" class="hint"></span>
+    </div>
+    <div id="bh-error" class="error"></div>
+    <div class="viz-chart-card" style="margin-bottom:14px">
+      <div class="viz-chart-head">
+        <h2>Breadth indicator chart</h2>
+        <div class="controls" style="margin:0">
+          <label>Indicator
+            <select id="bh-chart-metric">
+              <option value="net_new_highs">Net new highs − new lows (250-bar)</option>
+              <option value="ad_ratio">Advance / decline ratio</option>
+              <option value="ad_line">Advance / decline line</option>
+              <option value="ad_volume_line">A/D volume line</option>
+              <option value="arms_index">Arms index (TRIN)</option>
+              <option value="pct_above_sma_50">% of stocks above SMA 50</option>
+              <option value="pct_above_sma_200">% of stocks above SMA 200</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div id="bh-chart" class="viz-host" style="height:300px"></div>
+      <p class="viz-metric-note" id="bh-chart-note">Load breadth to draw the indicator from the stored series — no values are synthesised.</p>
+    </div>
+    <div class="card wide">
+      <h2>Latest readings</h2>
+      <div id="bh-summary" class="stat-row"><div class="empty">Load to view.</div></div>
+    </div>
+    <div class="card wide">
+      <h2>Recent series (last 30 sessions)</h2>
+      <div id="bh-table" class="tablewrap"><div class="empty">Load to view.</div></div>
+    </div>
+    <div class="card wide">
+      <h2>Definitions</h2>
+      <div id="bh-defs" class="hint"></div>
+    </div>
+  </section>
+
+  <section id="view-sea" class="view">
+    <div class="banner">
+      Seasonality — descriptive statistics over stored closes: month-of-year
+      returns, weekday returns, and holiday effects where a holiday list exists.
+      Sample sizes are quoted everywhere; thin months are excluded, not smoothed.
+      Nothing here is a forecast.
+    </div>
+    <div class="controls">
+      <label>Symbol or index <input id="sea-symbol" list="symbol-list" placeholder="NABIL / NEPSE" /></label>
+      <label>Min bars per month <input id="sea-minbars" type="number" value="10" min="1" max="25" /></label>
+      <button id="sea-load">Load seasonality</button>
+    </div>
+    <div id="sea-error" class="error"></div>
+    <div class="viz-chart-card" style="margin-bottom:14px">
+      <div class="viz-chart-head">
+        <h2>Average return by month of year</h2>
+        <span class="hint" id="sea-chart-month-meta"></span>
+      </div>
+      <div id="sea-chart-months" class="viz-host" style="height:200px"></div>
+      <p class="viz-metric-note">Bars are the mean monthly return per calendar month over the stored range; the dashed line is the overall mean of those monthly means. Sample sizes and the full distribution are in the table below.</p>
+    </div>
+    <div class="viz-chart-card" style="margin-bottom:14px">
+      <div class="viz-chart-head">
+        <h2>Average return by weekday</h2>
+        <span class="hint" id="sea-chart-weekday-meta"></span>
+      </div>
+      <div id="sea-chart-weekdays" class="viz-host" style="height:180px"></div>
+      <p class="viz-metric-note">Mean close-to-close return grouped by day of week. NEPSE trades Sunday–Thursday; a weekday absent from the stored data is shown as a gap, never as a zero.</p>
+    </div>
+    <div class="viz-chart-card" style="margin-bottom:14px">
+      <div class="viz-chart-head">
+        <h2>Average return by quarter</h2>
+        <span class="hint" id="sea-chart-quarter-meta"></span>
+      </div>
+      <div id="sea-chart-quarters" class="viz-host" style="height:180px"></div>
+      <p class="viz-metric-note">Compounded from the month returns above (Q1 = Jan–Mar … Q4 = Oct–Dec), then averaged across years. A year missing any month in a quarter is excluded from that quarter's mean — nothing is interpolated.</p>
+    </div>
+    <div class="card wide">
+      <h2>Month of year</h2>
+      <div id="sea-months" class="tablewrap"><div class="empty">Load to view.</div></div>
+    </div>
+    <div class="card wide">
+      <h2>Weekday</h2>
+      <div id="sea-weekdays" class="tablewrap"><div class="empty">Load to view.</div></div>
+    </div>
+    <div class="card wide">
+      <h2>Holiday effect</h2>
+      <div id="sea-holiday" class="hint"></div>
+    </div>
+    <div class="card wide">
+      <h2>Notes</h2>
+      <div id="sea-defs" class="hint"></div>
+    </div>
+  </section>
+
+  <section id="view-swingw" class="view">
+    <div class="banner">
+      Swing Bench — mechanical context for one symbol: confirmed swing levels,
+      measured-move arithmetic, a readings checklist, and position-size
+      arithmetic for a given account. Readings, not recommendations; missing
+      evidence is reported as missing.
+    </div>
+    <div class="controls">
+      <label>Symbol <input id="swx-symbol" list="symbol-list" placeholder="NABIL" /></label>
+      <label>Bars <input id="swx-limit" type="number" value="400" min="60" max="2000" step="10" /></label>
+      <label>Account (NPR) <input id="swx-account" type="number" value="100000" min="1" step="1000" /></label>
+      <label>Risk per trade (%) <input id="swx-risk" type="number" value="1" min="0.1" max="100" step="0.1" /></label>
+      <label>As of <input id="swx-asof" type="date" /></label>
+      <button id="swx-load">Load workbench</button>
+      <button id="swx-chart" class="ghost">Open chart for this symbol</button>
+    </div>
+    <div id="swx-error" class="error"></div>
+    <div class="card wide">
+      <h2>Structure &amp; nearest confirmed levels</h2>
+      <div id="swx-summary" class="stat-row"><div class="empty">Load to view.</div></div>
+      <div id="swx-levels" class="tablewrap"></div>
+    </div>
+    <div class="card wide">
+      <h2>Reference arithmetic (mechanical)</h2>
+      <div id="swx-reference" class="tablewrap"><div class="empty">Load to view.</div></div>
+    </div>
+    <div class="card wide">
+      <h2>Mechanical readings</h2>
+      <div id="swx-checklist" class="tablewrap"><div class="empty">Load to view.</div></div>
+    </div>
+    <div class="card wide">
+      <h2>Position sizing</h2>
+      <div id="swx-sizing" class="tablewrap"><div class="empty">Load to view.</div></div>
+    </div>
+    <div class="card wide">
+      <h2>Recent confirmed swings</h2>
+      <div id="swx-swings" class="tablewrap"><div class="empty">Load to view.</div></div>
+    </div>
+    <div class="card wide">
+      <h2>Caveats</h2>
+      <div id="swx-caveats" class="hint"></div>
+    </div>
+  </section>
+
+  <section id="view-new" class="view">
+    <div class="banner">NEW — Company Universe, Sector Explorer, Company Profiles, EPS Rankings, EPS History &amp; Growth, TTM EPS Analysis, Fundamentals Comparison, Financial Screener, Margin Eligibility, Data Coverage. All data from stored fundamentals and market records. No fabricated data.</div>
+    <div class="controls" id="new-tabs">
+      <button class="ctb-btn new-tab active" data-tab="nu">Company Universe</button>
+      <button class="ctb-btn new-tab" data-tab="nse">Sector Explorer</button>
+      <button class="ctb-btn new-tab" data-tab="nprof">Company Profiles</button>
+      <button class="ctb-btn new-tab" data-tab="neps">EPS Rankings</button>
+      <button class="ctb-btn new-tab" data-tab="nepsh">EPS History &amp; Growth</button>
+      <button class="ctb-btn new-tab" data-tab="nttm">TTM EPS Analysis</button>
+      <button class="ctb-btn new-tab" data-tab="ncmp">Fundamentals Comparison</button>
+      <button class="ctb-btn new-tab" data-tab="nscr">Financial Screener</button>
+      <button class="ctb-btn new-tab" data-tab="nelig">Margin Eligibility</button>
+      <button class="ctb-btn new-tab" data-tab="ncov">Data Coverage</button>
+    </div>
+    <div id="new-content" class="card wide">
+      <div id="new-body" class="tablewrap"><div class="empty">Select a tab above.</div></div>
+    </div>
+  </section>
+
+  <!-- ================================================================ KIMI research workspace -->
+  <section id="view-kimi" class="view">
+    <div class="banner">KIMI — research workspace for NEPSE data quality, market intelligence, corporate actions, quantitative research, company fundamentals, portfolio analysis, risk, and evidence-based AI assistance. Every metric comes from a real calculation or a clearly labeled configuration. No fabricated data.</div>
+    <div class="controls" id="kimi-tabs">
+      <button class="ctb-btn kimi-tab active" data-tab="overview">Overview</button>
+      <button class="ctb-btn kimi-tab" data-tab="catalogues">Catalogues</button>
+      <button class="ctb-btn kimi-tab" data-tab="dataquality">Data Quality</button>
+      <button class="ctb-btn kimi-tab" data-tab="regime">Market Regime</button>
+      <button class="ctb-btn kimi-tab" data-tab="liquidity">Liquidity</button>
+      <button class="ctb-btn kimi-tab" data-tab="breadth">Breadth</button>
+      <button class="ctb-btn kimi-tab" data-tab="forensics">Forensics</button>
+      <button class="ctb-btn kimi-tab" data-tab="factors">Factor Research</button>
+      <button class="ctb-btn kimi-tab" data-tab="signals">Signal Tracker</button>
+      <button class="ctb-btn kimi-tab" data-tab="montecarlo">Monte Carlo</button>
+      <button class="ctb-btn kimi-tab" data-tab="valuation">Valuation</button>
+      <button class="ctb-btn kimi-tab" data-tab="portfolio">Portfolio</button>
+      <button class="ctb-btn kimi-tab" data-tab="researchdesk">Research Desk</button>
+      <button class="ctb-btn kimi-tab" data-tab="aidesk">AI Research</button>
+      <button class="ctb-btn kimi-tab" data-tab="reconcile">Reconciliation</button>
+      <button class="ctb-btn kimi-tab" data-tab="snapshots">Snapshots</button>
+      <button class="ctb-btn kimi-tab" data-tab="askdata">Ask the Data</button>
+      <button class="ctb-btn kimi-tab" data-tab="corpevents">Corporate Events</button>
+    </div>
+    <div id="kimi-content" class="card wide">
+      <div id="kimi-body" class="tablewrap"><div class="empty">Select a tab above.</div></div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------- SASTO SHARE -->
+  <section id="view-sastoshare" class="view">
+    <div class="banner">
+      Sasto Share — the reference platform's market, valuation, risk, rotation and dividend
+      workspace. Every figure is derived from stored NEPSE bars, reported fundamentals or the
+      corporate-events registry. Where an input is missing the panel says so and shows the
+      reason; nothing is filled in with a placeholder.
+    </div>
+    <div class="controls" id="ss-tabs">
+      <button class="ctb-btn ss-tab active" data-sstab="pulse">Market Pulse</button>
+      <button class="ctb-btn ss-tab" data-sstab="movers">Movers &amp; Sparklines</button>
+      <button class="ctb-btn ss-tab" data-sstab="valuation">Valuation</button>
+      <button class="ctb-btn ss-tab" data-sstab="risk">Risk &amp; Volatility</button>
+      <button class="ctb-btn ss-tab" data-sstab="rotation">Sector Rotation</button>
+      <button class="ctb-btn ss-tab" data-sstab="dividends">Dividends</button>
+      <button class="ctb-btn ss-tab" data-sstab="strategy">Strategy vs Buy &amp; Hold</button>
+    </div>
+    <div id="ss-body"></div>
+  </section>
+</main>
+<footer class="page-footer">
+  <p class="tiny">
+    <span class="footer-brand">PRAVAHA</span> — NEPSE Analytics Platform<br />
+    <span class="footer-tag">Insights today. A brighter tomorrow.</span>
+  </p>
   <p id="disclaimer"></p>
   <p class="tiny">
     Charting by TradingView Lightweight Charts™, licensed under Apache 2.0.
@@ -599,6 +2262,68 @@
   </p>
 </footer>
 
-<script src="/app.js"></script>
+<!-- ------------------------------------------------ floating AI assistant -->
+<button id="chat-fab" class="chat-fab" aria-expanded="false" aria-controls="chat-panel"
+  title="Ask the analyst — research assistant">
+  <span aria-hidden="true">✦</span> <span class="chat-fab-label">Ask the analyst</span>
+</button>
+<aside id="chat-panel" class="chat-panel" aria-label="AI research assistant" hidden>
+  <header class="chat-head">
+    <b>Research assistant</b>
+    <span id="chat-provider" class="hint"></span>
+    <span class="chat-spacer"></span>
+    <button id="chat-clear" class="ghost" type="button" title="Clear this conversation">Clear</button>
+    <button id="chat-close" class="ghost" type="button" aria-label="Close assistant">✕</button>
+  </header>
+  <div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-relevant="additions">
+    <div class="chat-msg assistant">
+      <div class="chat-bubble">
+        <p>Ask about <b>stored data</b> — a symbol, its indicators, patterns,
+        fundamentals coverage, an index comparison, a backtest, or a screening
+        idea. Tool results are always computed locally and shown with their
+        provenance. I will not invent quotes and I will not place orders.</p>
+      </div>
+    </div>
+  </div>
+  <div id="chat-examples" class="chat-examples"></div>
+  <div class="chat-input-row">
+    <label class="sr-only" for="chat-input">Message</label>
+    <textarea id="chat-input" rows="2"
+      placeholder="e.g. rsi below 35 and price above its sma 50 — then press Propose rule"></textarea>
+  </div>
+  <div class="chat-actions">
+    <label class="chk"><input type="checkbox" id="chat-ai" /> Explain with AI</label>
+    <span class="chat-spacer"></span>
+    <button id="chat-propose" class="ghost" type="button"
+      title="Translate the message into a screening rule you can review before running">Propose rule</button>
+    <button id="chat-send" class="primary" type="button">Send</button>
+  </div>
+  <p class="hint tiny chat-foot">
+    Read-only. The optional explanation uses the configured provider and says who
+    received it; the deterministic tool results never leave your machine. No orders.
+  </p>
+</aside>
+
+<!-- Generic tool information modal (scanners / algorithms / fundamental
+     tools). Shared by the KIMI catalogue and the ⓘ buttons beside the
+     screener preset and the backtest strategy selectors. Mounted at the
+     shell level so it is visible from every view, not just Charting. -->
+<div class="modal-overlay" id="tool-info" hidden>
+  <div class="modal tool-info-modal" role="dialog" aria-modal="true" aria-label="Tool information">
+    <div class="modal-head">
+      <b id="tool-info-title">Tool</b>
+      <button class="ctb-btn ghost" id="tool-info-close" aria-label="Close">&#10005;</button>
+    </div>
+    <div class="modal-body" id="tool-info-body"></div>
+  </div>
+</div>
+
+</main>
+</div>
+
+<script src="/indicator_info.js?v=wb13"></script>
+<script src="/viz.js?v=wb4"></script>
+<script src="/app.js?v=wb79"></script>
+<script src="/kronos_ui.js?v=wb2"></script>
 </body>
 </html>

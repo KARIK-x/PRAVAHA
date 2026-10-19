@@ -46,7 +46,14 @@ from typing import Any
 
 import numpy as np
 
-__all__ = ["Swing", "SwingError", "classify_structure", "find_swings"]
+__all__ = [
+    "Swing",
+    "SwingError",
+    "classify_structure",
+    "find_swings",
+    "detect_equal_highs_lows",
+    "detect_fvgs",
+]
 
 #: Default bars of context either side of a candidate pivot. Five daily bars is
 #: a common choice for swing structure on daily data; it is a parameter, not a
@@ -319,3 +326,86 @@ def find_breaks(swings: list[Swing], close: Any) -> list[dict[str, Any]]:
                 break
     breaks.sort(key=lambda row: row["index"])
     return breaks
+
+
+def detect_equal_highs_lows(
+    swings: list[Swing],
+    tolerance: float = 0.001,
+) -> list[dict[str, Any]]:
+    """Pairs of consecutive same-kind swings whose prices are within
+    ``tolerance`` (fraction of the price) of each other.
+
+    "Equal" highs/lows are a liquidity concept: two swing highs at nearly the
+    same level suggest a pool of resting stops above that level. The pair is
+    reported at the *later* swing's confirmation, so a pair is only knowable
+    once the second swing is confirmed (no look-ahead).
+    """
+    if tolerance < 0:
+        raise SwingError("`tolerance` must be >= 0")
+    out: list[dict[str, Any]] = []
+    highs = [s for s in swings if s.kind == "high"]
+    lows = [s for s in swings if s.kind == "low"]
+    for group in (highs, lows):
+        for prev, cur in zip(group, group[1:], strict=False):
+            if prev.price <= 0:
+                continue
+            rel = abs(cur.price - prev.price) / abs(prev.price)
+            if rel <= tolerance:
+                out.append(
+                    {
+                        "kind": "equal_high" if cur.kind == "high" else "equal_low",
+                        "index": cur.index,
+                        "price": round(float(cur.price), 4),
+                        "previous_index": prev.index,
+                        "previous_price": round(float(prev.price), 4),
+                        "relative_diff": round(float(rel), 6),
+                        "confirmed_index": cur.confirmed_index,
+                    }
+                )
+    out.sort(key=lambda r: r["index"])
+    return out
+
+
+def detect_fvgs(
+    highs: Any,
+    lows: Any,
+    closes: Any | None = None,
+) -> list[dict[str, Any]]:
+    """Fair Value Gaps (3-candle imbalance).
+
+    A bullish FVG exists at bar ``t`` when ``low[t] > high[t-2]``: a gap
+    between the high of bar ``t-2`` and the low of bar ``t`` that price did
+    not trade through. A bearish FVG exists when ``high[t] < low[t-2]``.
+
+    The gap is knowable only once bar ``t`` has closed, so
+    ``confirmed_index == t`` (no look-ahead). The gap's top/bottom are the
+    two prices that bound the untraded zone.
+    """
+    h = _as_array(highs, "highs")
+    lo = _as_array(lows, "lows")
+    if h.shape != lo.shape:
+        raise SwingError("`highs` and `lows` must have the same length")
+    n = h.size
+    out: list[dict[str, Any]] = []
+    for t in range(2, n):
+        if lo[t] > h[t - 2]:
+            out.append(
+                {
+                    "index": t,
+                    "type": "bullish",
+                    "top": round(float(lo[t]), 4),
+                    "bottom": round(float(h[t - 2]), 4),
+                    "confirmed_index": t,
+                }
+            )
+        elif h[t] < lo[t - 2]:
+            out.append(
+                {
+                    "index": t,
+                    "type": "bearish",
+                    "top": round(float(lo[t - 2]), 4),
+                    "bottom": round(float(h[t]), 4),
+                    "confirmed_index": t,
+                }
+            )
+    return out

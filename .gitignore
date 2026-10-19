@@ -14,11 +14,60 @@ htmlcov/
 data/raw/
 data/processed/
 data/exports/
+data/dev/
+data/models/
+data/staging/
+data/written_pdf/
+data/kronos_audit/
+data/review/
+data/transcription/
+data/health/
 *.duckdb
 *.duckdb.wal
 *.db
 *.sqlite
 *.sqlite3
+
+# --- Model weights and tokenizers (large; never commit) ---
+data/models/
+
+# --- Source projects (external, read-only; never commit) ---
+Kimi_Agent_Free Data Scraping K2.8 /
+Kimi_Agent_Shared attachments k3/
+AI Trading Nipsy/
+
+# --- Experiment outputs (generated; never commit) ---
+data/kronos_experiment/
+data/dev/
+
+# --- Evidence and screenshots (generated; never commit) ---
+docs/evidence/
+docs/screenshots/
+
+# --- Reference materials (large; not application code) ---
+PHOTOS/
+"UI AND FEATURES PHOTO REFERENCE"/
+"ALL THE CONTENT:IDEA MAIN OVERVIEW OF PROJECT.pages"
+"ALL THE CONTENT:IDEA MAIN OVERVIEW OF PROJECT.pdf"
+"The Phases COMPLETE !.pages"
+"The Phases COMPLETE !.pdf"
+NEPSE_Mega_Tool_106_Screenshot_Analysis.pdf
+PRAVAHA.pdf
+logoFimage.png
+
+# --- Audit/experiment data (generated; never commit) ---
+data/kronos_audit/
+data/review/
+data/staging/
+data/written_pdf/
+data/kronos_experiment/
+
+# --- Local runtime state (regenerable; never commit) ---
+data/health/
+data/review/benchmarks/
+
+# --- Isolated development / benchmarking data (never production; never commit) ---
+data/dev/
 
 # --- Secrets & local env ---
 .env
@@ -41,6 +90,12 @@ models/*.pkl
 models/*.joblib
 experiments/runs/
 
+# --- Large reference documents (not application code) ---
+*.pages
+NEPSE_Mega_Tool_106_Screenshot_Analysis.pdf
+PRAVAHA.pdf
+logoFimage.png
+
 # --- Personal trading records (private; never commit) ---
 # WRITTENdata.pdf is a 7.3 MB handwritten personal trading journal. It is a data
 # SOURCE for local analysis only. Its contents are private, so neither the PDF
@@ -61,3 +116,12 @@ data/transcription/
 docs/written_pdf_raw/
 extraction/
 *.ocr.txt
+
+# --- Nested audit data (generated; never commit) ---
+**/kronos_audit/
+**/test_data.pkl
+**/train_data.pkl
+**/val_data.pkl
+
+# --- Large reference PDFs (not application code) ---
+*.pdf

@@ -1,0 +1,25 @@
+# Netlify configuration — FRONTEND ONLY.
+#
+# The Mega Tool frontend is plain static HTML/CSS/JS with NO build step, so
+# Netlify simply publishes `web/static/`.
+#
+# The Python/FastAPI backend and the DuckDB-backed collector CANNOT run here:
+# Netlify serves static assets and short-lived serverless functions with no
+# persistent process, no durable local disk, and no way to hold the gated
+# environment. See docs/deployment_architecture.md. The backend therefore runs
+# on an always-on host, and the frontend reaches it through the
+# `<meta name="megatool-api-base">` value in web/static/index.html.
+#
+# NEVER add backend secrets here. Everything in this file and in web/static is
+# public. The friend token is entered at runtime and kept in sessionStorage.
+
+[build]
+  publish = "web/static"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "no-referrer"
+    Permissions-Policy = "geolocation=(), microphone=(), camera=()"

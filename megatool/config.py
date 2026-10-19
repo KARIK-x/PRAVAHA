@@ -34,12 +34,31 @@ HTTP_BACKOFF_SECONDS = float(os.getenv("MEGATOOL_HTTP_BACKOFF", "1.0"))
 DOWNLOAD_RPS = float(os.getenv("MEGATOOL_DOWNLOAD_RPS", "4"))
 
 # Optional external AI provider. Never required; the rest of the app works without it.
+# Selection: "" (disabled) | "ollama" (local) | "openrouter" (hosted gateway).
 AI_PROVIDER = os.getenv("MEGATOOL_AI_PROVIDER", "").strip()
 AI_API_KEY = os.getenv("MEGATOOL_AI_API_KEY", "").strip()
 AI_MODEL = os.getenv("MEGATOOL_AI_MODEL", "").strip()
+# Local Ollama server. Only contacted when provider == "ollama".
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+# Optional explicit base-URL override for the selected provider.
+AI_ENDPOINT = os.getenv("MEGATOOL_AI_ENDPOINT", "").strip()
+# Generation timeout and a cost ceiling (tokens are billed per request on the
+# hosted gateway, so a bounded default keeps an accidental huge prompt cheap).
+AI_TIMEOUT_SECONDS = float(os.getenv("MEGATOOL_AI_TIMEOUT", "60"))
+AI_MAX_TOKENS = int(os.getenv("MEGATOOL_AI_MAX_TOKENS", "512"))
 
 HOST = os.getenv("MEGATOOL_HOST", "127.0.0.1")
 PORT = int(os.getenv("MEGATOOL_PORT", "8710"))
+
+#: Environment override for the **application** SQLite store only.
+#:
+#: ``MEGATOOL_DATA_DIR`` is read once, at import time, so a process that imports
+#: the package first cannot redirect data by setting it later. That matters for
+#: inspection tooling: building the app runs the schema migrations, so a tool
+#: that merely wants the route table would otherwise migrate the operator's real
+#: state database. This variable is read on every access, so such a tool can
+#: point the app store at a temporary file for the duration of its run.
+APP_DB_ENV = "MEGATOOL_APP_DB"
 
 
 @dataclass(slots=True)
@@ -55,7 +74,16 @@ class Paths:
 
     @property
     def app_db(self) -> Path:
-        """SQLite database: application state, watchlists, portfolio, journal."""
+        """SQLite database: application state, watchlists, portfolio, journal.
+
+        ``MEGATOOL_APP_DB`` may redirect this to another file. Read-only
+        inspection tooling sets it to a temporary path so that building the app
+        (which initialises the schema) can never migrate or write the operator's
+        real state database.
+        """
+        override = os.getenv(APP_DB_ENV, "").strip()
+        if override:
+            return Path(override).expanduser()
         return self.processed / "megatool_state.sqlite"
 
     @property

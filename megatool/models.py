@@ -25,6 +25,7 @@ class DataSource(StrEnum):
 
     GITHUB_NEPSE_DATA = "github.com/Aabishkar2/nepse-data"
     NEPALSTOCK_OFFICIAL = "nepalstock.com/api/nots"
+    GONEPSE = "go-nepse (github.com/voidarchive/go-nepse)"
     LOCAL_IMPORT = "local-file-import"
     SYNTHETIC_TEST = "SYNTHETIC-TEST-FIXTURE"
 

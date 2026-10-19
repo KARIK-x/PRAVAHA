@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
+from datetime import date as _date
 from typing import Any
+
+from megatool.backtest import get_fee_schedule, side_transaction_costs
 
 
 class PlanError(ValueError):
@@ -157,6 +160,183 @@ def position_size(
         rounded_down=units < raw_units,
         warning=warning,
     )
+
+
+def entry_cost_estimate(
+    value: float, on_date: str | None = None, schedule_name: str = "official-2083-84"
+) -> dict[str, Any]:
+    """What ONE buy-side order of ``value`` NPR would cost under the verified
+    schedule — the same engine the backtester uses (C3/D-y, one fee engine).
+
+    Returns the component breakdown plus an explicit note. This is an
+    ESTIMATE for planning: the real contract note is the broker's. ``on_date``
+    defaults to today so the commission table honours the 2024-05-14
+    revision; no capital-gains tax is included because a buy has none.
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError) as exc:
+        raise PlanError("value must be a number") from exc
+    if not math.isfinite(v) or v <= 0:
+        raise PlanError(f"value must be a finite number > 0, got {value!r}")
+    if on_date is None:
+        on_date = _date.today().isoformat()
+    try:
+        schedule = get_fee_schedule(schedule_name)
+    except KeyError as exc:
+        raise PlanError(str(exc)) from None
+    costs = side_transaction_costs(v, "buy", on_date, schedule)
+    return {
+        **costs.to_dict(),
+        "schedule": schedule_name,
+        "on_date": on_date,
+        "note": (
+            "Buy-side estimate from the verified schedule: tiered broker "
+            "commission (minimum NPR 10) plus the SEBON charge; no DP charge "
+            "(sell side only) and no capital-gains tax (a buy is not a "
+            "disposal). An estimate for planning — the broker's contract note "
+            "is authoritative."
+        ),
+    }
+
+
+def constraint_check(
+    *,
+    symbol: str | None,
+    entry: float,
+    sizing: PositionSizing | None = None,
+    current_units: int = 0,
+    current_price: float | None = None,
+    current_price_date: str | None = None,
+    valued_total: float = 0.0,
+    open_positions: int = 0,
+    unvalued_positions: int = 0,
+    max_weight_pct: float = 40.0,
+) -> dict[str, Any]:
+    """Check a planned trade against the owner's local portfolio (feature 11).
+
+    Pure arithmetic over caller-supplied figures - no I/O here. Every weight
+    that cannot be computed states its reason instead of being approximated:
+
+    * the current weight is position value (units x latest **stored** close)
+      over the valued portfolio total;
+    * the post-trade weight adds ``sizing.units`` at the **entry** price to
+      both the position and the denominator, under an explicitly stated
+      funding assumption (the ledger models no cash, so a purchase funded by
+      selling another position must be rechecked after that sale);
+    * a held position with no usable stored price leaves both weights
+      unchecked rather than inventing a price.
+
+    This is arithmetic, never advice, and it never places or prepares an order.
+    """
+    if not math.isfinite(max_weight_pct) or not 0 < max_weight_pct <= 100:
+        raise PlanError(f"max_weight_pct must be in (0, 100], got {max_weight_pct}")
+
+    sym = symbol.upper().strip() if symbol and symbol.strip() else None
+    price_ok = current_price is not None and math.isfinite(current_price) and current_price > 0
+
+    # ------------------------------------------------------------ current
+    current_value: float | None = None
+    current_weight: float | None = None
+    if current_units > 0:
+        if not price_ok:
+            current_weight_reason = (
+                f"no usable stored close for {sym or 'the held symbol'}: the "
+                "position's weight cannot be computed without inventing a price"
+            )
+        elif valued_total <= 0:
+            current_weight_reason = (
+                "the valued portfolio total is 0 while this position is held: "
+                "no denominator to take a share of"
+            )
+        else:
+            current_value = current_units * float(current_price)
+            current_weight = current_value / valued_total * 100.0
+            current_weight_reason = None
+    else:
+        current_weight_reason = None
+    current = {
+        "units": int(current_units),
+        "price": current_price if price_ok else None,
+        "price_date": current_price_date,
+        "value": None if current_value is None else round(current_value, 2),
+        "weight_pct": None if current_weight is None else round(current_weight, 4),
+        "weight_reason": current_weight_reason if current_units > 0 else None,
+    }
+
+    # ---------------------------------------------------------- post-trade
+    post: dict[str, Any] = {
+        "checked": False,
+        "reason": None,
+        "units": None,
+        "value_at_entry": None,
+        "weight_pct": None,
+        "within_limit": None,
+    }
+    if sizing is None:
+        post["reason"] = (
+            "position sizing not requested: supply capital and risk_pct to "
+            "check a post-trade weight"
+        )
+    elif current_units > 0 and not price_ok:
+        post["reason"] = (
+            f"cannot check the post-trade weight: {sym or 'the symbol'} is "
+            "held but has no usable stored close, and the pre-existing shares "
+            "would be missing from the denominator"
+        )
+    else:
+        total_units = int(current_units) + int(sizing.units)
+        post_value = total_units * entry
+        denominator = valued_total + sizing.units * entry
+        if denominator <= 0:
+            post["reason"] = "the denominator is zero: no share to compute a share of"
+        else:
+            weight = post_value / denominator * 100.0
+            post.update(
+                {
+                    "checked": True,
+                    "units": total_units,
+                    "value_at_entry": round(post_value, 2),
+                    "weight_pct": round(weight, 4),
+                    "within_limit": weight <= max_weight_pct,
+                    "funded_by": (
+                        "assumes units x entry of NEW capital enters the "
+                        "portfolio at purchase; cash is not modelled, so a "
+                        "purchase funded by selling another position must be "
+                        "rechecked after that sale"
+                    ),
+                }
+            )
+
+    warnings: list[str] = []
+    if sizing is not None and sizing.warning:
+        warnings.append(sizing.warning)
+    if unvalued_positions:
+        warnings.append(
+            f"{unvalued_positions} position(s) have no usable stored price: "
+            "the denominator counts valued positions only, so the true "
+            "post-trade weight may differ from the figure above."
+        )
+    warnings.append(
+        "Weights are arithmetic over stored data (latest stored close / your "
+        "entry price), not advice; cash balances are not modelled."
+    )
+
+    return {
+        "symbol": sym,
+        "checked": post["checked"],
+        "current": current,
+        "post_trade": post,
+        "limit": {
+            "max_weight_pct": round(float(max_weight_pct), 4),
+            "breach": (not post["within_limit"]) if post["checked"] else None,
+        },
+        "diversification": {
+            "open_positions": int(open_positions),
+            "symbol_already_held": (current_units > 0) if sym else None,
+        },
+        "warnings": warnings,
+    }
 
 
 def plan_outcome(entry: float, stop: float, target: float, exit_price: float) -> dict[str, Any]:

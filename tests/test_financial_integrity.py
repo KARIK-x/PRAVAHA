@@ -507,10 +507,13 @@ def test_overselling_is_refused_and_the_ledger_is_left_alone(db):
 
 
 def test_valuation_discloses_that_cash_is_not_modelled(db, tmp_path):
-    """PARTIAL: there is no cash account in this build.
+    """PARTIAL: there is still no cash *account* in this build.
 
-    The summary must say so rather than implying the ledger total is a
-    portfolio value. Portfolio cash is a documented gap (KNOWN_BUGS / TASK_QUEUE).
+    A trade-derived cash-flow view now exists (``cash_flows`` and the
+    ``cash_flow`` block in the valuation), but it is the recorded trades' net
+    effect, not a balance: deposits, withdrawals and dividends are not recorded.
+    The summary must keep saying so rather than implying the ledger total is a
+    portfolio value.
     """
     for tx in LEDGER[:2]:
         add_transaction(tx, db_path=db)

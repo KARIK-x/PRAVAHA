@@ -13,6 +13,35 @@
 | Orientation | Mixed: pages 1-25 landscape (842×595 pt), pages 26-52 portrait (595×842 pt) |
 | OCR tool | tesseract 5.5.0 (eng/osd/snum) via PyMuPDF 1.28.2 rendering at 300 DPI |
 
+### Source-document provenance — **RESOLVED 2026-10-13 (no owner input needed)**
+
+The digitized workbook `Written_Data_All_52_Pages_Digitized.xlsx` cites its source as
+**`WRITTENdata(1).pdf`**, a filename that does not exist in the project or anywhere in
+`~/Downloads`. That looked like a provenance gap, so it was investigated rather than
+assumed away. It is **not** a gap.
+
+| Evidence | Result |
+| --- | --- |
+| Exhaustive search (`find` across project + `~/Downloads`, plus macOS Spotlight `mdfind`) | **`WRITTENdata.pdf` is the only such file that exists** — no `(1)` variant |
+| Page count of `WRITTENdata.pdf` | **52** — Spotlight metadata (`kMDItemNumberOfPages = 52`) *and* the raw PDF page tree (`/Count 52`), *and* the table above |
+| File size | **7,281,475 bytes**, matching this audit's own record exactly |
+| Content of the derivative workbook | **52 embedded page images** and **52 `Page NN` sheets** — a 1:1 match for the 52 pages |
+| Source named by the *authoritative* workbook | `Written_Data_Full_Transcription.xlsx` states **`WRITTENdata.pdf (52 pages, authoritative)`**, and describes the All_52 workbook as *"preliminary, NOT verified"* — i.e. a **derivative**, not a separate source |
+| Origin of the filename | This audit records that `WRITTENdata.pdf` was **moved from** `~/Downloads/AI Trading Nipsy/Written Data.pdf`; that `AI Trading Nipsy/` folder still exists in the project |
+
+**Conclusion.** `WRITTENdata(1).pdf` is a stale reference to the same document — the
+`(1)` suffix is the standard browser/OS duplicate-download naming artefact, picked up
+when a second copy was fetched after the file had already been moved and renamed.
+
+> **Canonical working reference: `WRITTENdata.pdf`.** SHA-256
+> `d7ea6fe42ad3427fc12b8b19deb6078d3b02446ae3c460d314595be254a4491d`, unmodified and
+> never committed.
+
+The `(1)` string inside the All_52 workbook is **deliberately left untouched**: it is
+original provenance metadata, and rewriting a digitized source document to tidy up a
+label would destroy the very evidence this finding rests on.
+
+
 ## OCR result
 
 Automated OCR was run on all 52 pages. **It failed for 42 of 52 pages** (empty or

@@ -10,6 +10,7 @@ from megatool.ta.core import (
     ema,
     register,
     rolling_mean,
+    rolling_sum,
     shift,
 )
 
@@ -26,7 +27,10 @@ from megatool.ta.core import (
         reference="J. Welles Wilder, New Concepts in Technical Trading Systems (1978).",
         formula="change = diff(close); avg_gain/loss = Wilder smooth; "
         "RS = avg_gain/avg_loss; RSI = 100 - 100/(1+RS)",
-        notes="Wilder smoothing (alpha = 1/period), not a plain moving average.",
+        notes="Wilder smoothing (alpha = 1/period), not a plain moving average. "
+        "A series that never moves has RS = 0/0, which is undefined: RSI is "
+        "left as NaN and reported as insufficient_data rather than being "
+        "given a directional value.",
     )
 )
 def rsi(data: dict[str, np.ndarray], period: int = 14) -> IndicatorResult:
@@ -57,10 +61,29 @@ def rsi(data: dict[str, np.ndarray], period: int = 14) -> IndicatorResult:
     with np.errstate(divide="ignore", invalid="ignore"):
         rs = avg_gain / avg_loss
         out = 100.0 - 100.0 / (1.0 + rs)
-    # No losses at all -> RSI is 100 by definition.
-    out[(avg_loss == 0) & ~np.isnan(avg_loss)] = 100.0
-    # No gains at all -> RSI is 0.
-    out[(avg_gain == 0) & ~np.isnan(avg_gain) & (avg_loss > 0)] = 0.0
+    # No losses at all -> RSI is 100 by definition. The `avg_gain > 0` guard is
+    # load-bearing: when BOTH averages are zero the series never moved, RS =
+    # 0/0 is undefined, and the NaN already produced by the division above is
+    # deliberately kept. Without the guard a flat series was reported as 100 -
+    # a claim of maximum bullish momentum that the data does not support.
+    out[(avg_loss == 0) & (avg_gain > 0)] = 100.0
+    # No gains at all -> RSI is 0 by definition.
+    out[(avg_gain == 0) & (avg_loss > 0)] = 0.0
+    # Neither branch fires when both averages are zero, so a series that never
+    # moved stays NaN. If that leaves nothing defined at all, report it as
+    # insufficient data rather than a silent row of NaNs.
+    if np.isnan(out).all():
+        return IndicatorResult(
+            name="rsi",
+            params={},
+            values={"rsi": out},
+            insufficient_data=True,
+            message=(
+                f"rsi({period}) is undefined for this series: the price never "
+                "moved, so average gains and average losses are both zero and "
+                "RS = 0/0 has no value"
+            ),
+        )
     return IndicatorResult(name="rsi", params={}, values={"rsi": out})
 
 
@@ -172,6 +195,7 @@ def cci(data: dict[str, np.ndarray], period: int = 20) -> IndicatorResult:
         warmup=lambda p: p["period"],
         reference="Standard momentum measure.",
         formula="ROC[t] = 100 * (close[t] - close[t-n]) / close[t-n]",
+        notes="Percentage change over n bars. A zero base price is not guarded; use on series that never touch zero.",
     )
 )
 def roc(data: dict[str, np.ndarray], period: int = 12) -> IndicatorResult:
@@ -193,6 +217,7 @@ def roc(data: dict[str, np.ndarray], period: int = 12) -> IndicatorResult:
         warmup=lambda p: p["period"],
         reference="Standard momentum measure.",
         formula="MOM[t] = close[t] - close[t-n]",
+        notes="Absolute price change over n bars. Unlike ROC, the result is in price units, so it scales with the instrument.",
     )
 )
 def momentum(data: dict[str, np.ndarray], period: int = 10) -> IndicatorResult:
@@ -308,3 +333,148 @@ def ichimoku(
             "senkou_b": sb,
         },
     )
+
+
+@register(
+    IndicatorMeta(
+        name="stochastic_rsi",
+        label="Stochastic RSI",
+        category="momentum",
+        params={"rsi_period": 14, "stoch_period": 14},
+        inputs=("close",),
+        outputs=("stoch_rsi",),
+        warmup=lambda p: p["rsi_period"] + p["stoch_period"] - 1,
+        reference="Tushar Chande & Stanley Kroll, The New Technical Trader (1994).",
+        formula="StochRSI[t] = 100 * (RSI[t] - min(RSI, stoch_period)) "
+        "/ (max(RSI, stoch_period) - min(RSI, stoch_period))",
+        notes="A stochastic of the RSI series, bounded 0-100 when defined. If the RSI "
+        "is flat over the window the range is 0/0 and the value stays NaN.",
+    )
+)
+def stochastic_rsi(
+    data: dict[str, np.ndarray], rsi_period: int = 14, stoch_period: int = 14
+) -> IndicatorResult:
+    n = len(data["close"])
+    out = np.full(n, np.nan)
+    rsi_v = rsi(data, rsi_period).values["rsi"]
+    if n < rsi_period + stoch_period - 1:
+        return IndicatorResult(
+            name="stochastic_rsi",
+            params={},
+            values={"stoch_rsi": out},
+            insufficient_data=True,
+            message=(
+                f"stochastic_rsi needs at least {rsi_period + stoch_period - 1} bars, got {n}"
+            ),
+        )
+    for i in range(rsi_period + stoch_period - 2, n):
+        w = rsi_v[i - stoch_period + 1 : i + 1]
+        if np.any(np.isnan(w)):
+            continue
+        lo, hi = float(np.min(w)), float(np.max(w))
+        if hi == lo:
+            continue
+        out[i] = 100.0 * (float(rsi_v[i]) - lo) / (hi - lo)
+    return IndicatorResult(name="stochastic_rsi", params={}, values={"stoch_rsi": out})
+
+
+@register(
+    IndicatorMeta(
+        name="ppo",
+        label="Percentage Price Oscillator",
+        category="momentum",
+        params={"fast": 12, "slow": 26, "signal": 9},
+        inputs=("close",),
+        outputs=("ppo", "signal", "histogram"),
+        warmup=lambda p: p["slow"] + p["signal"] - 2,
+        output_warmup={
+            "ppo": lambda p: p["slow"] - 1,
+            "signal": lambda p: p["slow"] + p["signal"] - 2,
+            "histogram": lambda p: p["slow"] + p["signal"] - 2,
+        },
+        reference="Gerald Appel: the MACD expressed as a percentage of the slow EMA.",
+        formula="PPO = 100*(EMA(fast) - EMA(slow))/EMA(slow); signal = EMA(PPO, signal)",
+        notes="Percentage form, so price level does not distort the reading.",
+    )
+)
+def ppo(
+    data: dict[str, np.ndarray], fast: int = 12, slow: int = 26, signal: int = 9
+) -> IndicatorResult:
+    c = data["close"]
+    if fast >= slow:
+        raise ValueError(f"ppo: fast ({fast}) must be < slow ({slow})")
+    e_fast, e_slow = ema(c, fast), ema(c, slow)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        line = 100.0 * (e_fast - e_slow) / e_slow
+    sig = ema(line, signal)
+    return IndicatorResult(
+        name="ppo", params={}, values={"ppo": line, "signal": sig, "histogram": line - sig}
+    )
+
+
+@register(
+    IndicatorMeta(
+        name="cmo",
+        label="Chande Momentum Oscillator",
+        category="momentum",
+        params={"period": 14},
+        inputs=("close",),
+        outputs=("cmo",),
+        warmup=lambda p: p["period"],
+        reference="Tushar Chande, The New Technical Trader (1994).",
+        formula="CMO = 100*(sum_up - sum_down)/(sum_up + sum_down) over absolute price changes",
+        notes="Bounded -100..100. Every change enters as a magnitude, so a flat "
+        "window is 0/0 and stays NaN rather than being forced to 0.",
+    )
+)
+def cmo(data: dict[str, np.ndarray], period: int = 14) -> IndicatorResult:
+    c = data["close"]
+    n = len(c)
+    out = np.full(n, np.nan)
+    if n < period + 1:
+        return IndicatorResult(
+            name="cmo",
+            params={},
+            values={"cmo": out},
+            insufficient_data=True,
+            message=f"cmo({period}) needs at least {period + 1} bars, got {n}",
+        )
+    delta = np.diff(c)
+    delta = np.concatenate(([np.nan], delta))
+    up = np.where(delta > 0, delta, 0.0)
+    dn = np.where(delta < 0, -delta, 0.0)
+    up = np.where(np.isnan(delta), np.nan, up)
+    dn = np.where(np.isnan(delta), np.nan, dn)
+    su = rolling_sum(up, period)
+    sd = rolling_sum(dn, period)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out = 100.0 * (su - sd) / (su + sd)
+    return IndicatorResult(name="cmo", params={}, values={"cmo": out})
+
+
+@register(
+    IndicatorMeta(
+        name="tsi",
+        label="True Strength Index",
+        category="momentum",
+        params={"long": 25, "short": 13},
+        inputs=("close",),
+        outputs=("tsi",),
+        warmup=lambda p: p["long"] + p["short"] - 1,
+        reference="William Blau, Momentum, Direction and Divergence (1995).",
+        formula="TSI = 100 * EMA(EMA(change, long), short) / EMA(EMA(|change|, long), short)",
+        notes="Double-smoothed momentum over its double-smoothed absolute value; "
+        "bounded -100..100 where the denominator is non-zero.",
+    )
+)
+def tsi(data: dict[str, np.ndarray], long: int = 25, short: int = 13) -> IndicatorResult:
+    c = data["close"]
+    m = np.diff(c)
+    m = np.concatenate(([np.nan], m))
+    am = np.abs(m)
+    num = ema(ema(m, long), short)
+    den = ema(ema(am, long), short)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out = 100.0 * num / den
+    out = np.where(den == 0, np.nan, out)
+    return IndicatorResult(name="tsi", params={}, values={"tsi": out})

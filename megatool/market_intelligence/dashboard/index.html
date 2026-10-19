@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>NEPSE Market Intelligence</title>
+<style>
+  :root { --bg:#0f141a; --panel:#171e26; --line:#26313d; --txt:#dbe4ec;
+          --dim:#8ba0b3; --accent:#3fa7ff; --pos:#37c978; --neg:#f25d5d; --warn:#e5b75c; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:-apple-system,Segoe UI,Roboto,'Noto Sans Devanagari',sans-serif;
+         background:var(--bg); color:var(--txt); }
+  header { padding:16px 20px; border-bottom:1px solid var(--line);
+           display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:18px; }
+  header .sub { color:var(--dim); font-size:12px; }
+  nav { display:flex; gap:6px; padding:10px 20px; border-bottom:1px solid var(--line);
+        overflow-x:auto; }
+  nav button { background:var(--panel); color:var(--dim); border:1px solid var(--line);
+        padding:10px 16px; min-height:44px; border-radius:8px; font-size:14px;
+        cursor:pointer; white-space:nowrap; }
+  nav button.active { color:var(--txt); border-color:var(--accent); }
+  main { padding:16px 20px; max-width:1200px; margin:0 auto; }
+  .cards { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .card .v { font-size:26px; font-weight:600; }
+  .card .k { color:var(--dim); font-size:12px; margin-top:4px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; margin-top:12px; }
+  th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-weight:500; }
+  a { color:var(--accent); }
+  .tag { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px;
+         border:1px solid var(--line); }
+  .pos { color:var(--pos);} .neg { color:var(--neg);} .warn { color:var(--warn);}
+  input,select { background:var(--panel); color:var(--txt); border:1px solid var(--line);
+        border-radius:8px; padding:10px 12px; font-size:14px; min-height:44px; }
+  .filters { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+  .note { color:var(--dim); font-size:12px; margin-top:16px; }
+  .err { color:var(--neg); padding:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>NEPSE Market Intelligence Engine</h1>
+  <span class="sub">local research instance — data as collected; nothing here is investment advice</span>
+</header>
+<nav id="nav"></nav>
+<main id="view"><p class="note">Loading…</p></main>
+<script>
+const VIEWS = [
+  ["overview","Overview"], ["news","News Explorer"], ["entities","Companies"],
+  ["events","Events"], ["sources","Source Monitor"], ["models","Models"], ["jobs","Jobs"]
+];
+let state = {view:"overview"};
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+async function api(path){ const r = await fetch(path); if(!r.ok) throw new Error(r.status); return r.json(); }
+
+function nav(){
+  $("#nav").innerHTML = VIEWS.map(([id,label]) =>
+    `<button data-v="${id}" class="${state.view===id?'active':''}">${label}</button>`).join("");
+  document.querySelectorAll("nav button").forEach(b => b.onclick = () => { state.view = b.dataset.v; render(); });
+}
+
+function fmtSent(s){ return s==="positive"?"<span class='pos'>positive</span>":
+  s==="negative"?"<span class='neg'>negative</span>":esc(s); }
+
+async function render(){
+  nav();
+  const v = $("#view");
+  try {
+    if (state.view==="overview"){
+      const h = await api("/health");
+      const ev = await api("/events?limit=5");
+      const art = await api("/articles?limit=8");
+      v.innerHTML = `<div class="cards">` + Object.entries(h.counts).map(([k,n]) =>
+        `<div class="card"><div class="v">${n}</div><div class="k">${k}</div></div>`).join("") + `</div>
+        <h3 style="margin-top:18px">Latest events</h3><table>
+        <tr><th>Type</th><th>Title</th><th>Status</th><th>Sources</th></tr>` +
+        ev.items.map(e => `<tr><td>${esc(e.event_type)}</td><td>${esc(e.event_title)}</td>
+          <td>${esc(e.confirmation_status)}</td><td>${e.distinct_source_count}</td></tr>`).join("") + `</table>
+        <h3 style="margin-top:18px">Latest articles</h3><table>
+        <tr><th>Title</th><th>Source</th><th>Lang</th><th>Published (UTC)</th></tr>` +
+        art.items.map(a => `<tr><td><a href="/articles/${a.article_id}" target="_blank">${esc(a.title)}</a></td>
+          <td>${esc(a.source_id)}</td><td>${esc(a.language)}</td><td>${esc(a.published_at)}</td></tr>`).join("") + `</table>
+        <p class="note">Counts reflect only what has actually been collected into this database.</p>`;
+    }
+    else if (state.view==="news"){
+      v.innerHTML = `<div class="filters">
+        <input id="q" placeholder="Search title/body…" style="flex:1;min-width:200px">
+        <select id="lang"><option value="">any language</option><option>en</option><option>ne</option>
+        <option>ne_roman</option><option>mixed</option></select>
+        <button class="active" id="go" style="min-height:44px">Search</button></div><div id="res"></div>`;
+      const run = async () => {
+        const q = encodeURIComponent($("#q").value), l = $("#lang").value;
+        const d = await api(`/articles?q=${q}&limit=50${l?`&language=${l}`:""}`);
+        $("#res").innerHTML = `<table><tr><th>Title</th><th>Source</th><th>Lang</th><th>Published</th></tr>` +
+          d.items.map(a => `<tr><td><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.title)}</a></td>
+          <td>${esc(a.source_id)}</td><td>${esc(a.language)}</td><td>${esc(a.published_at)}</td></tr>`).join("") + "</table>";
+      };
+      $("#go").onclick = run; run();
+    }
+    else if (state.view==="entities"){
+      const d = await api("/entities?limit=200");
+      v.innerHTML = `<table><tr><th>Ticker</th><th>Name</th><th>Sector</th><th>Status</th></tr>` +
+        d.items.map(e => `<tr><td>${esc(e.ticker)}</td><td>${esc(e.official_name)}</td>
+        <td>${esc(e.sector)}</td><td>${esc(e.verification_status)}</td></tr>`).join("") + "</table>";
+    }
+    else if (state.view==="events"){
+      const d = await api("/events?limit=50");
+      v.innerHTML = d.items.length ? `<table><tr><th>Type</th><th>Title</th><th>First observed</th><th>Confirmation</th><th>Sources</th></tr>` +
+        d.items.map(e => `<tr><td>${esc(e.event_type)}</td><td>${esc(e.event_title)}</td>
+        <td>${esc(e.first_observed_time)}</td><td>${esc(e.confirmation_status)}</td>
+        <td>${e.distinct_source_count}</td></tr>`).join("") + "</table>"
+        : `<p class="note">No events clustered yet — collect articles first (collect command), then run clustering.</p>`;
+    }
+    else if (state.view==="sources"){
+      const d = await api("/sources?limit=200");
+      v.innerHTML = `<table><tr><th>Group</th><th>Name</th><th>Domain</th><th>Status</th><th>RSS</th><th>Last fetch</th></tr>` +
+        d.items.map(s => `<tr><td>${esc(s.source_group)}</td><td>${esc(s.source_name)}</td>
+        <td><a href="https://${esc(s.primary_domain)}" target="_blank" rel="noopener">${esc(s.primary_domain)}</a></td>
+        <td>${esc(s.automated_access_status)}</td><td>${s.rss_url?"yes":"—"}</td>
+        <td>${esc(s.last_successful_fetch_at)}</td></tr>`).join("") + "</table>";
+    }
+    else if (state.view==="models"){
+      const d = await api("/models");
+      const ev = await api("/analysis/model-evaluations");
+      v.innerHTML = `<h3>Model registry</h3><table><tr><th>Model</th><th>Version</th><th>Status</th></tr>` +
+        d.items.map(m => `<tr><td>${esc(m.model_id)}</td><td>${esc(m.model_version)}</td>
+        <td>${esc(m.status)}</td></tr>`).join("") + `</table><h3 style="margin-top:16px">Evaluations</h3>` +
+        (ev.items.length ? `<table><tr><th>Model</th><th>Dataset</th><th>Metrics</th></tr>` +
+          ev.items.map(m => `<tr><td>${esc(m.model_id)}:${esc(m.model_version)}</td><td>${esc(m.dataset_name)}</td>
+          <td><code>${esc(m.metrics)}</code></td></tr>`).join("") + "</table>"
+          : `<p class="note">No evaluations recorded yet — run the evaluate command.</p>`);
+    }
+    else if (state.view==="jobs"){
+      const d = await api("/jobs?limit=50");
+      v.innerHTML = `<table><tr><th>Job</th><th>Source</th><th>Status</th><th>Fetched</th><th>New</th><th>Error</th></tr>` +
+        d.items.map(j => `<tr><td>${esc(j.job_type)}</td><td>${esc(j.source_id)}</td>
+        <td class="${j.status==='failed'?'neg':''}">${esc(j.status)}</td>
+        <td>${j.records_fetched}</td><td>${j.records_new}</td><td>${esc(j.error)}</td></tr>`).join("") + "</table>";
+    }
+  } catch(e){
+    v.innerHTML = `<p class="err">API error: ${esc(e.message)} — is the API server running?</p>`;
+  }
+}
+render();
+</script>
+</body>
+</html>

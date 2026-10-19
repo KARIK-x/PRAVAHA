@@ -18,6 +18,8 @@ from megatool.ta.swings import (
     Swing,
     SwingError,
     classify_structure,
+    detect_equal_highs_lows,
+    detect_fvgs,
     find_breaks,
     find_swings,
 )
@@ -234,3 +236,67 @@ def test_bearish_break_below_a_confirmed_swing_low():
     breaks = find_breaks(swings, close)
     assert breaks and breaks[0]["direction"] == "bearish"
     assert breaks[0]["index"] == 9
+
+
+# ------------------------------------------------------------------ new Phase B.1
+
+
+def test_detect_fvg_bullish():
+    highs = [10, 11, 12, 13, 14]
+    lows = [9, 10, 11, 12, 13]
+    # bar 2: low[2]=11 > high[0]=10 -> bullish FVG top=11 bottom=10
+    fvgs = detect_fvgs(highs, lows)
+    assert any(f["type"] == "bullish" for f in fvgs)
+    b = [f for f in fvgs if f["type"] == "bullish"][0]
+    assert b["top"] == 11 and b["bottom"] == 10
+    assert b["confirmed_index"] == b["index"]
+
+
+def test_detect_fvg_bearish():
+    highs = [14, 13, 12, 11, 10]
+    lows = [13, 12, 11, 10, 9]
+    # bar 2: high[2]=12 < low[0]=13 -> bearish FVG
+    fvgs = detect_fvgs(highs, lows)
+    assert any(f["type"] == "bearish" for f in fvgs)
+
+
+def test_detect_fvg_no_gap():
+    # Flat bars: no 3-bar imbalance.
+    highs = [5.0, 5.0, 5.0, 5.0, 5.0]
+    lows = [4.0, 4.0, 4.0, 4.0, 4.0]
+    fvgs = detect_fvgs(highs, lows)
+    assert fvgs == []
+
+
+def test_detect_fvg_shape_mismatch_raises():
+    import pytest
+
+    with pytest.raises(SwingError):
+        detect_fvgs([1, 2, 3], [1, 2])
+
+
+def test_detect_equal_highs_lows_basic():
+    from megatool.ta.swings import Swing
+
+    s1 = Swing(index=2, kind="high", price=100.0, confirmed_index=4, confirmed=True)
+    s2 = Swing(index=8, kind="high", price=100.05, confirmed_index=10, confirmed=True)
+    res = detect_equal_highs_lows([s1, s2], tolerance=0.001)
+    assert len(res) == 1
+    assert res[0]["kind"] == "equal_high"
+    assert res[0]["relative_diff"] <= 0.001
+
+
+def test_detect_equal_highs_lows_none_when_far():
+    from megatool.ta.swings import Swing
+
+    s1 = Swing(index=2, kind="high", price=100.0, confirmed_index=4, confirmed=True)
+    s2 = Swing(index=8, kind="high", price=110.0, confirmed_index=10, confirmed=True)
+    res = detect_equal_highs_lows([s1, s2], tolerance=0.001)
+    assert res == []
+
+
+def test_detect_equal_highs_lows_negative_tolerance_raises():
+    import pytest
+
+    with pytest.raises(SwingError):
+        detect_equal_highs_lows([], tolerance=-0.1)

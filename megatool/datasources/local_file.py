@@ -12,8 +12,10 @@ an exchange feed.
 SUPPORTED LAYOUTS
 -----------------
 * ``symbol`` column present -> multi-symbol file.
-* no ``symbol`` column -> single-symbol file; the symbol is supplied by the
-  caller (or inferred from the filename).
+* no ``symbol`` column -> single-symbol file; the symbol must be supplied by
+  the caller (``--symbol``). It is deliberately NOT inferred from the
+  filename: guessing an identity from a filename would silently attribute
+  real trades to the wrong scrip.
 
 Column aliases cover the common NEPSE export spellings.
 """
@@ -43,7 +45,15 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "open": ("open", "opening", "open price", "l_open", "open价"),
     "high": ("high", "high price", "l_high", "max"),
     "low": ("low", "low price", "l_low", "min"),
-    "close": ("close", "closing", "close price", "l_close", "last", "closing price"),
+    "close": (
+        "close",
+        "closing",
+        "close price",
+        "l_close",
+        "last",
+        "closing price",
+        "ltp",  # NEPSE's standard "Last Traded Price" export header
+    ),
     "volume": (
         "volume",
         "traded_quantity",

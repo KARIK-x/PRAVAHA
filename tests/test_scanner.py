@@ -17,6 +17,7 @@ from megatool.scanner import (
     ScreenNode,
     ScreenResult,
     _metric_value,
+    evaluate_condition,
     run_screen,
     to_dataframe,
 )
@@ -128,6 +129,32 @@ def test_rsi_bounds(store):
         assert v is None or 0.0 <= v <= 100.0
 
 
+def test_flat_symbol_reports_rsi_as_unavailable_not_overbought():
+    """A never-moved symbol must not masquerade as maximally bullish.
+
+    Before the engine fix this returned 100, so an ``rsi > 70`` screen would
+    have matched every flat symbol.
+    """
+    n = 40
+    flat = pd.DataFrame(
+        {
+            "trading_date": pd.date_range("2026-01-01", periods=n, freq="D"),
+            "open": np.full(n, 50.0),
+            "high": np.full(n, 50.0),
+            "low": np.full(n, 50.0),
+            "close": np.full(n, 50.0),
+            "volume": np.full(n, 1000.0),
+        }
+    )
+    assert _metric_value("rsi", flat) is None
+
+    ok, note = evaluate_condition(
+        ScreenCondition.from_dict({"metric": "rsi", "operator": "gt", "value": 70}), flat
+    )
+    assert ok is None  # ineligible, not a false pass
+    assert "unavailable" in note
+
+
 def test_unknown_metric_raises(store):
     with pytest.raises(ValueError, match="unknown metric"):
         _metric_value("definitely_not_a_metric", store.get_bars("ASC"))
@@ -168,6 +195,51 @@ def test_or_requires_any_condition(store):
     res = {r.symbol: r for r in run_screen(store, node)}
     assert res["DROP"].passed is True
     assert res["ASC"].passed is False
+
+
+def test_and_screen_is_ineligible_when_a_required_metric_is_unavailable(store):
+    """A missing metric must not silently qualify a security.
+
+    FLAT never moved, so its RSI is unavailable. Before the fix the AND gate
+    returned ``passed=True`` because it evaluated only ``bars_listed`` and
+    dropped the RSI clause entirely — so a flat/illiquid symbol matched an
+    oversold screen and the reason it shouldn't have was lost.
+    """
+    node = ScreenNode.from_dict(
+        {
+            "op": "AND",
+            "conditions": [
+                {"metric": "rsi", "operator": "lt", "value": 30},
+                {"metric": "bars_listed", "operator": "gte", "value": 30},
+            ],
+        }
+    )
+    res = {r.symbol: r for r in run_screen(store, node)}
+    flat = res["FLAT"]
+    assert flat.eligible is False
+    assert flat.passed is False
+    assert "one or more metrics could not be computed" in flat.note
+    assert "rsi unavailable" in " ".join(flat.failures)
+    # A genuinely computable AND screen is unaffected.
+    assert res["DROP"].eligible is True
+
+
+def test_or_screen_is_ineligible_when_no_clause_is_known_true(store):
+    """An OR whose clauses are all unknown is unknown, not a false pass/fail."""
+    node = ScreenNode.from_dict(
+        {
+            "op": "OR",
+            "conditions": [
+                {"metric": "rsi", "operator": "lt", "value": 30},
+                {"metric": "rsi", "operator": "gt", "value": 70},
+            ],
+        }
+    )
+    res = {r.symbol: r for r in run_screen(store, node)}
+    assert res["FLAT"].eligible is False
+    # A symbol where one OR clause is genuinely true stays eligible.
+    assert res["DROP"].eligible is True
+    assert res["DROP"].passed is True
 
 
 def test_insufficient_history_marked_ineligible_not_failed(store):
@@ -251,6 +323,210 @@ def test_all_metrics_in_help_table():
         "volume_sma_ratio",
         "distance_from_high_52w",
         "distance_from_low_52w",
+        "macd",
+        "macd_signal",
+        "macd_histogram",
+        "macd_cross",
+        "sma_cross",
+        "bollinger_percent_b",
+        "bollinger_bandwidth",
+        "stochastic_k",
+        "stochastic_d",
+        "mfi",
+        "adx",
+        "donchian_position",
+        "donchian_breakout",
+        "turnover_sma_ratio",
         "bars_listed",
+        "relative_strength",
+        "volume_ratio_50",
+        "volume_vs_20d_max",
+        "volume_climax_5_20",
+        "updown_volume_ratio",
+        "obv_pressure_20",
+        "range_compression_20",
+        "pocket_pivot",
     }
     assert known == set(scanner.METRIC_HELP)
+
+
+# ----------------------------------------------------- extended metric coverage
+NEW_METRICS = [
+    "macd",
+    "macd_signal",
+    "macd_histogram",
+    "macd_cross",
+    "sma_cross",
+    "bollinger_percent_b",
+    "bollinger_bandwidth",
+    "stochastic_k",
+    "stochastic_d",
+    "mfi",
+    "adx",
+    "donchian_position",
+    "donchian_breakout",
+    "turnover_sma_ratio",
+]
+
+
+def test_extended_metrics_return_a_number_or_none():
+    n = 120
+    x = np.arange(n, dtype=float)
+    df = _bars("UP", 100 + x * 0.5)
+    for m in NEW_METRICS:
+        v = _metric_value(m, df)
+        assert v is None or isinstance(v, float), m
+    # Discrete cross/breakout metrics must only report the documented codes.
+    assert _metric_value("macd_cross", df) in (-1.0, 0.0, 1.0)
+    assert _metric_value("donchian_breakout", df) in (-1.0, 0.0, 1.0)
+
+
+def test_donchian_breakout_up_is_detected_on_a_new_high():
+    n = 60
+    close = np.concatenate([np.full(n - 1, 100.0), [105.0]])
+    df = _bars("BRK", close)
+    assert _metric_value("donchian_breakout", df) == 1.0
+
+
+def test_donchian_breakout_is_none_without_enough_history():
+    df = _bars("TINY", np.full(10, 100.0))
+    assert _metric_value("donchian_breakout", df) is None
+
+
+@pytest.mark.parametrize("key", sorted(PRESET_SCREENS))
+def test_every_preset_runs_without_error(store, key):
+    """A preset is only useful if it executes; eligibility depends on history."""
+    node = ScreenNode.from_dict(PRESET_SCREENS[key]["tree"])
+    results = run_screen(store, node)
+    assert results
+    assert all(isinstance(r, ScreenResult) for r in results)
+
+
+def test_macd_cross_metric_values_are_documented_codes_only(store):
+    node = ScreenNode.from_dict(PRESET_SCREENS["macd_bullish_cross"]["tree"])
+    # Well-formed and validatable; the point here is the metric contract.
+    assert node.conditions[0].metric == "macd_cross"
+    assert node.conditions[0].operator == "gt"
+
+
+# ------------------------------------------------- volume-scanner metric maths
+VOLUME_METRICS = [
+    "volume_ratio_50",
+    "volume_vs_20d_max",
+    "volume_climax_5_20",
+    "updown_volume_ratio",
+    "obv_pressure_20",
+    "range_compression_20",
+    "pocket_pivot",
+]
+
+
+def test_volume_metrics_return_a_number_or_none():
+    n = 60
+    closes = 100 + np.arange(n, dtype=float)
+    df = _bars("VOLT", closes, volume=np.full(n, 5_000.0))
+    for m in VOLUME_METRICS:
+        v = _metric_value(m, df)
+        assert v is None or isinstance(v, float), m
+
+
+def test_volume_vs_20d_max_is_one_when_today_is_the_biggest():
+    closes = np.full(30, 100.0)
+    vol = np.full(30, 1_000.0)
+    vol[-1] = 5_000.0
+    df = _bars("BIGV", closes, volume=vol)
+    assert _metric_value("volume_vs_20d_max", df) == 1.0
+    vol2 = np.full(30, 1_000.0)
+    vol2[-1] = 500.0
+    df2 = _bars("SMALLV", closes, volume=vol2)
+    assert _metric_value("volume_vs_20d_max", df2) == 0.5
+
+
+def test_volume_climax_is_the_5_bar_spike_ratio():
+    closes = np.full(30, 100.0)
+    vol = np.full(30, 1_000.0)
+    vol[-3] = 3_000.0
+    df = _bars("CLIMAX", closes, volume=vol)
+    # 20-bar mean = (19*1000 + 3000)/20 = 1100; max of last 5 = 3000
+    assert _metric_value("volume_climax_5_20", df) == pytest.approx(3000 / 1100)
+
+
+def test_updown_volume_ratio_counts_only_directed_days():
+    closes = np.array([100.0, 101.0, 101.0, 100.0, 102.0])
+    vols = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+    df = _bars("UD", closes, volume=vols)
+    # lookback=4 pairs: +20 (up), unchanged 30 (excluded), -40 (down), +50 (up)
+    assert _metric_value("updown_volume_ratio", df, lookback=4) == pytest.approx(70 / 40)
+    # No down volume at all -> undefined ratio, not infinity.
+    rising = np.array([100.0, 101.0, 102.0])
+    df2 = _bars("UPONLY", rising, volume=np.array([10.0, 20.0, 30.0]))
+    assert _metric_value("updown_volume_ratio", df2, lookback=2) is None
+
+
+def test_obv_pressure_is_plus_one_on_an_all_up_window():
+    closes = 100 + np.arange(30, dtype=float)
+    df = _bars("OBVUP", closes, volume=np.full(30, 1_000.0))
+    assert _metric_value("obv_pressure_20", df) == pytest.approx(1.0)
+    falling = 200 - np.arange(30, dtype=float)
+    df2 = _bars("OBVDN", falling, volume=np.full(30, 1_000.0))
+    assert _metric_value("obv_pressure_20", df2) == pytest.approx(-1.0)
+
+
+def test_range_compression_uses_the_previous_window():
+    n = 30
+    closes = np.full(n, 100.0)
+    df = _bars("RNG", closes)  # range = 2% of close everywhere
+    # Make today's range half of normal: high-low = 1% of close.
+    df.loc[df.index[-1], "high"] = closes[-1] * 1.005
+    df.loc[df.index[-1], "low"] = closes[-1] * 0.995
+    assert _metric_value("range_compression_20", df) == pytest.approx(0.5)
+
+
+def test_pocket_pivot_requires_up_close_and_dominant_volume():
+    closes = np.array(
+        [
+            100.0,
+            101.0,
+            100.0,
+            101.0,
+            100.0,
+            101.0,
+            100.0,
+            101.0,
+            100.0,
+            101.0,
+            100.0,
+            101.0,
+            100.0,
+            102.0,
+        ]
+    )
+    vols = np.array(
+        [
+            900.0,
+            400.0,
+            700.0,
+            400.0,
+            700.0,
+            400.0,
+            700.0,
+            400.0,
+            700.0,
+            400.0,
+            700.0,
+            400.0,
+            700.0,
+            800.0,
+        ]
+    )
+    # Down days among the prior 10 (indexes 3..12): max down volume = 700.
+    df = _bars("PP", closes, volume=vols)
+    assert _metric_value("pocket_pivot", df) == 1.0  # today up, 800 > 700
+    vols2 = vols.copy()
+    vols2[-1] = 600.0
+    df2 = _bars("PP2", closes, volume=vols2)
+    assert _metric_value("pocket_pivot", df2) == 0.0  # 600 not > 700
+    closes3 = closes.copy()
+    closes3[-1] = 99.0
+    df3 = _bars("PP3", closes3, volume=vols)
+    assert _metric_value("pocket_pivot", df3) == 0.0  # down close

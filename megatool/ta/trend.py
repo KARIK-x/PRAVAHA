@@ -45,6 +45,7 @@ def sma(data: dict[str, np.ndarray], period: int = 20) -> IndicatorResult:
         warmup=lambda p: p["period"] - 1,
         reference="Seeded with SMA of the first `period` values.",
         formula="EMA[t] = EMA[t-1] + 2/(period+1) * (close[t] - EMA[t-1])",
+        notes="Seeded with the SMA of the first `period` values; matches standard references once past warm-up.",
     )
 )
 def ema_ind(data: dict[str, np.ndarray], period: int = 20) -> IndicatorResult:
@@ -63,6 +64,7 @@ def ema_ind(data: dict[str, np.ndarray], period: int = 20) -> IndicatorResult:
         warmup=lambda p: p["period"] - 1,
         reference="Linear weights, most recent observation weighted highest.",
         formula="WMA[t] = sum(i * close[t-period+i]) / sum(1..period), i=1..period",
+        notes="Linear weights 1..period; the most recent bar carries the largest weight.",
     )
 )
 def wma(data: dict[str, np.ndarray], period: int = 20) -> IndicatorResult:
@@ -135,6 +137,7 @@ def _wma_arr(values: np.ndarray, period: int) -> np.ndarray:
         warmup=lambda p: p["period"],
         reference="J. Welles Wilder, New Concepts in Technical Trading Systems (1978).",
         formula="TR = max(H-L, |H-Pc|, |L-Pc|); ATR = Wilder smooth of TR",
+        notes="True range is max(high-low, |high-prevClose|, |low-prevClose|), then Wilder-smoothed. The first `period` bars are warm-up.",
     )
 )
 def atr(data: dict[str, np.ndarray], period: int = 14) -> IndicatorResult:
@@ -289,3 +292,212 @@ def supertrend(
     return IndicatorResult(
         name="supertrend", params={}, values={"supertrend": st, "direction": direction}
     )
+
+
+@register(
+    IndicatorMeta(
+        name="vwma",
+        label="Volume-Weighted Moving Average",
+        category="trend",
+        params={"period": 20},
+        inputs=("close", "volume"),
+        outputs=("vwma",),
+        warmup=lambda p: p["period"] - 1,
+        reference="A simple average whose observations are each weighted by that bar's volume.",
+        formula="VWMA[t] = sum(close[i]*volume[i]) / sum(volume[i]) over i in [t-period+1 .. t]",
+        notes="This is a *rolling* volume-weighted average of bar closes. It is NOT "
+        "session VWAP, which requires trade-level (intraday) data that NEPSE daily "
+        "history does not contain.",
+    )
+)
+def vwma(data: dict[str, np.ndarray], period: int = 20) -> IndicatorResult:
+    c = data["close"]
+    if "volume" not in data:
+        raise ValueError("vwma requires a 'volume' input")
+    v = data["volume"]
+    n = len(c)
+    out = np.full(n, np.nan)
+    if n < period:
+        return IndicatorResult(
+            name="vwma",
+            params={},
+            values={"vwma": out},
+            insufficient_data=True,
+            message=f"vwma({period}) needs at least {period} bars, got {n}",
+        )
+    for i in range(period - 1, n):
+        w = c[i - period + 1 : i + 1]
+        vv = v[i - period + 1 : i + 1]
+        if np.any(np.isnan(w)) or np.any(np.isnan(vv)):
+            continue
+        denom = float(vv.sum())
+        # Zero total volume makes the weighted average 0/0: undefined, not zero.
+        if denom == 0.0:
+            continue
+        out[i] = float(np.dot(w, vv) / denom)
+    if np.isnan(out).all():
+        return IndicatorResult(
+            name="vwma",
+            params={},
+            values={"vwma": out},
+            insufficient_data=True,
+            message="vwma is undefined for this series (no usable volume window)",
+        )
+    return IndicatorResult(name="vwma", params={}, values={"vwma": out})
+
+
+@register(
+    IndicatorMeta(
+        name="dema",
+        label="Double Exponential Moving Average",
+        category="trend",
+        params={"period": 20},
+        inputs=("close",),
+        outputs=("dema",),
+        warmup=lambda p: 2 * (p["period"] - 1),
+        reference="Patrick Mulloy, 1994.",
+        formula="DEMA[t] = 2*EMA(close, p) - EMA(EMA(close, p), p)",
+        notes="Composed EMAs share the core EMA seeding (SMA of the first window).",
+    )
+)
+def dema(data: dict[str, np.ndarray], period: int = 20) -> IndicatorResult:
+    c = data["close"]
+    e1 = ema(c, period)
+    e2 = ema(e1, period)
+    return IndicatorResult(name="dema", params={}, values={"dema": 2.0 * e1 - e2})
+
+
+@register(
+    IndicatorMeta(
+        name="tema",
+        label="Triple Exponential Moving Average",
+        category="trend",
+        params={"period": 20},
+        inputs=("close",),
+        outputs=("tema",),
+        warmup=lambda p: 3 * (p["period"] - 1),
+        reference="Patrick Mulloy, 1994.",
+        formula="TEMA[t] = 3*EMA - 3*EMA(EMA) + EMA(EMA(EMA))",
+        notes="Triple exponential; very fast reaction, larger warm-up than EMA.",
+    )
+)
+def tema(data: dict[str, np.ndarray], period: int = 20) -> IndicatorResult:
+    c = data["close"]
+    e1 = ema(c, period)
+    e2 = ema(e1, period)
+    e3 = ema(e2, period)
+    return IndicatorResult(name="tema", params={}, values={"tema": 3.0 * e1 - 3.0 * e2 + e3})
+
+
+@register(
+    IndicatorMeta(
+        name="kama",
+        label="Kaufman Adaptive Moving Average",
+        category="trend",
+        params={"period": 10, "fast": 2, "slow": 30},
+        inputs=("close",),
+        outputs=("kama",),
+        warmup=lambda p: p["period"] - 1,
+        reference="Perry Kaufman, Trading Systems and Methods (1995/2013).",
+        formula="ER = |change| / volatility; SC = (ER*(fast_sc - slow_sc) + slow_sc)^2; "
+        "KAMA[t] = KAMA[t-1] + SC*(close[t] - KAMA[t-1])",
+        notes="Seeded with the close at the end of the first `period` window. "
+        "A window with zero volatility has ER = 0 by convention (change is then "
+        "necessarily 0 too), never 0/0.",
+    )
+)
+def kama(
+    data: dict[str, np.ndarray], period: int = 10, fast: int = 2, slow: int = 30
+) -> IndicatorResult:
+    c = data["close"]
+    n = len(c)
+    out = np.full(n, np.nan)
+    if n < period:
+        return IndicatorResult(
+            name="kama",
+            params={},
+            values={"kama": out},
+            insufficient_data=True,
+            message=f"kama({period}) needs at least {period} bars, got {n}",
+        )
+    fast_sc = 2.0 / (fast + 1)
+    slow_sc = 2.0 / (slow + 1)
+    out[period - 1] = float(c[period - 1])
+    for i in range(period, n):
+        change = abs(float(c[i]) - float(c[i - period]))
+        # Kaufman's volatility is the sum of the last `period` absolute changes,
+        # i.e. a window of period+1 bars. Using np.diff over only `period` bars
+        # silently drops the most recent change and understates volatility.
+        volatility = float(np.nansum(np.abs(np.diff(c[i - period : i + 1]))))
+        er = 0.0 if volatility == 0.0 else change / volatility
+        sc = (er * (fast_sc - slow_sc) + slow_sc) ** 2
+        prev = out[i - 1]
+        out[i] = prev + sc * (float(c[i]) - prev)
+    return IndicatorResult(name="kama", params={}, values={"kama": out})
+
+
+@register(
+    IndicatorMeta(
+        name="parabolic_sar",
+        label="Parabolic Stop and Reverse",
+        category="trend",
+        params={"step": 0.02, "maximum": 0.2},
+        inputs=("high", "low"),
+        outputs=("sar",),
+        warmup=1,
+        reference="J. Welles Wilder, New Concepts in Technical Trading Systems (1978).",
+        formula="SAR[t] = SAR[t-1] + AF*(EP - SAR[t-1]); AF grows by `step` while the "
+        "extreme point (EP) advances, up to `maximum`; SAR flips side when price "
+        "crosses it.",
+        notes="The first bar has no SAR. In an uptrend the SAR is clamped below the "
+        "prior two lows; in a downtrend it is clamped above the prior two highs.",
+    )
+)
+def parabolic_sar(
+    data: dict[str, np.ndarray], step: float = 0.02, maximum: float = 0.2
+) -> IndicatorResult:
+    high = data["high"]
+    low = data["low"]
+    n = len(high)
+    out = np.full(n, np.nan)
+    if n < 3:
+        return IndicatorResult(
+            name="parabolic_sar",
+            params={},
+            values={"sar": out},
+            insufficient_data=True,
+            message=f"parabolic_sar needs at least 3 bars, got {n}",
+        )
+    uptrend = True
+    af = step
+    sar = float(min(low[0], low[1]))
+    ep = float(high[0])
+    out[1] = sar
+    for i in range(2, n):
+        prior_sar = sar
+        sar = prior_sar + af * (ep - prior_sar)
+        if uptrend:
+            if sar > float(low[i]):
+                # Reversal down: seed the SAR at the recent extreme.
+                uptrend = False
+                sar = float(max(high[i - 1], high[i]))
+                ep = float(low[i])
+                af = step
+            else:
+                sar = min(sar, float(low[i - 1]), float(low[i - 2]))
+                if float(high[i]) > ep:
+                    ep = float(high[i])
+                    af = min(af + step, maximum)
+        else:
+            if sar < float(high[i]):
+                uptrend = True
+                sar = float(min(low[i - 1], low[i]))
+                ep = float(high[i])
+                af = step
+            else:
+                sar = max(sar, float(high[i - 1]), float(high[i - 2]))
+                if float(low[i]) < ep:
+                    ep = float(low[i])
+                    af = min(af + step, maximum)
+        out[i] = float(sar)
+    return IndicatorResult(name="parabolic_sar", params={}, values={"sar": out})

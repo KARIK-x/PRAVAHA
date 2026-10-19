@@ -1,0 +1,4 @@
+{
+  "note": "NEPSE public holiday list. Empty = calendar approximates weekends only (Fri/Sat closed) and every output flags calendar_approximated=true. Fill with official NEPSE holiday dates as YYYY-MM-DD for production research.",
+  "holidays": []
+}

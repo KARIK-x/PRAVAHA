@@ -71,6 +71,35 @@ class Position:
         return asdict(self)
 
 
+@dataclass
+class CashFlow:
+    """The cash effect of one recorded trade.
+
+    ``net`` is signed from the account's point of view: a **buy** costs
+    ``quantity x price + fees`` (negative), a **sell** returns
+    ``quantity x price - fees`` (positive). ``cumulative`` is the running sum in
+    ledger order. Fees are part of the trade's cash effect; they are not added
+    or dropped.
+    """
+
+    id: int
+    symbol: str
+    side: str
+    quantity: int
+    price: float
+    fees: float
+    traded_at: str
+    gross: float  # quantity x price, before fees
+    net: float  # signed cash effect (buy negative, sell positive)
+    cumulative: float  # running sum of ``net`` in ledger order
+
+    def to_dict(self) -> dict[str, Any]:
+        out = asdict(self)
+        for key in ("price", "gross", "net", "cumulative", "fees"):
+            out[key] = round(out[key], 2)
+        return out
+
+
 # ------------------------------------------------------------------- validation
 def _normalise(tx: dict[str, Any]) -> dict[str, Any]:
     symbol = str(tx.get("symbol") or "").strip().upper()
@@ -324,32 +353,127 @@ def remove_manual_position(symbol: str, db_path=None) -> bool:
         return cur.rowcount > 0
 
 
+# ------------------------------------------------------------------- cash flow
+def cash_flows(db_path=None) -> dict[str, Any]:
+    """Cash-flow view derived from the recorded transactions.
+
+    Every recorded trade has one cash effect:
+
+    * **buy**  -> ``quantity x price + fees`` leaves the account (``net < 0``);
+    * **sell** -> ``quantity x price - fees`` enters it (``net > 0``).
+
+    ``cumulative`` is the running total in ledger order (the same
+    ``traded_at, id`` ordering the position derivation replays). This is the
+    cash effect of the *recorded trades only*: deposits, withdrawals,
+    dividends, interest and taxes are not recorded here, so ``net_cash_flow``
+    is **not** an account cash balance - it is what the trades have moved.
+
+    A sell larger than the quantity held cannot normally be recorded (the
+    transaction writer refuses an oversell), but if a ledger ever contained one,
+    this view would still move the recorded amount rather than cap or repair it;
+    the anomaly is surfaced by :func:`derive_positions`, not hidden here.
+    """
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM portfolio_transactions ORDER BY traded_at ASC, id ASC"
+        ).fetchall()
+
+    flows: list[CashFlow] = []
+    per_symbol: dict[str, float] = {}
+    total_invested = 0.0
+    total_proceeds = 0.0
+    total_fees = 0.0
+    cumulative = 0.0
+    for r in rows:
+        qty = int(r["quantity"])
+        price = float(r["price"])
+        fees = float(r["fees"] or 0.0)
+        gross = qty * price
+        if r["side"] == "buy":
+            net = -(gross + fees)
+            total_invested += gross + fees
+        else:
+            net = gross - fees
+            total_proceeds += net
+        total_fees += fees
+        cumulative += net
+        sym = r["symbol"]
+        per_symbol[sym] = per_symbol.get(sym, 0.0) + net
+        flows.append(
+            CashFlow(
+                id=int(r["id"]),
+                symbol=sym,
+                side=r["side"],
+                quantity=qty,
+                price=price,
+                fees=fees,
+                traded_at=r["traded_at"],
+                gross=gross,
+                net=net,
+                cumulative=cumulative,
+            )
+        )
+
+    return {
+        "flows": [f.to_dict() for f in flows],
+        "summary": {
+            "transactions": len(flows),
+            "total_invested": round(total_invested, 2),
+            "total_proceeds": round(total_proceeds, 2),
+            "total_fees": round(total_fees, 2),
+            "net_cash_flow": round(cumulative, 2),
+            "per_symbol_net": {s: round(v, 2) for s, v in sorted(per_symbol.items())},
+        },
+        "note": "Cash flow from RECORDED trades only: a buy costs quantity x "
+        "price + fees, a sell returns quantity x price - fees. Deposits, "
+        "withdrawals, dividends and interest are not recorded, so "
+        "'net_cash_flow' is the trades' net cash effect, not an account cash "
+        "balance.",
+    }
+
+
 # ------------------------------------------------------------------- valuation
 def value_portfolio(store, db_path=None) -> dict[str, Any]:
     """Positions plus a mark-to-market using the latest stored close.
 
-    A symbol with no stored price is left unvalued and flagged rather than
-    being carried at cost as though nothing were missing.
+    A symbol with no usable stored price is left unvalued and flagged rather
+    than being carried at cost as though nothing were missing. Two causes are
+    reported separately, because they are different problems:
+
+    * **no bar at all** - the symbol has no stored history;
+    * **a bar whose close is not a price** (zero or negative) - the row
+      exists and is preserved, but a non-positive close is not something a
+      share can trade at, so marking the position to it would invent a
+      total loss. The position is left unvalued instead (B-21 / register R1
+      decides the long-run policy; this never mutates the stored row).
     """
     positions = derive_positions(db_path)
     held = [p for p in positions if p.quantity > 0]
 
     prices: dict[str, float] = {}
     price_dates: dict[str, str] = {}
+    rejected: dict[str, str] = {}  # symbol -> date of a bar with an unusable close
     data_as_of: str | None = None
     if held:
         latest = store.latest_bars([p.symbol for p in held])
         if not latest.empty:
             for _, row in latest.iterrows():
                 close = row.get("close")
-                if close is not None and close == close:  # NaN check
-                    sym = str(row["symbol"])
+                sym = str(row["symbol"])
+                ts = row["trading_date"]
+                d = str(ts.date()) if hasattr(ts, "date") else str(ts)[:10]
+                # A usable mark must be a FINITE, POSITIVE number - the same
+                # rule the backtest engine applies (a NaN passes a bare
+                # ``> 0``-style check only via the ``close == close`` test,
+                # and +inf would pass ``> 0`` outright, poisoning every
+                # total with infinity).
+                if close is not None and math.isfinite(float(close)) and float(close) > 0:
                     prices[sym] = float(close)
-                    ts = row["trading_date"]
-                    d = str(ts.date()) if hasattr(ts, "date") else str(ts)[:10]
                     price_dates[sym] = d
                     if data_as_of is None or d > data_as_of:
                         data_as_of = d
+                else:
+                    rejected[sym] = d
 
     valued_total = 0.0
     unvalued_cost = 0.0
@@ -373,7 +497,17 @@ def value_portfolio(store, db_path=None) -> dict[str, Any]:
             p.unrealized_pct = (p.unrealized_pnl / cost * 100.0) if cost else None
             valued_total += p.market_value
         else:
-            p.flags.append("no stored price for this symbol: left unvalued (never carried at cost)")
+            if p.symbol in rejected:
+                p.flags.append(
+                    f"the stored close on {rejected[p.symbol]} is not a usable "
+                    "price (zero, negative or missing): left unvalued rather "
+                    "than marking the position to zero; the stored row is "
+                    "unchanged"
+                )
+            else:
+                p.flags.append(
+                    "no stored price for this symbol: left unvalued (never carried at cost)"
+                )
             unvalued_cost += cost
 
     for p in held:
@@ -402,9 +536,13 @@ def value_portfolio(store, db_path=None) -> dict[str, Any]:
         },
         "data_as_of": data_as_of,
         "live": False,
+        "cash_flow": cash_flows(db_path)["summary"],
         "note": "Positions are derived from your transaction ledger. Valuation uses "
         "the latest STORED close (not a live quote); symbols without a stored "
-        "price are left unvalued. Cash balances are not modelled. Weights and "
+        "price - or whose latest close is zero/negative - are left unvalued, "
+        "never marked to zero. Cash balances are not modelled. The `cash_flow` "
+        "block is the net cash effect of the recorded trades (fees included); "
+        "it is not an account balance. Weights and "
         "the concentration warning are shares of VALUED positions only: with an "
         "unvalued position present, the real largest weight is smaller than "
         "shown.",

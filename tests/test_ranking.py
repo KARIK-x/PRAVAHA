@@ -13,6 +13,8 @@ import pytest
 from megatool.ranking import (
     DEFAULT_WEIGHTS,
     PRICE_FACTORS,
+    RELATIVE_STRENGTH_KEY,
+    SECTOR_FACTOR_KEY,
     UNAVAILABLE_FACTORS,
     RankConfig,
     build_factor_specs,
@@ -183,7 +185,10 @@ def test_symbol_above_missing_threshold_is_excluded(universe):
 def test_unavailable_factors_are_declared_not_guessed():
     specs = build_factor_specs()
     unavailable = {s.key for s in specs if not s.available}
-    assert unavailable == set(UNAVAILABLE_FACTORS)
+    # The static entries plus the two data-driven factors (sector and relative
+    # strength), each unavailable with a computed reason whenever its data is
+    # not supplied.
+    assert unavailable == set(UNAVAILABLE_FACTORS) | {SECTOR_FACTOR_KEY, RELATIVE_STRENGTH_KEY}
     for spec in specs:
         if not spec.available:
             assert spec.weight == 0.0
@@ -192,13 +197,28 @@ def test_unavailable_factors_are_declared_not_guessed():
 
 def test_unavailable_factors_surface_in_result(universe):
     result = rank_universe(universe)
-    assert set(result.unavailable) == set(UNAVAILABLE_FACTORS)
+    assert set(result.unavailable) == set(UNAVAILABLE_FACTORS) | {
+        SECTOR_FACTOR_KEY,
+        RELATIVE_STRENGTH_KEY,
+    }
     # They must never enter the effective scoring weights.
     assert not (set(result.weights) & set(UNAVAILABLE_FACTORS))
+    # The sector reason states the computed no-data condition, not a stale
+    # assumption about the store.
+    assert "No sector classification data" in result.unavailable[SECTOR_FACTOR_KEY]
+    # Relative strength likewise states the measured condition: no benchmark
+    # series is connected, so it is not computed against a substitute.
+    assert "composite index" in result.unavailable[RELATIVE_STRENGTH_KEY]
 
 
 def test_price_factors_all_carry_positive_default_weight():
     for key in PRICE_FACTORS:
+        if key in (SECTOR_FACTOR_KEY, RELATIVE_STRENGTH_KEY):
+            # The two data-driven factors are deliberately weightless by
+            # default: they only activate once their data is connected AND the
+            # caller chooses a weight, so default rankings are unchanged.
+            assert DEFAULT_WEIGHTS.get(key, 0.0) == 0.0
+            continue
         assert DEFAULT_WEIGHTS.get(key, 0.0) > 0.0
 
 

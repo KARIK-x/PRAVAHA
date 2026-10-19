@@ -28,6 +28,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -109,9 +110,28 @@ def _to_float(raw: str) -> float:
     "Rs." and dropped the "," and silently returned a rate one thousand times
     too small - and a wrong rate flows into amount, turnover and HHI with no
     warning anywhere.
+
+    The string is first offered to ``float()`` **verbatim**, which is the only
+    reading that cannot corrupt a value: the fallback filter below removes
+    every character that is not a digit, so ``1e400`` would become ``1400``
+    and ``1e5`` would become ``15`` - a plausible-looking wrong quantity.
+    Scientific notation therefore survives intact (and overflow arrives as
+    ``inf``, which the callers reject rather than store).
     """
     text = raw.strip()
+    try:
+        return float(text)
+    except ValueError:
+        pass  # currency signs, separators, spaced negatives: handled below
     text = re.sub(r"(?i)\b(rs|npr|nrs|inr|usd|np)\b\.?", "", text)
+    if re.search(r"[eE]", text):
+        # Scientific notation that did NOT parse verbatim, i.e. it also
+        # carried a currency sign, spacing or separators ("Rs 1e5"). The
+        # separator-stripping fallback below would delete the exponent
+        # marker and turn "1e5 USD" into the plausible-looking wrong number
+        # 15 - the exact corruption B-36 exists to stop. Reject the value
+        # (the row is skipped with a reason) instead of guessing at it.
+        raise ValueError(f"not a number: {raw!r}")
     text = re.sub(r"[^\d.,\-]", "", text)
     negative = text.startswith("-")
     text = text.replace("-", "")
@@ -191,6 +211,12 @@ def parse_floorsheet(text: str) -> ParseResult:
             out.skipped.append(
                 {"line": line_no, "reason": f"quantity {quantity} is implausibly large"}
             )
+            continue
+        if not math.isfinite(rate):
+            # float() happily parses "1e400" as inf and "nan" as nan; neither
+            # is a price. Skipping keeps a corrupt rate out of amount,
+            # turnover and every broker share computed from it.
+            out.skipped.append({"line": line_no, "reason": f"rate {rate} is not a usable price"})
             continue
         if rate <= 0:
             out.skipped.append({"line": line_no, "reason": f"rate {rate} <= 0"})
@@ -579,6 +605,175 @@ def summary(
             "means nothing was imported, not that nothing traded.",
             "Rates are unadjusted for bonus and rights issues.",
             "Nothing here predicts future prices, and none of it is investment advice.",
+        ],
+    }
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    n = len(ordered)
+    if n == 0:
+        return 0.0
+    mid = n // 2
+    return float(ordered[mid]) if n % 2 else (float(ordered[mid - 1]) + float(ordered[mid])) / 2
+
+
+def trend(
+    db_path=None,
+    *,
+    symbol: str | None = None,
+    sessions: int = 10,
+    top: int = 5,
+) -> dict[str, Any]:
+    """Multi-session activity trend and per-broker net flow (feature 3).
+
+    Two clearly separated things:
+
+    * **activity (observed)** — per-session trades/quantity/turnover with an
+      activity direction for the latest session vs the median of the prior
+      sessions in the window. These are printed facts.
+    * **broker net flow (inferred)** — per broker, bought minus sold quantity
+      over the window, labelled ``net_buyer``/``net_seller``/``balanced``.
+      The quantities are observed; the label is an *inference about flow*, not
+      evidence that anyone accumulated, and broker codes are not beneficial
+      owners.
+
+    Fewer than two imported sessions in the window yields an explicit
+    ``insufficient_sessions`` status instead of a "trend" from one point.
+    """
+    init_app_db(db_path)
+    sym = symbol.upper().strip() if symbol else None
+    where = []
+    params: list[Any] = []
+    if sym:
+        where.append("symbol = ?")
+        params.append(sym)
+    clause = f"WHERE {' AND '.join(where)}" if where else ""
+
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT traded_at, COUNT(*) AS prints, SUM(quantity) AS quantity, "
+            f"SUM(amount) AS turnover, COUNT(DISTINCT buyer) AS buyers, "
+            f"COUNT(DISTINCT seller) AS sellers "
+            f"FROM floorsheet_trades {clause} "
+            f"GROUP BY traded_at ORDER BY traded_at DESC LIMIT ?",
+            [*params, sessions],
+        ).fetchall()
+        activity = [
+            {
+                "traded_at": r["traded_at"],
+                "prints": int(r["prints"]),
+                "quantity": int(r["quantity"]),
+                "turnover": round(float(r["turnover"]), 2),
+                "buyers": int(r["buyers"]),
+                "sellers": int(r["sellers"]),
+            }
+            for r in rows
+        ]
+        window = [r["traded_at"] for r in rows]
+
+        broker_rows: list[Any] = []
+        if len(window) >= 2:
+            marks = ",".join("?" * len(window))
+            # Bought/sold per broker within the window, in the same scope.
+            broker_rows = conn.execute(
+                f"SELECT broker, SUM(bought) AS bought, SUM(sold) AS sold FROM ("
+                f"  SELECT buyer AS broker, quantity AS bought, 0 AS sold "
+                f"  FROM floorsheet_trades WHERE traded_at IN ({marks})"
+                + (" AND symbol = ?" if sym else "")
+                + f"  UNION ALL "
+                f"  SELECT seller AS broker, 0, quantity "
+                f"  FROM floorsheet_trades WHERE traded_at IN ({marks})"
+                + (" AND symbol = ?" if sym else "")
+                + ") GROUP BY broker",
+                ([*window, *([sym] if sym else [])] + [*window, *([sym] if sym else [])]),
+            ).fetchall()
+
+    base = {"symbol": sym, "window_sessions": window}
+    if len(window) < 2:
+        return {
+            **base,
+            "status": "insufficient_sessions",
+            "activity": activity,
+            "sessions_found": len(window),
+            "reason": (
+                f"{len(window)} imported session(s) in this scope; an activity "
+                "trend needs at least 2"
+            ),
+            "broker_net": [],
+            "note": (
+                "A blank scope means nothing was imported for it, not that "
+                "nothing traded. Import more sessions before reading a trend."
+            ),
+        }
+
+    # activity direction: latest session vs the median of the prior ones
+    chron = list(reversed(activity))  # oldest first for the comparison
+    prior = [s["turnover"] for s in chron[:-1]]
+    med = _median(prior)
+    last = chron[-1]["turnover"]
+    ratio = (last / med) if med > 0 else None
+    if ratio is None:
+        direction, basis = "unknown", "prior sessions have zero turnover; no ratio is defined"
+    elif ratio > 1.2:
+        direction, basis = "rising", None
+    elif ratio < 0.8:
+        direction, basis = "falling", None
+    else:
+        direction, basis = "steady", None
+    if basis is None:
+        basis = (
+            f"latest session turnover {last:,.2f} vs median {med:,.2f} of the "
+            f"prior {len(prior)} session(s) in the window (ratio {ratio:.2f}; "
+            "rising >1.2, falling <0.8)"
+        )
+
+    flows = []
+    for r in broker_rows:
+        bought, sold = int(r["bought"]), int(r["sold"])
+        net = bought - sold
+        flows.append(
+            {
+                "broker": r["broker"],
+                "bought": bought,
+                "sold": sold,
+                "net": net,
+                "flow": "net_buyer" if net > 0 else "net_seller" if net < 0 else "balanced",
+            }
+        )
+    flows.sort(key=lambda f: (-abs(f["net"]), f["broker"]))
+    integrity: dict[str, Any] | None = None
+    if sym:
+        # Every print of one symbol is one purchase and one sale, so the
+        # per-broker nets must sum to exactly zero. A non-zero sum would mean
+        # the arithmetic is wrong.
+        integrity = {"net_sums_to_zero": sum(f["net"] for f in flows) == 0}
+
+    return {
+        **base,
+        "status": "ok",
+        "scope": (
+            f"symbol {sym}: activity and per-broker flow within that symbol"
+            if sym
+            else "whole imported sheet: activity and per-broker cross-symbol flow"
+        ),
+        "activity": chron,
+        "activity_trend": {
+            "direction": direction,
+            "basis": basis,
+            "kind": "observed_activity",
+        },
+        "broker_net": flows[:top],
+        "integrity": integrity,
+        "limits": [
+            "Activity figures are observed prints; the direction label compares "
+            "the latest session to the median of the prior sessions in the "
+            "window (thresholds stated in activity_trend.basis).",
+            "'net_buyer'/'net_seller' are inferences from observed bought vs "
+            "sold quantities. They are NOT evidence of accumulation or "
+            "distribution by any beneficial owner: broker codes are not owners "
+            "and a house can trade against itself.",
+            "Only imported sessions are covered; no session is invented.",
         ],
     }
 

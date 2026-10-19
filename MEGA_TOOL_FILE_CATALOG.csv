@@ -1,0 +1,17 @@
+relative_path,file_type,category,purpose,key_functions_classes,created_status,modified_status,inspection_status,campaign_attribution,entry_point,connected_to_application,tests,feature_status,known_limitations,evidence
+megatool/__init__.py,py,application,Package init,NA,original,modified,verified,Campaign #1+,no,yes,none,IMPLEMENTED,none,git
+megatool/api.py,py,backend,FastAPI routes,app,original,modified (monthly/weekly + validation),verified,Campaign #2+/#4+,yes,yes,test_api,IMPLEMENTED+TESTED-PASS,none,source
+megatool/workspace.py,py,analysis,Research workspace,build_workspace(),original,modified (+B-21),verified,Campaign #2+/#4+,yes,yes,test_workspace(24/24),IMPLEMENTED+TESTED-PASS,none,source
+megatool/ta/multitimeframe.py,py,technical,Aggregation module,aggregate_daily_to_weekly/monthly,NEW,Campaign #5+,verified,Campaign #5+,no,yes,test_multitimeframe(2/2),IMPLEMENTED+TESTED-PASS,date parsing fixed,source
+megatool/ta/fibonacci.py,py,technical,Fibonacci analysis,levels_for(),original,verified,Campaign #2,yes,yes,test_fibonacci,IMPLEMENTED+TESTED-PASS,none,source
+megatool/ta/levels.py,py,technical,S/R zones,build_zones(),original,verified,Campaign #2,yes,yes,test_levels,IMPLEMENTED+TESTED-PASS,none,source
+megatool/ta/candles.py,py,technical,Candlestick patterns,detect_patterns(),original,verified,Campaign #2,yes,yes,test_candles(104),IMPLEMENTED+TESTED-PASS,lint clean,source
+megatool/ta/swings.py,py,technical,Swing detection,find_swings(),original,verified,Campaign #1,yes,yes,test_swings,IMPLEMENTED+TESTED-PASS,none,source
+megatool/ta/summary.py,py,technical,Trend/momentum/volatility,summary(),original,verified,Campaign #4,yes,yes,test_summary(72/72),IMPLEMENTED+TESTED-PASS,none,source
+megatool/ta/momentum.py,py,technical,RSI/MACD,original,verified (B-23 fixed),Campaign #2,yes,yes,test_indicators,IMPLEMENTED+TESTED-PASS,flat series NaN,source
+megatool/ta/volume.py,py,technical,MFI/OBV,original,verified (B-24 fixed),Campaign #2,yes,yes,test_indicators,IMPLEMENTED+TESTED-PASS,zero-flow NaN,source
+megatool/quality.py,py,data,Validation,B-21 F_NON_POSITIVE,original,verified,Campaign #1,yes,yes,test_quality(18/18),IMPLEMENTED+TESTED-PASS,flag-only,source
+megatool/ta/elliott.py,py,technical,Elliott Wave bounded,analyze_elliott(),NEW,Campaign #7,yes,yes,test_elliott(1/1),PARTIAL (bounded only),design blocked full,source
+megatool/scanner.py,py,research,Screener,ScreenCondition,original,modified (DATA_QUALITY_FILTERS),Campaign #5,yes,yes,test_scanner_quality(2/2),IMPLEMENTED+TESTED-PASS,none,source
+web/static/index.html,html,frontend,Dashboard,loadChart(),original,modified (select+button),Campaign #5+,yes,partial,browser NOT performed,honest,source
+web/static/app.js,js,frontend,Chart/interactions,loadChart(),original,modified (timeframe+fetches+plots),Campaign #5+,yes,partial,browser NOT performed,honest,source

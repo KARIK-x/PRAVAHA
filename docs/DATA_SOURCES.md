@@ -51,6 +51,56 @@ Price **adjustment**: this dataset is **unadjusted** for bonus/rights issues. Th
 so next to every chart. Any long-horizon return computed from it is a price return, not a
 total return.
 
+#### 1.1.1 The `open = previous close` convention — **MEASURED, NOT AN ERROR**
+
+The most common "impossible" bar in this dataset is not corruption. **This source fills a
+bar's `open` with the previous bar's `close`.** That is a publishing convention, and it only
+becomes visible on gap days, where yesterday's close cannot lie inside today's range.
+
+Measured across the full store (**514,018 bars**, 372 symbols, 1995-07-20 → 2026-10-09):
+
+| Measurement | Value |
+| --- | --- |
+| Bars where only `open` sits outside `[low, high]` (close fine, `high >= low`) | **40,013 (7.78%)** |
+| …of those, `open` is exactly the previous bar's `close` | **39,397 = 98.5%** |
+| Baseline: same coincidence across *all* bars that have a previous close | 29.5% |
+| Rows ever made INVALID by `open_outside_range` alone | **0** (of the 40,040 carrying the flag) |
+
+The 98.5%-vs-29.5% gap is what identifies the cause. Two competing explanations were tested
+and **disproved**:
+
+* *Split/bonus mis-adjustment* — no. **Zero** violating rows sit at a 2×/3×/4× ratio, and
+  `adjustment_status` is `unadjusted` on all 514,018 rows.
+* *Random corruption* — no. 40,013 independent corruptions would not reproduce the previous
+  close to the tick 98.5% of the time.
+
+**How the code handles it.** `quality.py` sets `open_outside_range` to severity **`info`**
+on purpose (rationale recorded at `FLAG_SEVERITY`), so the row keeps `valid` status and stays
+readable. Independently, `workspace.py` excludes such bars from candlestick detection —
+because `candles.validate_ohlc` rejects a whole window on the first impossible bar — while
+reporting the count and **never modifying the stored record**. Verified end-to-end on BPCL
+over 3,000 bars (2013-03-24 → 2026-10-09): **491 excluded, exactly matching the measured
+491**, 1,102 patterns found on the remaining 2,509 bars, and contiguous-run splitting kept
+adjacency honest (no pattern spans a dropped bar).
+
+**What is genuinely broken is far smaller.** 555 rows (0.108%) are inconsistent in a way the
+convention does not explain: 115 have `high < low` (all already `invalid`, excluded) and 440
+have `close` outside the range (`suspect`, still readable — 437 of them).
+
+**Consequences for analysis.**
+
+* Indicators built on `close`/`high`/`low` (RSI, MACD, moving averages, ATR, stochastic) are
+  unaffected.
+* Anything reading **`open`** must expect this: candlestick bodies, gap detection, and any
+  backtest filling at the open. The effect is concentrated in **2015–2017** (~19,804 rows);
+  recent years are small (2025: 173, 2026: 346). By share of their own history the worst
+  symbols are BPCL 27.2%, EDBL 23.4%, DDBL 21.8%, CHCL 21.3%.
+* At the default 400-bar research window the effect is currently **nil** for BPCL and NABIL
+  (0 affected bars), because the damage predates the window.
+
+No historical record is edited to accommodate this. The convention is documented, the rows
+are flagged, and consumers are told.
+
 ---
 
 ### 1.2 Local file import — **AVAILABLE, GUARANTEED FALLBACK**
@@ -174,3 +224,25 @@ those calls correctly returned 404 — that was a coverage limit, not a bug).
 
 To refresh everything: `uv run megatool fetch` (idempotent; stop the server first,
 because DuckDB allows only one writer).
+
+## 6. News / Events — source contract (2026-10-14)
+
+**Status: local processing layer IMPLEMENTED and tested; the source itself is
+BLOCKED (L4 — licensing unresolved, T-15).** Nothing fetches, scrapes or
+generates news. Records exist only when the owner imports them
+(`POST /api/news/import`), and every summary says so.
+
+A future source (or the owner's own export) must supply **CSV or JSON** with:
+
+| Key | Required | Meaning |
+|---|---|---|
+| `title` | yes | The headline as published |
+| `published_at` | yes | ISO date or datetime; before-1900 or >1 day future ⇒ rejected with a reason, never stored |
+| `summary`, `url`, `source` | no | Body, link (dedup identity), publisher |
+| `symbols` | no | Comma/space-separated scrip codes to associate |
+
+Unrecognised columns are ignored with a warning; every skipped row returns its
+line number and reason; re-imports are idempotent (dedup by URL, else
+title+date hash). Full module contract: `megatool/news.py` docstring.
+**Until a licensed source exists, "no news records" is the truthful state and
+the UI/API says exactly that.**
