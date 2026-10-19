@@ -89,6 +89,12 @@ SNAPSHOT_SOURCE = "github.com/Aabishkar2/nepse-data"
 #: Symbols per INSERT. Keeps the load well inside Render Free's 512 MB RAM.
 _BATCH = 10
 
+#: DuckDB memory ceiling used only while the snapshot loads. DuckDB defaults to
+#: ~80% of the machine's RAM, which on a 512 MB container is ~410 MB — enough,
+#: with the Python process on top, to OOM-kill the service mid-load. Capping it
+#: makes DuckDB spill to disk instead. Restored afterwards.
+_LOAD_MEMORY_LIMIT = "256MB"
+
 
 def snapshot_path() -> Path:
     """Absolute path to the committed market-data snapshot."""
@@ -148,15 +154,33 @@ def seed_from_snapshot(store: Any, path: Path | None = None) -> dict[str, Any]:
             "SELECT DISTINCT symbol FROM read_parquet(?) ORDER BY symbol", [str(src)]
         ).fetchall()
     ]
-    # Small batches keep the peak low on either path (measured: ~210 MB plain,
-    # ~365 MB merge at 25 → less at 10).
-    for i in range(0, len(symbols), _BATCH):
-        chunk = symbols[i : i + _BATCH]
-        marks = ",".join(["?"] * len(chunk))
-        sql = f"INSERT INTO price_bars ({_COLS}) {_SELECT} WHERE symbol IN ({marks})"
-        if before:
-            sql += _CONFLICT
-        store.execute(sql, [str(src), *chunk])
+
+    # Bound DuckDB's memory for the load (see _LOAD_MEMORY_LIMIT), then restore.
+    try:
+        prev_limit = store.execute("SELECT current_setting('memory_limit')").fetchone()[0]
+    except Exception:  # noqa: BLE001 - an older DuckDB may not expose it
+        prev_limit = None
+    try:
+        store.execute(f"SET memory_limit='{_LOAD_MEMORY_LIMIT}'")
+    except Exception:  # noqa: BLE001 - never fail the seed over a tuning knob
+        prev_limit = None
+
+    try:
+        # Small batches keep the peak low on either path (measured: ~210 MB plain,
+        # ~365 MB merge at 25 → less at 10).
+        for i in range(0, len(symbols), _BATCH):
+            chunk = symbols[i : i + _BATCH]
+            marks = ",".join(["?"] * len(chunk))
+            sql = f"INSERT INTO price_bars ({_COLS}) {_SELECT} WHERE symbol IN ({marks})"
+            if before:
+                sql += _CONFLICT
+            store.execute(sql, [str(src), *chunk])
+    finally:
+        if prev_limit:
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                store.execute(f"SET memory_limit='{prev_limit}'")
     after = int(store.execute("SELECT COUNT(*) FROM price_bars").fetchone()[0])
 
     rows = store.execute(
