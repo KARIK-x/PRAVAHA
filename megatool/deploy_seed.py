@@ -30,6 +30,7 @@ from __future__ import annotations
 import os
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 #: ``1`` force on, ``0`` force off, unset → on only for a non-loopback bind.
@@ -76,6 +77,93 @@ def _seed_limit() -> int | None:
 
 
 # --------------------------------------------------------------------- steps
+#: A committed, real market-data snapshot (Parquet). Loading it is offline and
+#: takes seconds, so the data survives a Render Free restart (it is part of the
+#: deploy image) — unlike a runtime download, which the ephemeral filesystem
+#: loses on the next spin-down.
+SNAPSHOT_PARTS = ("seed", "pravaha_market_seed.parquet")
+
+#: Attribution recorded on every row that comes from the snapshot.
+SNAPSHOT_SOURCE = "github.com/Aabishkar2/nepse-data"
+
+
+def snapshot_path() -> Path:
+    """Absolute path to the committed market-data snapshot."""
+    return Path(__file__).resolve().parent.parent.joinpath(*SNAPSHOT_PARTS)
+
+
+def seed_from_snapshot(store: Any, path: Path | None = None) -> dict[str, Any]:
+    """Load the committed market-data snapshot into ``price_bars``.
+
+    Offline, deterministic and fast (one set-based merge). Real rows only: the
+    snapshot is a frozen copy of the public dataset, never synthesised. Raises
+    ``FileNotFoundError`` when the snapshot is absent so the caller can fall back
+    to the network fetch.
+    """
+    from datetime import UTC, datetime
+
+    src = path or snapshot_path()
+    if not src.is_file():
+        raise FileNotFoundError(f"market-data snapshot not found: {src}")
+
+    before = int(store.execute("SELECT COUNT(*) FROM price_bars").fetchone()[0])
+    store.execute(
+        """
+        INSERT INTO price_bars
+          (symbol, trading_date, open, high, low, close, volume, turnover,
+           percent_change, transactions, source, source_url, retrieved_at,
+           validation_status, adjustment_status, flags)
+        SELECT symbol, trading_date, open, high, low, close, volume, turnover,
+               percent_change, transactions, source, source_url, retrieved_at,
+               COALESCE(validation_status, 'valid'),
+               COALESCE(adjustment_status, 'unadjusted'), flags
+        FROM read_parquet(?)
+        ON CONFLICT (symbol, trading_date) DO UPDATE SET
+           open = excluded.open,
+           high = excluded.high,
+           low = excluded.low,
+           close = excluded.close,
+           volume = excluded.volume,
+           turnover = excluded.turnover,
+           percent_change = excluded.percent_change,
+           transactions = excluded.transactions,
+           source = excluded.source,
+           source_url = excluded.source_url,
+           retrieved_at = excluded.retrieved_at,
+           validation_status = excluded.validation_status,
+           adjustment_status = excluded.adjustment_status,
+           flags = excluded.flags
+        """,
+        [str(src)],
+    )
+    after = int(store.execute("SELECT COUNT(*) FROM price_bars").fetchone()[0])
+
+    rows = store.execute(
+        "SELECT COUNT(DISTINCT symbol), MIN(trading_date), MAX(trading_date) FROM price_bars"
+    ).fetchone()
+    symbols = int(rows[0] or 0)
+    now = datetime.now(UTC).replace(tzinfo=None)
+    store.upsert_securities(
+        [
+            {
+                "symbol": r[0],
+                "source": SNAPSHOT_SOURCE,
+                "first_seen": now,
+                "last_updated": now,
+            }
+            for r in store.execute("SELECT DISTINCT symbol FROM price_bars").fetchall()
+        ]
+    )
+    return {
+        "rows_added": after - before,
+        "rows_total": after,
+        "symbols": symbols,
+        "coverage_start": str(rows[1]) if rows[1] else None,
+        "coverage_end": str(rows[2]) if rows[2] else None,
+        "snapshot": str(src),
+    }
+
+
 def seed_price_bars(
     store: Any,
     *,
@@ -221,11 +309,24 @@ def seed_all(
     """Run every seed step. Each step is independent: one failing does not stop
     the others, and every failure is reported rather than swallowed."""
     out: dict[str, Any] = {}
-    for name, fn in (
-        ("price_bars", lambda: seed_price_bars(store, limit=limit)),
-        ("index", lambda: seed_index(store)),
-        ("sectors", lambda: seed_sectors(store)),
-    ):
+
+    # 1. The committed snapshot first: offline, takes seconds, and — because it
+    #    ships in the deploy image — survives a restart on an ephemeral host.
+    try:
+        out["snapshot"] = seed_from_snapshot(store)
+        log(f"[seed] snapshot: {out['snapshot']}")
+    except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+        out["snapshot"] = {"error": f"{type(exc).__name__}: {exc}"}
+        log(f"[seed] snapshot unavailable ({type(exc).__name__}: {exc}); using the network fetch")
+        try:
+            out["price_bars"] = seed_price_bars(store, limit=limit)
+            log(f"[seed] price_bars: {out['price_bars']}")
+        except Exception as exc2:  # noqa: BLE001
+            out["price_bars"] = {"error": f"{type(exc2).__name__}: {exc2}"}
+            log(f"[seed] price_bars FAILED: {type(exc2).__name__}: {exc2}")
+
+    # 2. The small public fetches: the NEPSE index and the sector map.
+    for name, fn in (("index", lambda: seed_index(store)), ("sectors", lambda: seed_sectors(store))):
         try:
             out[name] = fn()
             log(f"[seed] {name}: {out[name]}")
@@ -254,19 +355,27 @@ def mark_seed_complete() -> None:
 
 def _run(store: Any, log: Callable[[str], None]) -> None:
     try:
-        log("[seed] market database is empty — seeding from public sources")
+        log("[seed] market database is empty — seeding from the committed snapshot / public sources")
         result = seed_all(store, log=log, limit=_seed_limit())
-        # Only mark complete if the price bars actually landed.
+        # Only mark complete if the price bars actually landed (snapshot or fetch).
         bars = result.get("price_bars") or {}
-        if bars.get("succeeded"):
+        snap = result.get("snapshot") or {}
+        if snap.get("symbols"):
             mark_seed_complete()
             log(
-                f"[seed] complete: {bars['succeeded']} symbols, "
+                f"[seed] complete from snapshot: {snap['symbols']} symbols, "
+                f"{snap.get('rows_total')} rows, "
+                f"{snap.get('coverage_start')} -> {snap.get('coverage_end')}"
+            )
+        elif bars.get("succeeded"):
+            mark_seed_complete()
+            log(
+                f"[seed] complete from network: {bars['succeeded']} symbols, "
                 f"{bars.get('rows_inserted')} rows, "
                 f"{bars.get('coverage_start')} -> {bars.get('coverage_end')}"
             )
         else:
-            log("[seed] price-bar step did not succeed; the marker is NOT set (will retry)")
+            log("[seed] the price-bar step did not succeed; the marker is NOT set (will retry)")
     except Exception as exc:  # noqa: BLE001 - a failed seed must not kill the app
         log(f"[seed] aborted: {type(exc).__name__}: {exc}")
 

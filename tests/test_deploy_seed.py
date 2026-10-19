@@ -7,6 +7,8 @@ databases.
 
 from __future__ import annotations
 
+import pytest
+
 from megatool import deploy_seed as ds
 from megatool.datasources import binayabaral, yonepse
 from megatool.market_store import MarketStore
@@ -106,11 +108,76 @@ def test_seed_sectors_classifies_known_symbols(monkeypatch):
     assert mapped.get("CHCL") == "Hydropower"
 
 
+# --------------------------------------------------------- committed snapshot
+def test_the_committed_snapshot_exists_and_has_the_expected_shape():
+    p = ds.snapshot_path()
+    assert p.is_file(), f"committed market-data snapshot missing: {p}"
+    import duckdb
+
+    con = duckdb.connect()
+    rows, syms, lo, hi = con.execute(
+        "SELECT COUNT(*), COUNT(DISTINCT symbol), MIN(trading_date), MAX(trading_date) "
+        f"FROM read_parquet('{p}')"
+    ).fetchone()
+    con.close()
+    assert rows > 500_000
+    assert syms >= 300
+    assert str(lo) <= "2000-01-01" and str(hi) >= "2026-01-01"
+
+
+def test_seed_from_snapshot_loads_real_candles():
+    with MarketStore() as store:
+        out = ds.seed_from_snapshot(store)
+        assert out["symbols"] >= 300
+        assert out["rows_total"] > 500_000
+        assert store.bar_count() == out["rows_total"]
+        # A representative symbol carries real OHLC, not fabricated values.
+        df = store.get_bars("NABIL", limit=5)
+        assert not df.empty
+        assert {"open", "high", "low", "close"} <= set(df.columns)
+        assert (df["close"] > 0).all()
+
+
+def test_seed_from_snapshot_is_idempotent():
+    with MarketStore() as store:
+        first = ds.seed_from_snapshot(store)["rows_total"]
+        second = ds.seed_from_snapshot(store)["rows_total"]
+    assert first == second  # no duplicate rows
+
+
+def test_seed_from_snapshot_raises_when_absent(tmp_path):
+    with MarketStore() as store, pytest.raises(FileNotFoundError):
+        ds.seed_from_snapshot(store, path=tmp_path / "nope.parquet")
+
+
 # ------------------------------------------------------------- error isolation
-def test_seed_all_reports_a_failing_step_without_aborting(monkeypatch):
+def test_seed_all_prefers_the_snapshot(monkeypatch):
+    called = {}
+
+    def fake_snap(store, path=None):
+        called["snap"] = True
+        return {"symbols": 1, "rows_total": 1}
+
+    monkeypatch.setattr(ds, "seed_from_snapshot", fake_snap)
+    monkeypatch.setattr(ds, "seed_price_bars", lambda *a, **k: called.setdefault("net", True))
+    monkeypatch.setattr(binayabaral, "fetch_index_csv", lambda: INDEX_CSV)
+    monkeypatch.setattr(yonepse, "fetch_securities", lambda: SECURITIES)
+
+    with MarketStore() as store:
+        ds.seed_all(store, log=lambda *_: None)
+
+    assert called.get("snap") is True
+    assert "net" not in called  # the network fetch was NOT used
+
+
+def test_seed_all_falls_back_to_the_network_without_a_snapshot(monkeypatch):
+    def no_snapshot(*a, **k):
+        raise FileNotFoundError("no snapshot")
+
     def boom(*a, **k):
         raise RuntimeError("dataset down")
 
+    monkeypatch.setattr(ds, "seed_from_snapshot", no_snapshot)
     monkeypatch.setattr(ds, "seed_price_bars", boom)
     monkeypatch.setattr(binayabaral, "fetch_index_csv", lambda: INDEX_CSV)
     monkeypatch.setattr(yonepse, "fetch_securities", lambda: SECURITIES)
@@ -118,6 +185,7 @@ def test_seed_all_reports_a_failing_step_without_aborting(monkeypatch):
     with MarketStore() as store:
         out = ds.seed_all(store, log=lambda *_: None)
 
+    assert "error" in out["snapshot"]
     assert "error" in out["price_bars"]
     # The other steps still ran.
     assert out["index"]["rows_written"] == 2

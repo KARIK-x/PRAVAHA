@@ -53,32 +53,54 @@ involved; request headers (including `X-Friend-Token`) are forwarded.
 defaults to `<repo>/data`, which is where the build seeds data. **Port 8710 is
 never used in production** — it is only the local default.
 
-### Runtime data seeding (no build download)
+### Data seeding at startup (snapshot first, network as fallback)
 
-On the Free plan the database starts empty, so the app seeds itself from the
-**same public sources the CLI uses**, in a **background thread at startup**
-(`megatool/deploy_seed.py`):
+Render Free has **no persistent disk**, and its runtime filesystem is discarded
+when the instance is recycled (spin-down/wake or restart) — so data written at
+runtime does **not** survive. Two things fix that:
+
+**1. A committed market-data snapshot** (`seed/pravaha_market_seed.parquet`,
+~8.9 MB) — a frozen copy of the public `Aabishkar2/nepse-data` dataset
+(372 symbols, 515,648 daily bars, 1995-07-20 → 2026-10-16, provenance and
+`retrieved_at` per row). It ships **inside the deploy image**, so it is present
+on every boot and loads via DuckDB `read_parquet` in **~4 seconds** — no network,
+no build timeout.
+
+**2. A background seeder at startup** (`megatool/deploy_seed.py`) that loads the
+snapshot and then fetches the two small live sources:
 
 ```
-Aabishkar2/nepse-data        → price_bars            (372 symbols, ~515k bars)
-binayabaral/nepal-market-data→ index_series + index_ohlc_history
-shubhamnpk/yonepse           → security_master.sector
+seed/pravaha_market_seed.parquet → price_bars  (offline, ~4 s)
+binayabaral/nepal-market-data    → index_series + index_ohlc_history
+shubhamnpk/yonepse               → security_master.sector
 ```
 
-Why at runtime rather than in the build: a ~5-minute, ~80 MB download in the
-build can time out and fail the deploy, and it only works if the build command
-is set exactly right. The runtime seed:
+If the snapshot is ever missing, it falls back to the full network fetch
+(`Aabishkar2/nepse-data`) — slower but complete. The whole seed takes ~10 s.
 
-* lets the app **serve immediately** (the health check never waits on a download);
-* runs **at most once per deploy** (a marker in the app DB) and is **idempotent**;
-* is **off for loopback binds**, so local development and the test client never
-  start a download (`MEGATOOL_AUTO_SEED=1` forces it, `=0` disables it);
-* caps with `MEGATOOL_SEED_LIMIT=N` if the host is slow;
-* reports every failure instead of swallowing it, and never sets the marker if
-  the price-bar step failed (so the next boot retries).
+Properties: the app **serves immediately** (the health check never waits); it
+runs **at most once per deploy** (a marker in the app DB) and is **idempotent**;
+it is **off for loopback binds** so local development and the test client never
+seed (`MEGATOOL_AUTO_SEED=1` forces it, `=0` disables it); `MEGATOOL_SEED_LIMIT=N`
+caps the network fallback; every failure is reported, and the marker is not set
+if the price bars did not land (so the next boot retries).
 
-The CLI equivalents (`python -m megatool.cli fetch|fetch-index|fetch-sectors`)
-remain available for manual seeding and are what the tests exercise.
+To refresh the snapshot with newer data:
+
+```bash
+python -m megatool.cli fetch --quiet          # downloads the public dataset
+python - <<'PY'
+import duckdb
+duckdb.connect("data/processed/megatool_market.duckdb", read_only=True).execute(
+    "COPY (SELECT symbol,trading_date,open,high,low,close,volume,turnover,"
+    "percent_change,transactions,source,source_url,retrieved_at,validation_status,"
+    "adjustment_status,flags FROM price_bars ORDER BY symbol,trading_date) "
+    "TO 'seed/pravaha_market_seed.parquet' (FORMAT PARQUET, COMPRESSION zstd)")
+PY
+```
+
+The CLI commands (`fetch` / `fetch-index` / `fetch-sectors`) remain available for
+manual seeding.
 
 ---
 
@@ -134,19 +156,20 @@ Render dashboard. The token grants read-only allowlisted access.
 The Free filesystem is **ephemeral across deploys**. Data is re-seeded on every
 build, so:
 
-| Data | Source | Persists across restarts? | Across deploys? |
+| Data | Source | Survives restart? | Survives redeploy? |
 |---|---|---|---|
-| Market bars (`price_bars`) | runtime seed (Aabishkar2/nepse-data) | yes (same deploy) | re-seeded |
-| NEPSE index (`index_series`) | runtime seed (binayabaral) | yes | re-seeded |
-| NEPSE index OHLC (`index_ohlc_history`) | runtime seed (binayabaral) | yes | re-seeded |
-| Sectors (`security_master.sector`) | runtime seed (yonepse) | yes | re-seeded |
-| App state (journal, portfolio, …) | user input | yes | **lost** |
+| Market bars (`price_bars`) | committed snapshot (`seed/*.parquet`) | **yes** (in the image) | yes |
+| NEPSE index (`index_series`) | network seed (binayabaral, ~5 s) | re-fetched | re-fetched |
+| NEPSE index OHLC (`index_ohlc_history`) | network seed (binayabaral) | re-fetched | re-fetched |
+| Sectors (`security_master.sector`) | network seed (yonepse, ~3 s) | re-fetched | re-fetched |
+| App state (journal, portfolio, …) | user input | **lost on restart** | **lost** |
 | Sector-index OHLC, fundamentals, corporate events | not seeded | — | — |
 | Kronos weights | not shipped | — | — |
 
-The first boot after a deploy has no data for ~5 minutes (the seed runs in the
-background). Reload the page after that; the dashboard and charts then show real
-history.
+So charts and the dashboard have real data within ~10 seconds of a cold start,
+with no network dependency for the price bars. **User-owned state is still
+ephemeral** — durable journal/portfolio needs a paid instance with a persistent
+disk and `MEGATOOL_DATA_DIR` set to the mount path.
 
 > App state (journal/portfolio/watchlists) is **not durable on Free**. For
 > durable state, attach a persistent disk on a paid instance and set
