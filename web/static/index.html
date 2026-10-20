@@ -17,7 +17,7 @@
 <link rel="icon" type="image/png" sizes="64x64" href="/brand/pravaha-symbol-64.png" />
 <link rel="icon" type="image/png" sizes="128x128" href="/brand/pravaha-symbol-128.png" />
 <link rel="apple-touch-icon" sizes="192x192" href="/brand/pravaha-appicon-192.png" />
-<link rel="stylesheet" href="/styles.css?v=wb23" />
+<link rel="stylesheet" href="/styles.css?v=wb24" />
 <script src="/vendor/lightweight-charts.standalone.js"></script>
 </head>
 <body>
@@ -879,6 +879,32 @@
         They are stored in this browser per symbol and survive indicator changes.
       </p>
       <div id="draw-list" class="tablewrap"></div>
+      <div id="draw-props" class="card" hidden>
+        <h3>Drawing properties</h3>
+        <div class="controls">
+          <label>Color <input type="color" id="dp-color" /></label>
+          <label>Opacity <input type="range" id="dp-opacity" min="0" max="1" step="0.05" /></label>
+          <label>Thickness <input type="number" id="dp-width" min="1" max="8" step="1" style="width:4em" /></label>
+          <label>Style
+            <select id="dp-style">
+              <option value="0">Solid</option>
+              <option value="2">Dashed</option>
+              <option value="1">Dotted</option>
+            </select>
+          </label>
+          <label class="chk"><input type="checkbox" id="dp-visible" checked /> Visible</label>
+          <label class="chk"><input type="checkbox" id="dp-lock" /> Locked</label>
+        </div>
+        <div class="controls">
+          <label class="chk"><input type="checkbox" id="dp-ext-left" /> Extend left</label>
+          <label class="chk"><input type="checkbox" id="dp-ext-right" /> Extend right</label>
+          <label class="chk"><input type="checkbox" id="dp-ext-both" /> Extend both</label>
+          <button class="ghost" id="dp-text">Edit text</button>
+          <button class="ghost" id="dp-duplicate">Duplicate</button>
+          <button class="ghost" id="dp-delete">Delete</button>
+        </div>
+        <div id="dp-measure" class="hint"></div>
+      </div>
     </div>
 
     <div class="card wide">
@@ -2463,7 +2489,7 @@
 <!-- Central feature registry: one source of truth for universal search,
      navigation and command suggestions. Must load before app.js. -->
 <script src="/features.js?v=feat1"></script>
-<script src="/app.js?v=wb94"></script>
+<script src="/app.js?v=wb95"></script>
 <script src="/kronos_ui.js?v=wb2"></script>
 </body>
 </html>

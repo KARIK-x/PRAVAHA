@@ -833,8 +833,9 @@ button.ti:hover { text-decoration: underline; }
 .rail-pop-item {
   width: 100%; display: flex; align-items: flex-start; gap: 10px; text-align: left;
   background: transparent; border: 0; color: var(--pravaha-white); padding: 9px 10px;
-  border-radius: 7px; cursor: pointer; line-height: 1.35;
-  transition: background .1s ease; margin-bottom: 2px; }
+  border-radius: 7px; cursor: pointer; line-height: 1.35; height: auto; min-height: 0;
+  transition: background .1s ease; margin-bottom: 4px; }
+.rail-pop-item .rail-pop-desc { white-space: normal; overflow-wrap: anywhere; }
 .rail-pop-item:hover { background: var(--pravaha-panel-2); }
 .rail-pop-item:hover .rail-pop-name { color: var(--pravaha-white); }
 .rail-pop-item.active { color: var(--pravaha-emerald); background: rgba(0,214,154, 0.1); }

@@ -9432,6 +9432,7 @@ function afterDrawingsChanged() {
   persistDrawings(state.chartSymbol, state.drawings);
   renderDrawings();
   renderDrawList();
+  renderDrawProps();
   refreshSelectionMarkers();
 }
 
@@ -9736,7 +9737,7 @@ function renderAnchorHandles() {
   const items = [];
   (state.drawings || []).forEach((d, i) => {
     if (d.hidden) return;
-    const color = d.color || DRAW_COLORS[i % DRAW_COLORS.length];
+    const color = withOpacity(d.color || DRAW_COLORS[i % DRAW_COLORS.length], d.opacity);
     const letters = DRAW_ANCHOR_LETTERS[d.type];
     const selected = d.id === state.drawSelectId;
     anchorParts(d).forEach(([, t, p], k) => {
@@ -9754,6 +9755,15 @@ function renderAnchorHandles() {
     state.anchorHandlePrim = prim;
     state.drawPrimitives.push({ series: state.candleSeries, prim });
   } catch (e) { /* primitive API unavailable */ }
+}
+
+function withOpacity(color, opacity) {
+  const o = (opacity == null || !isFinite(Number(opacity))) ? 1 : Number(opacity);
+  if (o >= 0.999) return color || "#9dc4ae";
+  const m = /^#([0-9a-f]{6})$/i.exec(String(color || "").trim());
+  if (!m) return color || "#9dc4ae";
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${o})`;
 }
 
 function renderDrawings() {
@@ -9779,7 +9789,7 @@ function renderDrawings() {
       const price = Number(d.p1);
       if (!isFinite(price)) return;
       const s = addDrawSeries(chart, {
-        color, lineWidth: 2, priceLineVisible: false, lastValueVisible: true,
+        color, lineWidth: (d.lineWidth || 2), priceLineVisible: false, lastValueVisible: true,
         title: `hline ${fmtNum(price)}`,
       });
       s.setData(sameTime ? [{ time: firstTime, value: price }]
@@ -9856,12 +9866,12 @@ function renderDrawings() {
         }
         if (pts.length < 3) return;
         pts.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
-        const s = addDrawSeries(chart, { color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: "", lineStyle: 2 });
+        const s = addDrawSeries(chart, { color, lineWidth: (d.lineWidth || 1), priceLineVisible: false, lastValueVisible: false, title: "", lineStyle: 2 });
         s.setData(pts);
         state.drawSeries.push(s);
       });
       // base leg
-      const s = addDrawSeries(chart, { color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: "", lineStyle: 1 });
+      const s = addDrawSeries(chart, { color, lineWidth: (d.lineWidth || 1), priceLineVisible: false, lastValueVisible: false, title: "", lineStyle: 1 });
       const lo = Math.min(i1, i2), hi = Math.max(i1, i2);
       s.setData([{ time: dts[lo], value: P1 }, { time: dts[hi], value: P2 }]);
       state.drawSeries.push(s);
@@ -9912,12 +9922,15 @@ function renderDrawings() {
       const i1 = idx.get(String(d.t1)), i2 = idx.get(String(d.t2));
       const P1 = Number(d.p1), P2 = Number(d.p2);
       if (!isFinite(P1) || !isFinite(P2) || i1 == null || i2 == null) return;
+      // Keep each price with its own anchor. `a`/`b` are chronological only.
+      const pA = String(t1) <= String(t2) ? P1 : P2;
+      const pB = String(t1) <= String(t2) ? P2 : P1;
 
       const seg = (priceA, priceB, opts) => {
         const s = addDrawSeries(chart, {
-          color, lineWidth: (opts && opts.width) || 1, priceLineVisible: false,
+          color, lineWidth: (d.lineWidth != null ? d.lineWidth : ((opts && opts.width) || 1)), priceLineVisible: false,
           lastValueVisible: false, title: (opts && opts.title) || "",
-          lineStyle: (opts && opts.dashed) ? 2 : 0,
+          lineStyle: (d.lineStyle != null ? d.lineStyle : ((opts && opts.dashed) ? 2 : 0)),
         });
         s.setData(a === b ? [{ time: a, value: priceA }]
           : [{ time: a, value: priceA }, { time: b, value: priceB }]);
@@ -9926,7 +9939,25 @@ function renderDrawings() {
       };
 
       if (d.type === "trendline") {
-        seg(P1, P2, { title: "trendline", width: 2 });
+        if (d.extendLeft || d.extendRight) {
+          const perBar = (P2 - P1) / Math.max(1, Math.abs(i2 - i1));
+          const iLast = dts.length - 1;
+          const pts = [];
+          if (d.extendLeft) pts.push({ time: dts[0], value: P1 + perBar * (0 - i1) });
+          pts.push({ time: t1, value: P1 });
+          pts.push({ time: t2, value: P2 });
+          if (d.extendRight) pts.push({ time: dts[iLast], value: P1 + perBar * (iLast - i1) });
+          const seen = new Set();
+          const ordered = pts
+            .filter((pt) => pt.time != null && isFinite(pt.value))
+            .sort((u, v) => (u.time < v.time ? -1 : u.time > v.time ? 1 : 0))
+            .filter((pt) => (seen.has(pt.time) ? false : (seen.add(pt.time), true)));
+          const s = addDrawSeries(chart, { color, lineWidth: (d.lineWidth || 2), priceLineVisible: false, lastValueVisible: false, title: "trendline" });
+          s.setData(ordered);
+          state.drawSeries.push(s);
+        } else {
+          seg(pA, pB, { title: "trendline", width: 2 });
+        }
       } else if (d.type === "ray") {
         // the ray leaves through the SECOND anchor and projects 30 sessions
         const goingUpIdx = i2 >= i1;
@@ -9940,7 +9971,7 @@ function renderDrawings() {
           proj.push({ time: cur.toISOString().slice(0, 10), value: P2 + perBar * (proj.length + 1) * (goingUpIdx ? 1 : 1) });
         }
         const s = addDrawSeries(chart, {
-          color, lineWidth: 2, priceLineVisible: false, lastValueVisible: false,
+          color, lineWidth: (d.lineWidth || 2), priceLineVisible: false, lastValueVisible: false,
           title: "ray",
         });
         // a ray runs from the earlier anchor onward past the chart's right edge
@@ -9955,12 +9986,12 @@ function renderDrawings() {
         const delta = P2 - P1;
         const pct = (delta / P1) * 100;
         const label = `${delta >= 0 ? "+" : ""}${fmtNum(delta)} (${fmtNum(pct)}%) · ${bars} bars`;
-        seg(P1, P2, { title: label });
+        seg(pA, pB, { title: label });
         const top = Math.max(P1, P2), bot = Math.min(P1, P2);
         [top, bot].forEach((price) => {
           const e = addDrawSeries(chart, {
-            color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
-            lineStyle: 2, title: "",
+            color, lineWidth: (d.lineWidth || 1), priceLineVisible: false, lastValueVisible: false,
+            lineStyle: (d.lineStyle != null ? d.lineStyle : 2), title: "",
           });
           e.setData(a === b ? [{ time: a, value: price }]
             : [{ time: a, value: price }, { time: b, value: price }]);
@@ -9972,8 +10003,8 @@ function renderDrawings() {
         if (d.t3 != null && idx.get(String(d.t3)) != null && i2 !== i1) {
           off = Number(d.p3) - (P1 + ((P2 - P1) * (idx.get(String(d.t3)) - i1)) / (i2 - i1));
         }
-        seg(P1, P2, { title: "channel" });
-        if (off !== 0) seg(P1 + off, P2 + off, {});
+        seg(pA, pB, { title: "channel" });
+        if (off !== 0) seg(pA + off, pB + off, {});
       } else if (d.type === "vline") {
         const bars = state.chartBars || [];
         let lo = Infinity, hi = -Infinity;
@@ -10003,8 +10034,8 @@ function renderDrawings() {
         }
         // horizontal component
         const h = addDrawSeries(chart, {
-          color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
-          lineStyle: 2, title: "",
+          color, lineWidth: (d.lineWidth || 1), priceLineVisible: false, lastValueVisible: false,
+          lineStyle: (d.lineStyle != null ? d.lineStyle : 2), title: "",
         });
         const first = dts[0], last = dts[dts.length - 1];
         h.setData(first === last ? [{ time: first, value: P1 }]
@@ -10016,7 +10047,7 @@ function renderDrawings() {
         const data = [{ time: a, value: P1 }, ...projT.map((tt) => ({ time: tt, value: P1 }))]
           .sort((u, v) => (u.time < v.time ? -1 : 1));
         const s = addDrawSeries(chart, {
-          color, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, title: "",
+          color, lineWidth: (d.lineWidth || 2), priceLineVisible: false, lastValueVisible: false, title: "",
         });
         s.setData(data);
         chart.timeScale().applyOptions({ rightOffset: 32 });
@@ -10032,16 +10063,16 @@ function renderDrawings() {
         seg(top, top, {}); seg(bot, bot, {});
         const defVert = (when) => {
           const s = addDrawSeries(chart, {
-            color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: "",
+            color, lineWidth: (d.lineWidth || 1), priceLineVisible: false, lastValueVisible: false, title: "",
           });
           s.setData([{ time: when, value: top }, { time: when, value: bot }]);
           state.drawSeries.push(s);
         };
         defVert(a); defVert(b);
         // diagonal hint between the anchors makes the box readable as a rectangle
-        seg(P1, P2, { dashed: true });
+        seg(pA, pB, { dashed: true });
       } else if (d.type === "arrow") {
-        seg(P1, P2, { title: "", width: 2 });
+        seg(pA, pB, { title: "", width: 2 });
         // the head is a marker pinned to the SECOND anchor: it rides entirely on
         // chart (time, price) coordinates, never screen pixels
         const s = state.drawSeries[state.drawSeries.length - 1];
@@ -10060,12 +10091,12 @@ function renderDrawings() {
           const delta = P2 - P1;
           const pct = P1 ? (delta / P1) * 100 : 0;
           const label = `${delta >= 0 ? "+" : ""}${fmtNum(delta)} (${fmtNum(pct)}%)`;
-          const v = seg(P1, P2, { title: label });
+          const v = seg(pA, pB, { title: label });
           v.setData(a === b ? [{ time: a, value: P1 }] : [{ time: a, value: P1 }, { time: a, value: P2 }]);
           const top = Math.max(P1, P2), bot = Math.min(P1, P2);
           [top, bot].forEach((price) => {
             const e = addDrawSeries(chart, {
-              color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, lineStyle: 2, title: "",
+              color, lineWidth: (d.lineWidth || 1), priceLineVisible: false, lastValueVisible: false, lineStyle: (d.lineStyle != null ? d.lineStyle : 2), title: "",
             });
             e.setData(a === b ? [{ time: a, value: price }]
               : [{ time: a, value: price }, { time: b, value: price }]);
@@ -10094,7 +10125,7 @@ function renderDrawings() {
           const tt = dts[target];
           if (tt == null) return;
           const s = addDrawSeries(chart, {
-            color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: "", lineStyle: 2,
+            color, lineWidth: (d.lineWidth || 1), priceLineVisible: false, lastValueVisible: false, title: "", lineStyle: (d.lineStyle != null ? d.lineStyle : 2),
           });
           s.setData([{ time: tt, value: lo }, { time: tt, value: hi }]);
           state.drawSeries.push(s);
@@ -10117,15 +10148,15 @@ function renderDrawings() {
           const slope = (pEnd - P1) / span;
           const pLast = P1 + slope * (iLast - i1);
           const s = addDrawSeries(chart, {
-            color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
-            title: "", lineStyle: 2,
+            color, lineWidth: (d.lineWidth || 1), priceLineVisible: false, lastValueVisible: false,
+            title: "", lineStyle: (d.lineStyle != null ? d.lineStyle : 2),
           });
           const tEnd = dts[Math.min(iEnd, iLast)];
           s.setData(i1 === iLast ? [{ time: dts[i1], value: P1 }]
             : [{ time: dts[i1], value: P1 }, { time: tEnd, value: iLast <= iEnd ? pEnd : pLast }]);
           state.drawSeries.push(s);
         });
-        seg(P1, P2, { dashed: true, width: 1 });
+        seg(pA, pB, { dashed: true, width: 1 });
       } else if (d.type === "regression_channel") {
         // OLS centre line of CLOSES between the anchors, plus parallel ±k·σ
         // bands (ratios[0] = k, default 2). Honest fit: computed on the chart's
@@ -10145,7 +10176,7 @@ function renderDrawings() {
           const { slope, intercept, sd } = fitResp;
           const fit = () => {
             const s3 = addDrawSeries(chart, {
-              color, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, title: "",
+              color, lineWidth: (d.lineWidth || 2), priceLineVisible: false, lastValueVisible: false, title: "",
             });
             s3.setData([
               { time: dts[iS], value: intercept + slope * iS },
@@ -10156,7 +10187,7 @@ function renderDrawings() {
           fit();
           [[k, "raw"], [-k, "raw"]].forEach(([kv]) => {
             const s3 = addDrawSeries(chart, {
-              color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: "", lineStyle: 2,
+              color, lineWidth: (d.lineWidth || 1), priceLineVisible: false, lastValueVisible: false, title: "", lineStyle: (d.lineStyle != null ? d.lineStyle : 2),
             });
             s3.setData([
               { time: dts[iS], value: intercept + slope * iS + kv * sd },
@@ -10177,23 +10208,23 @@ function renderDrawings() {
         const dir = d.type === "long_pos" ? (P2 < P1 ? 1 : -1) : (P2 > P1 ? -1 : 1);
         const target = P1 + dir * riskAbs * R;
         const riskPct = riskAbs / P1 * 100;
-        seg(P1, P2, { title: "", width: 1, dashed: true });
+        seg(pA, pB, { title: "", width: 1, dashed: true });
         const entry = addDrawSeries(chart, {
-          color, lineWidth: 2, priceLineVisible: false,
+          color, lineWidth: (d.lineWidth || 2), priceLineVisible: false,
           lastValueVisible: false, title: `entry ${fmtNum(P1)}`,
         });
         entry.setData(a === b ? [{ time: a, value: P1 }] : [{ time: a, value: P1 }, { time: b, value: P1 }]);
         state.drawSeries.push(entry);
         const stp = addDrawSeries(chart, {
-          color: PRAVAHA.down, lineWidth: 1, priceLineVisible: false,
-          lastValueVisible: false, lineStyle: 2, title: `stop ${fmtNum(P2)}`,
+          color: PRAVAHA.down, lineWidth: (d.lineWidth || 1), priceLineVisible: false,
+          lastValueVisible: false, lineStyle: (d.lineStyle != null ? d.lineStyle : 2), title: `stop ${fmtNum(P2)}`,
         });
         stp.setData(a === b ? [{ time: a, value: P2 }] : [{ time: a, value: P2 }, { time: b, value: P2 }]);
         state.drawSeries.push(stp);
         if (isFinite(target) && target !== P1) {
           const tgt = addDrawSeries(chart, {
-            color: PRAVAHA.up, lineWidth: 1, priceLineVisible: false,
-            lastValueVisible: false, lineStyle: 2, title: `target ${fmtNum(target)}`,
+            color: PRAVAHA.up, lineWidth: (d.lineWidth || 1), priceLineVisible: false,
+            lastValueVisible: false, lineStyle: (d.lineStyle != null ? d.lineStyle : 2), title: `target ${fmtNum(target)}`,
           });
           tgt.setData(a === b ? [{ time: a, value: target }] : [{ time: a, value: target }, { time: b, value: target }]);
           state.drawSeries.push(tgt);
@@ -10209,8 +10240,8 @@ function renderDrawings() {
         // labelled level chip: a full-span horizontal line titled with the
         // user's text + the exact price (both live in chart coordinates)
         const s = addDrawSeries(chart, {
-          color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
-          title: `${(d.text || "label")}${d.text ? "" : ""} ${fmtNum(Number(d.p1))}`, lineStyle: 0,
+          color, lineWidth: (d.lineWidth || 1), priceLineVisible: false, lastValueVisible: false,
+          title: `${(d.text || "label")}${d.text ? "" : ""} ${fmtNum(Number(d.p1))}`, lineStyle: (d.lineStyle != null ? d.lineStyle : 0),
         });
         const l0 = Number(d.p1);
         s.setData(sameTime ? [{ time: firstTime, value: l0 }]
@@ -10279,7 +10310,7 @@ function renderDrawings() {
         const iFrom = Math.max(0, Math.min(i1, iLast));
         const ray = (k, dashed) => {
           const s = addDrawSeries(chart, {
-            color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
+            color, lineWidth: (d.lineWidth || 1), priceLineVisible: false, lastValueVisible: false,
             title: "", lineStyle: dashed ? 2 : 0,
           });
           const v1 = P1 + k * base * (iFrom - i1);
@@ -10365,7 +10396,7 @@ function renderDrawings() {
       if (i1 == null || i2 == null || i3 == null || ![P1, P2, P3].every(isFinite)) return;
       const hline = (priceVal, fromI, titleTxt, dashed) => {
         const s = addDrawSeries(chart, {
-          color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
+          color, lineWidth: (d.lineWidth || 1), priceLineVisible: false, lastValueVisible: false,
           title: titleTxt || "", lineStyle: dashed ? 2 : 0,
         });
         const iEnd = dts.length - 1;
@@ -10388,7 +10419,7 @@ function renderDrawings() {
         ratios.forEach((r) => {
           const lo = Math.min(i1, i3), hi = Math.max(i2, i3);
           const s = addDrawSeries(chart, {
-            color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
+            color, lineWidth: (d.lineWidth || 1), priceLineVisible: false, lastValueVisible: false,
             title: `fib ${fmtNum(r, 3)}`, lineStyle: r === 0 ? 0 : 2,
           });
           s.setData([
@@ -10403,7 +10434,7 @@ function renderDrawings() {
 
     drawingLevels(d).forEach((lvl) => {
       const s = addDrawSeries(chart, {
-        color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
+        color, lineWidth: (d.lineWidth || 1), priceLineVisible: false, lastValueVisible: false,
         title: `${d.type === "fib_extension" ? "ext" : "fib"} ${lvl.ratio} @ ${fmtNum(lvl.price)}`,
       });
       const data = a === b ? [{ time: a, value: lvl.price }]
@@ -10521,7 +10552,99 @@ function renderDrawList() {
     state.drawings = (state.drawings || []).filter((x) => x.id !== btn.dataset.id);
     afterDrawingsChanged();
   }));
+  bindDrawProps();
+  renderDrawProps();
 }
+
+function bindDrawProps() {
+  const panel = $("#draw-props");
+  if (!panel || panel.dataset.bound === "1") return;
+  panel.dataset.bound = "1";
+  const apply = (mut) => {
+    const d = (state.drawings || []).find((x) => x.id === state.drawSelectId);
+    if (!d) return;
+    pushDrawHistory();
+    mut(d);
+    afterDrawingsChanged();
+    renderDrawProps();
+  };
+  $("#dp-color").addEventListener("input", (e) => apply((d) => { d.color = e.target.value; }));
+  $("#dp-opacity").addEventListener("input", (e) => apply((d) => { d.opacity = Number(e.target.value); }));
+  $("#dp-width").addEventListener("change", (e) => apply((d) => { const v = Number(e.target.value); d.lineWidth = isFinite(v) && v > 0 ? v : d.lineWidth; }));
+  $("#dp-style").addEventListener("change", (e) => apply((d) => { d.lineStyle = Number(e.target.value); }));
+  $("#dp-visible").addEventListener("change", (e) => apply((d) => { d.hidden = !e.target.checked; }));
+  $("#dp-lock").addEventListener("change", (e) => apply((d) => { d.locked = !!e.target.checked; }));
+  $("#dp-ext-left").addEventListener("change", (e) => apply((d) => { d.extendLeft = !!e.target.checked; }));
+  $("#dp-ext-right").addEventListener("change", (e) => apply((d) => { d.extendRight = !!e.target.checked; }));
+  $("#dp-ext-both").addEventListener("change", (e) => apply((d) => { const v = !!e.target.checked; d.extendLeft = v; d.extendRight = v; }));
+  $("#dp-text").addEventListener("click", () => {
+    const d = (state.drawings || []).find((x) => x.id === state.drawSelectId);
+    if (!d) return;
+    const note = window.prompt("Edit text:", d.text || "");
+    if (note === null) return;
+    pushDrawHistory();
+    d.text = String(note).slice(0, 120);
+    afterDrawingsChanged();
+    renderDrawProps();
+  });
+  $("#dp-delete").addEventListener("click", () => {
+    if (!state.drawSelectId) return;
+    pushDrawHistory();
+    state.drawings = (state.drawings || []).filter((x) => x.id !== state.drawSelectId);
+    state.drawSelectId = null;
+    afterDrawingsChanged();
+    renderDrawProps();
+  });
+  $("#dp-duplicate").addEventListener("click", () => {
+    const d = (state.drawings || []).find((x) => x.id === state.drawSelectId);
+    if (!d) return;
+    pushDrawHistory();
+    const copy = JSON.parse(JSON.stringify(d));
+    copy.id = nextDrawingId();
+    copy.created = new Date().toISOString();
+    state.drawings.push(copy);
+    state.drawSelectId = copy.id;
+    afterDrawingsChanged();
+    renderDrawProps();
+  });
+}
+
+function renderDrawProps() {
+  const panel = $("#draw-props");
+  if (!panel) return;
+  const d = (state.drawings || []).find((x) => x.id === state.drawSelectId);
+  if (!d) { panel.hidden = true; return; }
+  panel.hidden = false;
+  const color = /^#[0-9a-f]{6}$/i.test(String(d.color || "")) ? d.color : "#9dc4ae";
+  $("#dp-color").value = color;
+  $("#dp-opacity").value = (d.opacity == null ? 1 : d.opacity);
+  $("#dp-width").value = (d.lineWidth || 2);
+  $("#dp-style").value = String(d.lineStyle != null ? d.lineStyle : 0);
+  $("#dp-visible").checked = !d.hidden;
+  $("#dp-lock").checked = !!d.locked;
+  $("#dp-ext-left").checked = !!d.extendLeft;
+  $("#dp-ext-right").checked = !!d.extendRight;
+  $("#dp-ext-both").checked = !!d.extendLeft && !!d.extendRight;
+  const parts = anchorParts(d);
+  const m = (parts.length >= 2)
+    ? (() => {
+        const a = parts[0], b = parts[1];
+        const ia = (state.chartDates || []).indexOf(String(a[1]));
+        const ib = (state.chartDates || []).indexOf(String(b[1]));
+        const pa = Number(a[2]), pb = Number(b[2]);
+        const delta = pb - pa;
+        const pct = pa ? (delta / pa) * 100 : 0;
+        const bars = (ia >= 0 && ib >= 0) ? Math.abs(ib - ia) + 1 : null;
+        const angle = (ia != null && ib != null) ? (Math.atan2(pb - pa, ib - ia) * 180 / Math.PI) : null;
+        return `Selected ${esc(d.name || DRAW_LABELS[d.type] || d.type)} · anchors ${esc(a[1])} @ ${fmtNum(pa)} → ${esc(b[1])} @ ${fmtNum(pb)}`
+          + ` · Δ ${fmtNum(delta)} (${fmtNum(pct)}%)`
+          + (bars != null ? ` · ${bars} bars` : "")
+          + (angle != null ? ` · angle ${fmtNum(angle, 2)}°` : "");
+      })()
+    : `Selected ${esc(d.name || DRAW_LABELS[d.type] || d.type)} · single anchor`;
+  $("#dp-measure").textContent = m;
+}
+
 
 /* -------------------------------------------------------- pointer placement */
 function drawStatus(msg) {
@@ -10681,6 +10804,7 @@ function onChartClick(param) {
       if (tool === "select" || !tool) {
         state.drawSelectId = hit && !hit.locked ? hit.id : null;
         renderDrawList();
+        renderDrawProps();
         refreshSelectionMarkers();
         drawStatus(state.drawSelectId
           ? "Drawing selected — drag it or an anchor to move it (Delete removes it)."
@@ -11812,6 +11936,7 @@ function bindDrawings() {
       if (state.drawPending) clearDrawPreview();
     });
   }
+  bindDrawProps();
   if ($("#draw-tool")) {
     $("#draw-tool").addEventListener("change", () => setDrawTool($("#draw-tool").value || null));
   }
