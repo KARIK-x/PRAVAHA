@@ -19042,8 +19042,15 @@ async function loadSectorOverview() {
       { html: fmtNum(s.turnover) },
       { html: fmtNum(s.share_pct) + "%" },
     ]);
-    shareEl.innerHTML = table(["Sector", "Latest turnover", "Share %"], rows)
-      + `<p class="hint">Concentration HHI: ${esc(String(data.concentration_hhi))}. Latest-session turnover shares.</p>`;
+    const maxShare = Math.max(...(data.turnover_share || []).map((x) => x.share_pct || 0), 1);
+    const bars = (data.turnover_share || []).map((s) => {
+      const w = Math.max(2, Math.round(((s.share_pct || 0) / maxShare) * 100));
+      return `<div style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;font-size:12px">${esc(s.sector)}</span><div style="flex:1;height:12px;background:var(--bg3);border-radius:6px;overflow:hidden"><div style="width:${w}%;height:100%;background:var(--accent)"></div></div><span style="width:70px;text-align:right;font-size:12px">${fmtNum(s.share_pct)}%</span></div>`;
+    }).join("");
+    const recon = data.turnover_reconciliation || {};
+    shareEl.innerHTML = bars + table(["Sector", "Latest turnover", "Share %"], rows)
+      + `<p class="hint">Concentration HHI: ${esc(String(data.concentration_hhi))}. Latest-session turnover shares.</p>`
+      + `<div class="report-missing ok" style="margin-top:8px">Market total: ${fmtNum(recon.market_total_turnover)} NPR · sum of classified sectors: ${fmtNum(recon.sector_turnover_sum)} NPR · difference: ${fmtNum(recon.difference)} NPR (${fmtNum(recon.difference_pct)}%). ${esc(recon.note)}</div>`;
   }
 
   // Heatmap
@@ -19115,7 +19122,9 @@ async function loadSectorOverview() {
   const q = $("#so-quality");
   if (q) {
     q.textContent = `Latest date: ${data.data_quality.latest_date}. Observations: ${data.data_quality.observations}. ` +
-      `${data.data_quality.sector_count} sectors, ${data.data_quality.company_count} companies. ${data.data_quality.note}`;
+      `${data.data_quality.sector_count} sectors, ${data.data_quality.company_count} companies. ` +
+      `Index source: ${data.data_quality.index_source}. Turnover source: ${data.data_quality.turnover_source}. ` +
+      `${data.data_quality.note} Dashboard live quotes use a different source and date.`;
   }
 
   // Sector checkboxes

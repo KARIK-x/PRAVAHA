@@ -6663,6 +6663,19 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
             })
         company_snapshot.sort(key=lambda x: -(x["return_period_pct"] if x["return_period_pct"] is not None else -999))
 
+        # Turnover reconciliation between available sectors and market total.
+        sector_turnover_sum = sum((s.get("latest_turnover") or 0.0) for s in sectors_out)
+        market_total = market_turnover[-1] if market_turnover else None
+        recon_diff = (market_total - sector_turnover_sum) if (market_total is not None) else None
+        recon_pct = (recon_diff / market_total * 100.0) if (recon_diff is not None and market_total not in (0, None)) else None
+        reconciliation = {
+            "market_total_turnover": market_total,
+            "sector_turnover_sum": round(sector_turnover_sum, 2),
+            "difference": round(recon_diff, 2) if recon_diff is not None else None,
+            "difference_pct": round(recon_pct, 2) if recon_pct is not None else None,
+            "note": "Sector totals are sums of constituent stored bars. A difference can occur when some symbols are unclassified or have missing sector mappings.",
+        }
+
         # Rule-based insights.
         insights = []
         if sectors_out:
@@ -6697,6 +6710,7 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
             "rankings": rankings,
             "turnover_share": shares,
             "concentration_hhi": hhi,
+            "turnover_reconciliation": reconciliation,
             "scatter": scatter,
             "company_snapshot": company_snapshot,
             "insights": insights,
@@ -6706,7 +6720,9 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
                 "sector_count": len(sectors_out),
                 "company_count": len(company_snapshot),
                 "source": "stored price_bars + security_master",
-                "note": "Sector index is an equal-weight derived aggregate, not an official NEPSE sector index.",
+                "turnover_source": "sum of constituent stored price_bars.turnover for the latest session",
+                "index_source": "derived equal-weight aggregate of stored closes; not an official NEPSE sector index",
+                "note": "Historical EOD data only. Dashboard live quotes use a different source and date.",
             },
         }
 
