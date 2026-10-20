@@ -18935,6 +18935,7 @@ async function loadSectorOverview() {
       const pts = groupedDates.map((k, j) => ({ time: k, value: useVals[j] })).filter((p) => p.value != null);
       if (!pts.length) return;
       const series = chart.addLineSeries({ color: palette[i % palette.length], lineWidth: 2, title: sec.sector });
+    window.__soAdded = (window.__soAdded||0)+1;
       series.setData(pts);
       seriesMap.set(sec.sector, { series, values: useVals, dates: groupedDates });
     });
@@ -18973,11 +18974,22 @@ async function loadSectorOverview() {
       }).filter(Boolean);
       if (nepsePts.length) {
         const nepseSeries = chart.addLineSeries({ color: "#9db4ae", lineWidth: 1, lineStyle: 2, title: "NEPSE" });
+      window.__soAdded = (window.__soAdded||0)+1;
         nepseSeries.setData(nepsePts);
         seriesMap.set("NEPSE", { series: nepseSeries, values: nepsePts.map((p) => p.value), dates: groupedDates });
       }
     }
+    const titleEl = $("#so-chart-title");
+    if (titleEl) titleEl.textContent = `${metric === "turnover" ? "Turnover (NPR)" : metric === "volume" ? "Share volume" : "Sector index (rebased 100)"} · ${groupMode} · ${data.start_date} → ${data.end_date} · ${seriesMap.size} series`;
+    const legendEl = $("#so-legend");
+    if (legendEl) {
+      legendEl.innerHTML = Array.from(seriesMap.keys()).map((name, i) =>
+        `<span style="display:inline-flex;align-items:center;gap:4px;font-size:12px"><span style="width:12px;height:3px;background:${["#E9C46A","#1FC98A","#FF6B78","#7BA7FF","#F4D58D","#A8FFD9","#FFB86B","#C792EA","#9db4ae"][i % 9]};display:inline-block"></span>${esc(name)}</span>`
+      ).join("");
+    }
     chart.timeScale().fitContent();
+    window.__soChart = chart;
+    window.__soSeriesCount = seriesMap.size;
     chart.subscribeCrosshairMove((param) => {
       if (!tooltip) return;
       if (!param || !param.time) { tooltip.style.display = "none"; return; }
