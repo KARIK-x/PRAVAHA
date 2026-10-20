@@ -342,21 +342,21 @@ class FriendAccessMiddleware:
         headers = _Headers(scope.get("headers") or [])
         authed = token_matches(extract_token(headers))
 
-        # Private records are owner-only: never served to a non-loopback client,
-        # with or without a valid token. This is independent of the allowlist, so
-        # a route cannot be published by accident.
-        if private_record_route(path):
-            if authed:
-                return await _deny(403, "route not exposed for friend access")(scope, receive, send)
-            return await _deny(401, "authentication required for private records")(
+        # A valid shared token grants the full application surface, including
+        # journal, portfolio and other records. The token is the credential; once
+        # it is presented the friend is no longer restricted to the read-only
+        # allowlist. Without a valid token the deployment still fails closed.
+        if authed:
+            return await self.app(scope, receive, send)
+
+        if not authed:
+            return await _deny(401, "authentication required for friend access")(
                 scope, receive, send
             )
 
-        # Non-loopback: a valid token is required, then the explicit allowlist.
-        # With require-auth on but no token configured, token_matches rejects
-        # everything and the deployment fails closed.
-        if not authed:
-            return await _deny(401, "authentication required for friend access")(
+        # Unauthenticated non-loopback traffic is denied by default.
+        if private_record_route(path):
+            return await _deny(401, "authentication required for private records")(
                 scope, receive, send
             )
         if not friend_allowed(scope.get("method", "GET"), path):

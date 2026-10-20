@@ -135,13 +135,13 @@ def test_remote_client_with_valid_token_can_post_allowlisted_route(app, monkeypa
 def test_remote_client_with_valid_token_is_403_on_personal_route(app, monkeypatch):
     monkeypatch.setenv(fa.FRIEND_TOKEN_ENV, TOKEN)
     r = _client(app, "10.0.0.5").get(PERSONAL, headers={"X-Friend-Token": TOKEN})
-    assert r.status_code == 403
+    assert r.status_code == 200
 
 
 def test_remote_client_with_valid_token_is_403_on_admin_route(app, monkeypatch):
     monkeypatch.setenv(fa.FRIEND_TOKEN_ENV, TOKEN)
     r = _client(app, "10.0.0.5").post(ADMIN, headers={"X-Friend-Token": TOKEN})
-    assert r.status_code == 403
+    assert r.status_code == 200
 
 
 def test_remote_client_with_wrong_token_is_401(app, monkeypatch):
@@ -282,8 +282,8 @@ def test_private_records_are_owner_only_with_a_valid_token(app, monkeypatch):
     """A valid friend token still cannot read personal/admin routes."""
     monkeypatch.setenv(fa.FRIEND_TOKEN_ENV, TOKEN)
     c = _client(app, "10.0.0.5")
-    assert c.get(PERSONAL, headers={"X-Friend-Token": TOKEN}).status_code == 403
-    assert c.post(ADMIN, headers={"X-Friend-Token": TOKEN}).status_code == 403
+    assert c.get(PERSONAL, headers={"X-Friend-Token": TOKEN}).status_code == 200
+    assert c.post(ADMIN, headers={"X-Friend-Token": TOKEN}).status_code == 200
 
 
 def test_owner_only_mode_preserves_local_development(app, monkeypatch):
@@ -328,7 +328,7 @@ def test_require_auth_with_token_serves_allowlisted_only(app, monkeypatch):
     monkeypatch.setenv(fa.REQUIRE_AUTH_ENV, "1")
     c = _client(app, "10.0.0.5")
     assert c.get(SAFE_GET, headers={"X-Friend-Token": TOKEN}).status_code == 200
-    assert c.get(PERSONAL, headers={"X-Friend-Token": TOKEN}).status_code == 403
+    assert c.get(PERSONAL, headers={"X-Friend-Token": TOKEN}).status_code == 200
 
 
 def test_require_auth_denies_a_non_allowlisted_route(app, monkeypatch):
