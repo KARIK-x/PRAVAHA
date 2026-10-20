@@ -37,6 +37,7 @@
       <span class="nav-label">Market</span>
       <button data-view="overview" class="active">Dashboard</button>
       <button data-view="watchlists">Watchlists</button>
+      <button data-view="sectoroverview" class="gold">Sector Overview</button>
     </div>
     <div class="nav-group">
       <span class="nav-label">Charting</span>
@@ -334,6 +335,44 @@
 
 
   <!-- --------------------------------------------------------------- CHARTS -->
+            <section id="view-sectoroverview" class="view">
+      <div class="card wide">
+        <h2>Sector Overview <span class="hint">Derived sector analytics from stored daily bars</span></h2>
+        <div class="controls">
+          <label>Period (sessions)
+            <select id="so-period">
+              <option value="5">5</option>
+              <option value="20" selected>20</option>
+              <option value="60">60</option>
+              <option value="120">120</option>
+            </select>
+          </label>
+          <label>Metric
+            <select id="so-metric">
+              <option value="index">Sector index (rebased 100)</option>
+              <option value="turnover">Turnover (NPR)</option>
+              <option value="return">Period return (%)</option>
+            </select>
+          </label>
+          <button class="ctb-btn" id="so-refresh">Refresh</button>
+          <span class="hint" id="so-status"></span>
+        </div>
+        <div id="so-snapshot" class="controls" style="gap:8px;flex-wrap:wrap;"></div>
+        <div id="so-chart" class="chartbox big" style="height:360px;"></div>
+        <h3>Sector rankings</h3>
+        <div id="so-rankings" class="tablewrap"></div>
+        <h3>Turnover share and concentration</h3>
+        <div id="so-share" class="tablewrap"></div>
+        <h3>Market breadth</h3>
+        <div id="so-breadth" class="chartbox" style="height:220px;"></div>
+        <h3>Heatmap snapshot</h3>
+        <div id="so-heatmap" class="tablewrap"></div>
+        <h3>Automated insights</h3>
+        <div id="so-insights"></div>
+        <p class="hint" id="so-quality"></p>
+      </div>
+    </section>
+
   <section id="view-charts" class="view">
     <!-- ================= chart toolbar: compact, grouped, labelled ============= -->
     <div class="ctb" id="chart-toolbar">
@@ -2489,7 +2528,7 @@
 <!-- Central feature registry: one source of truth for universal search,
      navigation and command suggestions. Must load before app.js. -->
 <script src="/features.js?v=feat1"></script>
-<script src="/app.js?v=wb97"></script>
+<script src="/app.js?v=wb98"></script>
 <script src="/kronos_ui.js?v=wb2"></script>
 </body>
 </html>

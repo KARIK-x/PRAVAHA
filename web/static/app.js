@@ -355,6 +355,8 @@ function viewShown(name) {
   }
   if (name === "marketintel") {
     loadMarketIntelligence();
+  } else if (name === "sectoroverview") {
+    if (typeof loadSectorOverview === "function") loadSectorOverview();
   } else if (name === "new" || name === "nu" || name === "nse" || name === "nprof" || name === "neps" || name === "nepsh" || name === "nttm" || name === "ncmp" || name === "nscr" || name === "nelig" || name === "ncov") {
     loadNewSection(name === "new" ? "nu" : name);
   } else if (name === "baba" || name.startsWith("baba/")) {
@@ -18783,3 +18785,160 @@ async function ssRunStrategy() {
       `<p class="hint">The equity curves are drawn with 1 in ${step} points (${sampled.length} of ${curve.length}) so the file stays responsive; the figures are unchanged.</p>`);
   }
 }
+
+/* ============================================================ Sector Overview */
+async function loadSectorOverview() {
+  const period = $("#so-period") ? $("#so-period").value : "20";
+  const status = $("#so-status");
+  if (status) status.textContent = "Loading sector analytics…";
+  let data;
+  try {
+    data = await api(`/api/sector-overview?period=${encodeURIComponent(period)}`);
+  } catch (e) {
+    const out = $("#so-rankings");
+    if (out) out.innerHTML = `<div class="empty">Could not load sector overview: ${esc(e.message)}</div>`;
+    if (status) status.textContent = "Unavailable";
+    return;
+  }
+  if (!data || !data.available) {
+    $("#so-rankings").innerHTML = `<div class="empty">${esc((data && data.reason) || "No sector data available.")}</div>`;
+    if (status) status.textContent = "No data";
+    return;
+  }
+  if (status) status.textContent = `${data.period_sessions} sessions · ${data.start_date} → ${data.end_date}`;
+
+  // Snapshot cards
+  const snap = $("#so-snapshot");
+  if (snap) {
+    const m = data.market || {};
+    const best = data.sectors.length ? data.sectors.reduce((a, b) => ((a.return_period_pct || -999) > (b.return_period_pct || -999) ? a : b)) : null;
+    const worst = data.sectors.length ? data.sectors.reduce((a, b) => ((a.return_period_pct || 999) < (b.return_period_pct || 999) ? a : b)) : null;
+    const cards = [
+      ["NEPSE", fmtNum(m.nepse && m.nepse[m.nepse.length - 1]), (m.nepse_return_period_pct != null ? `${m.nepse_return_period_pct}%` : "—")],
+      ["Total turnover", fmtNum(m.latest_total_turnover), "NPR"],
+      ["Advancing", (m.breadth && m.breadth[m.breadth.length - 1]) ? m.breadth[m.breadth.length - 1].advancing : "—", "companies"],
+      ["Declining", (m.breadth && m.breadth[m.breadth.length - 1]) ? m.breadth[m.breadth.length - 1].declining : "—", "companies"],
+      ["Strongest sector", best ? best.sector : "—", best && best.return_period_pct != null ? `${best.return_period_pct}%` : "—"],
+      ["Weakest sector", worst ? worst.sector : "—", worst && worst.return_period_pct != null ? `${worst.return_period_pct}%` : "—"],
+      ["Concentration HHI", data.concentration_hhi != null ? data.concentration_hhi : "—", "turnover share"],
+      ["Observations", data.data_quality.observations, data.data_quality.latest_date],
+    ];
+    snap.innerHTML = cards.map(([k, v, h]) =>
+      `<div class="report-hero" style="min-width:150px;padding:10px 12px"><div class="hint">${esc(k)}</div><div style="font-size:18px;font-weight:700">${esc(String(v))}</div><div class="hint">${esc(String(h))}</div></div>`
+    ).join("");
+  }
+
+  // Main chart: sector index or turnover.
+  const chartEl = $("#so-chart");
+  if (chartEl && typeof LightweightCharts !== "undefined") {
+    chartEl.innerHTML = "";
+    const chart = LightweightCharts.createChart(chartEl, {
+      layout: { background: { color: "transparent" }, textColor: "#9db4ae" },
+      grid: { vertLines: { color: "rgba(36,69,60,.35)" }, horzLines: { color: "rgba(36,69,60,.35)" } },
+      rightPriceScale: { borderColor: "rgba(36,69,60,.55)" },
+      timeScale: { borderColor: "rgba(36,69,60,.55)", timeVisible: false },
+    });
+    const metric = $("#so-metric") ? $("#so-metric").value : "index";
+    const palette = ["#E9C46A", "#1FC98A", "#FF6B78", "#7BA7FF", "#F4D58D", "#A8FFD9", "#FFB86B", "#C792EA"];
+    (data.sectors || []).forEach((sec, i) => {
+      const series = chart.addLineSeries({ color: palette[i % palette.length], lineWidth: 2, title: sec.sector });
+      const values = metric === "turnover" ? sec.turnover : (metric === "return" ? null : sec.index);
+      if (metric === "return") {
+        // Single point per sector is not a series; skip time series.
+        return;
+      }
+      const pts = (values || []).map((v, j) => ({ time: data.dates[j], value: v })).filter((p) => p.value != null);
+      if (pts.length) series.setData(pts);
+    });
+    if (metric !== "return") {
+      const nepse = chart.addLineSeries({ color: "#9db4ae", lineWidth: 1, lineStyle: 2, title: "NEPSE" });
+      const pts = (data.market.nepse || []).map((v, j) => ({ time: data.dates[j], value: v })).filter((p) => p.value != null);
+      if (pts.length) nepse.setData(pts);
+    }
+    chart.timeScale().fitContent();
+  }
+
+  // Rankings table.
+  const rankEl = $("#so-rankings");
+  if (rankEl) {
+    const rows = (data.rankings || []).map((s) => [
+      { html: esc(s.sector) },
+      { html: fmtNum(s.return_period_pct) },
+      { html: fmtNum(s.turnover_change_pct) },
+      { html: fmtNum(s.latest_turnover) },
+      { html: fmtNum(s.relative_turnover) },
+      { html: s.members },
+    ]);
+    rankEl.innerHTML = table(["Sector", "Period return %", "Turnover change %", "Latest turnover", "Relative turnover", "Members"], rows);
+  }
+
+  // Turnover share.
+  const shareEl = $("#so-share");
+  if (shareEl) {
+    const rows = (data.turnover_share || []).map((s) => [
+      { html: esc(s.sector) },
+      { html: fmtNum(s.turnover) },
+      { html: fmtNum(s.share_pct) },
+    ]);
+    shareEl.innerHTML = table(["Sector", "Latest turnover", "Share %"], rows)
+      + `<p class="hint">Concentration HHI: ${esc(String(data.concentration_hhi))}. Shares are latest-session turnover shares.</p>`;
+  }
+
+  // Heatmap as simple colored table.
+  const heatEl = $("#so-heatmap");
+  if (heatEl) {
+    const rows = (data.sectors || []).map((s) => {
+      const v = s.return_period_pct;
+      const color = v == null ? "var(--muted)" : (v >= 0 ? "var(--up)" : "var(--down)");
+      return [{ html: `<span style="color:${color};font-weight:700">${esc(s.sector)}</span>` },
+              { html: fmtNum(v) },
+              { html: fmtNum(s.latest_turnover) },
+              { html: fmtNum(s.relative_turnover) }];
+    });
+    heatEl.innerHTML = table(["Sector", "Period return %", "Latest turnover", "Relative turnover"], rows);
+  }
+
+  // Breadth chart.
+  const breadthEl = $("#so-breadth");
+  if (breadthEl && typeof LightweightCharts !== "undefined") {
+    breadthEl.innerHTML = "";
+    const chart = LightweightCharts.createChart(breadthEl, {
+      layout: { background: { color: "transparent" }, textColor: "#9db4ae" },
+      grid: { vertLines: { color: "rgba(36,69,60,.35)" }, horzLines: { color: "rgba(36,69,60,.35)" } },
+      rightPriceScale: { borderColor: "rgba(36,69,60,.55)" },
+      timeScale: { borderColor: "rgba(36,69,60,.55)", timeVisible: false },
+    });
+    const adv = chart.addLineSeries({ color: "#1FC98A", lineWidth: 2, title: "Advancing" });
+    const dec = chart.addLineSeries({ color: "#FF6B78", lineWidth: 2, title: "Declining" });
+    adv.setData((data.market.breadth || []).map((b) => ({ time: b.date, value: b.advancing })).filter((p) => p.value != null));
+    dec.setData((data.market.breadth || []).map((b) => ({ time: b.date, value: b.declining })).filter((p) => p.value != null));
+    chart.timeScale().fitContent();
+  }
+
+  // Insights.
+  const ins = $("#so-insights");
+  if (ins) {
+    ins.innerHTML = (data.insights || []).map((x) => `<div class="report-missing ok">${esc(x)}</div>`).join("");
+  }
+  const q = $("#so-quality");
+  if (q) {
+    q.textContent = `Latest date: ${data.data_quality.latest_date}. Observations: ${data.data_quality.observations}. ` +
+      `${data.data_quality.sector_count} sectors, ${data.data_quality.company_count} companies. ${data.data_quality.note}`;
+  }
+
+  // Bind controls once.
+  const refresh = $("#so-refresh");
+  if (refresh && refresh.dataset.bound !== "1") {
+    refresh.dataset.bound = "1";
+    refresh.addEventListener("click", () => loadSectorOverview());
+    if ($("#so-period")) $("#so-period").addEventListener("change", () => loadSectorOverview());
+    if ($("#so-metric")) $("#so-metric").addEventListener("change", () => loadSectorOverview());
+  }
+}
+
+// Gold accent for the Sector Overview navigation item.
+(function () {
+  const style = document.createElement("style");
+  style.textContent = `#nav button[data-view="sectoroverview"] { color: #E9C46A; } #nav button[data-view="sectoroverview"].active { background: rgba(233,196,106,.12); border-color: #E9C46A; color: #F4D58D; }`;
+  document.head.appendChild(style);
+})();

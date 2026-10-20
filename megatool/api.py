@@ -6476,6 +6476,240 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             return {"components": [], "count": 0, "routes": [], "error": str(exc)}
 
+
+    @app.get("/api/sector-overview")
+    def sector_overview(period: int = Query(20, ge=1, le=260),
+                        sectors: str = "", companies: str = "") -> dict[str, Any]:
+        """Derived sector-level analytics over stored daily bars.
+
+        Sector prices are equal-weight aggregates of members with enough history.
+        Sector turnover/volume are sums of constituent bars. Missing values are
+        never converted to zero in returns; they are omitted and reported.
+        """
+        store = get_store()
+        meta = store.securities_meta()
+        # Last N distinct trading dates.
+        date_rows = store.execute(
+            "SELECT DISTINCT trading_date FROM price_bars ORDER BY trading_date DESC LIMIT ?",
+            [period],
+        ).fetchall()
+        dates = sorted(r[0] for r in date_rows)
+        if not dates:
+            return {"available": False, "reason": "no stored price bars", "sectors": [], "market": {}}
+        start = dates[0]
+        bar_rows = store.execute(
+            "SELECT symbol, trading_date, close, turnover, volume FROM price_bars WHERE trading_date >= ?",
+            [start],
+        ).fetchall()
+        by_symbol: dict[str, dict[Any, dict[str, Any]]] = {}
+        for sym, dt, close, turnover, volume in bar_rows:
+            by_symbol.setdefault(str(sym).upper(), {})[dt] = {
+                "close": close, "turnover": turnover, "volume": volume,
+            }
+
+        sector_members: dict[str, list[str]] = {}
+        for sym, info in meta.items():
+            sec = canonical_sector(info.get("sector"))
+            if sec:
+                sector_members.setdefault(sec, []).append(str(sym).upper())
+
+        selected_sectors = [x.strip() for x in sectors.split(",") if x.strip()]
+        if not selected_sectors:
+            selected_sectors = sorted(sector_members)
+
+        def pct(a, b):
+            if a is None or b is None or not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
+                return None
+            if b == 0:
+                return None
+            return (a / b - 1.0) * 100.0
+
+        sectors_out = []
+        for sec in selected_sectors:
+            members = sector_members.get(sec, [])
+            valid = []
+            for sym in members:
+                dmap = by_symbol.get(sym, {})
+                if all(dt in dmap and dmap[dt].get("close") is not None for dt in dates):
+                    valid.append(sym)
+            # Equal-weight sector index, rebased to 100.
+            index = None
+            if len(valid) >= 2:
+                raw = [sum(by_symbol[sym][dt]["close"] for sym in valid) / len(valid) for dt in dates]
+                base = raw[0] if raw and raw[0] not in (0, None) else None
+                if base:
+                    index = [round((v / base) * 100.0, 2) for v in raw]
+            turnover = []
+            volume = []
+            for dt in dates:
+                t = 0.0
+                v = 0.0
+                have = False
+                for sym in members:
+                    d = by_symbol.get(sym, {}).get(dt)
+                    if not d:
+                        continue
+                    if d.get("turnover") is not None:
+                        t += float(d["turnover"]); have = True
+                    if d.get("volume") is not None:
+                        v += float(d["volume"])
+                turnover.append(round(t, 2) if have else None)
+                volume.append(round(v, 2) if have else None)
+
+            period_return = pct(index[-1] if index else None, index[0] if index else None)
+            prev_turnover = turnover[-2] if len(turnover) >= 2 else None
+            turnover_change_pct = pct(turnover[-1] if turnover else None, prev_turnover)
+            avg_prior = None
+            if len(turnover) >= 2:
+                vals = [x for x in turnover[:-1] if x is not None]
+                if vals:
+                    avg_prior = sum(vals) / len(vals)
+            rel_turnover = (turnover[-1] / avg_prior) if (turnover and turnover[-1] is not None and avg_prior not in (0, None)) else None
+            sectors_out.append({
+                "sector": sec,
+                "members": len(members),
+                "members_with_full_history": len(valid),
+                "index": index,
+                "turnover": turnover,
+                "volume": volume,
+                "return_period_pct": round(period_return, 2) if period_return is not None else None,
+                "turnover_change_pct": round(turnover_change_pct, 2) if turnover_change_pct is not None else None,
+                "latest_turnover": turnover[-1] if turnover else None,
+                "relative_turnover": round(rel_turnover, 2) if rel_turnover is not None else None,
+                "latest_volume": volume[-1] if volume else None,
+            })
+
+        # NEPSE from index_series.
+        nepse_rows = store.execute(
+            "SELECT trading_date, close FROM index_series WHERE index_name='NEPSE' AND trading_date >= ? ORDER BY trading_date",
+            [start],
+        ).fetchall()
+        nepse_map = {r[0]: r[1] for r in nepse_rows}
+        nepse = [nepse_map.get(dt) for dt in dates]
+        nepse_return = pct(nepse[-1] if nepse else None, nepse[0] if nepse else None)
+
+        # Market turnover from constituents.
+        market_turnover = []
+        for dt in dates:
+            t = 0.0
+            have = False
+            for sym, dmap in by_symbol.items():
+                d = dmap.get(dt)
+                if d and d.get("turnover") is not None:
+                    t += float(d["turnover"]); have = True
+            market_turnover.append(round(t, 2) if have else None)
+
+        # Breadth.
+        breadth = []
+        for i, dt in enumerate(dates):
+            adv = dec = unch = 0
+            if i == 0:
+                breadth.append({"date": str(dt), "advancing": None, "declining": None, "unchanged": None})
+                continue
+            prev = dates[i - 1]
+            for sym, dmap in by_symbol.items():
+                cur = dmap.get(dt, {}).get("close")
+                old = dmap.get(prev, {}).get("close")
+                if cur is None or old is None:
+                    continue
+                if cur > old:
+                    adv += 1
+                elif cur < old:
+                    dec += 1
+                else:
+                    unch += 1
+            breadth.append({"date": str(dt), "advancing": adv, "declining": dec, "unchanged": unch})
+
+        # Turnover share and concentration.
+        latest_sector_turnover = {s["sector"]: (s["latest_turnover"] or 0.0) for s in sectors_out}
+        total_to = sum(v for v in latest_sector_turnover.values() if v is not None)
+        shares = []
+        for sec, val in latest_sector_turnover.items():
+            share = (val / total_to * 100.0) if total_to else None
+            shares.append({"sector": sec, "turnover": val, "share_pct": round(share, 2) if share is not None else None})
+        shares.sort(key=lambda x: -(x["share_pct"] or -999))
+        hhi = None
+        if total_to:
+            fracs = [v / total_to for v in latest_sector_turnover.values() if v is not None]
+            hhi = round(sum(f * f for f in fracs), 4)
+
+        # Rankings.
+        rankings = sorted(sectors_out, key=lambda x: (x["return_period_pct"] is None, -(x["return_period_pct"] or -999)))
+
+        # Scatter: return vs relative turnover.
+        scatter = [{"sector": s["sector"], "return_pct": s["return_period_pct"],
+                    "relative_turnover": s["relative_turnover"],
+                    "latest_turnover": s["latest_turnover"]} for s in sectors_out]
+
+        # Company snapshot for heatmap (latest close/turnover/period return).
+        company_snapshot = []
+        for sym, info in meta.items():
+            dmap = by_symbol.get(str(sym).upper(), {})
+            if not dmap:
+                continue
+            last_dt = dates[-1]
+            d = dmap.get(last_dt)
+            if not d or d.get("close") is None:
+                continue
+            first_dt = dates[0]
+            first_close = dmap.get(first_dt, {}).get("close")
+            ret = pct(d["close"], first_close)
+            company_snapshot.append({
+                "symbol": str(sym).upper(),
+                "sector": canonical_sector(info.get("sector")),
+                "close": d["close"],
+                "turnover": d.get("turnover"),
+                "return_period_pct": round(ret, 2) if ret is not None else None,
+            })
+        company_snapshot.sort(key=lambda x: -(x["return_period_pct"] if x["return_period_pct"] is not None else -999))
+
+        # Rule-based insights.
+        insights = []
+        if sectors_out:
+            best = max(sectors_out, key=lambda x: (x["return_period_pct"] is not None, x["return_period_pct"] or -999))
+            worst = min(sectors_out, key=lambda x: (x["return_period_pct"] is None, x["return_period_pct"] if x["return_period_pct"] is not None else 999))
+            if best.get("return_period_pct") is not None:
+                insights.append(f"{best['sector']} has the strongest selected-period return at {best['return_period_pct']}%.")
+            if worst.get("return_period_pct") is not None:
+                insights.append(f"{worst['sector']} has the weakest selected-period return at {worst['return_period_pct']}%.")
+        high_to = max(sectors_out, key=lambda x: (x["latest_turnover"] is not None, x["latest_turnover"] or -999)) if sectors_out else None
+        if high_to and high_to.get("latest_turnover") is not None:
+            insights.append(f"{high_to['sector']} has the highest latest-session turnover.")
+        if hhi is not None:
+            insights.append(f"Latest-session turnover concentration (HHI) is {hhi}.")
+        if not insights:
+            insights.append("Insufficient data to generate evidence-based insights for this period.")
+
+        return {
+            "available": True,
+            "period_sessions": len(dates),
+            "start_date": str(dates[0]),
+            "end_date": str(dates[-1]),
+            "dates": [str(d) for d in dates],
+            "sectors": sectors_out,
+            "market": {
+                "nepse": nepse,
+                "nepse_return_period_pct": round(nepse_return, 2) if nepse_return is not None else None,
+                "turnover": market_turnover,
+                "breadth": breadth,
+                "latest_total_turnover": market_turnover[-1] if market_turnover else None,
+            },
+            "rankings": rankings,
+            "turnover_share": shares,
+            "concentration_hhi": hhi,
+            "scatter": scatter,
+            "company_snapshot": company_snapshot,
+            "insights": insights,
+            "data_quality": {
+                "latest_date": str(dates[-1]),
+                "observations": len(dates),
+                "sector_count": len(sectors_out),
+                "company_count": len(company_snapshot),
+                "source": "stored price_bars + security_master",
+                "note": "Sector index is an equal-weight derived aggregate, not an official NEPSE sector index.",
+            },
+        }
+
     # Serve the terminal UI (same origin, no CORS involved).
     if PATHS.web.exists():
         app.mount("/", StaticFiles(directory=str(PATHS.web), html=True), name="web")
