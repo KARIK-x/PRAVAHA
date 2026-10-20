@@ -6410,6 +6410,49 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
             results.sort(key=score)
         return {"query": q, "count": len(results), "results": results[:limit]}
 
+    @app.get("/api/export/registry")
+    def export_registry(request: Request) -> dict[str, Any]:
+        """Shared, permission-aware export component discovery.
+
+        Reuses the BABA report component registry rather than maintaining a
+        second hardcoded list. Each entry states its category, formats implied
+        by the report renderer, availability, and whether it is private.
+        """
+        owner = False
+        try:
+            from megatool.friend_access import client_is_loopback, trust_loopback
+            owner = bool(trust_loopback() and client_is_loopback(request.client.host if request.client else None))
+        except Exception:  # noqa: BLE001
+            owner = False
+        try:
+            from megatool import report_builder as rb
+            reg = rb._registry()
+            components = []
+            for cid in rb.get_component_ids():
+                c = reg[cid]
+                if not owner and c.category in ("K_journal", "L_portfolio"):
+                    continue
+                components.append({
+                    "id": c.id,
+                    "name": c.name,
+                    "category": c.category,
+                    "available": bool(c.available),
+                    "private": c.category in ("K_journal", "L_portfolio"),
+                    "formats": ["xlsx", "csv", "pdf", "json"],
+                })
+            return {
+                "components": components,
+                "count": len(components),
+                "routes": [
+                    {"id": "baba_report", "path": "/api/baba/report/export", "formats": ["xlsx", "csv", "pdf", "json"]},
+                    {"id": "screen_export", "path": "/api/screen/export.csv", "formats": ["csv", "xlsx", "pdf"]},
+                    {"id": "research_download", "path": "/api/baba/research/jobs/{job_id}/download/{fmt}", "formats": ["pdf", "xlsx", "json", "zip"]},
+                ],
+                "private_included": owner,
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"components": [], "count": 0, "routes": [], "error": str(exc)}
+
     # Serve the terminal UI (same origin, no CORS involved).
     if PATHS.web.exists():
         app.mount("/", StaticFiles(directory=str(PATHS.web), html=True), name="web")
