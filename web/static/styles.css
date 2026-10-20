@@ -446,7 +446,7 @@ textarea:focus { outline: none; border-color: var(--accent); }
 
 #chart.chartbox.big { width: 100%; height: clamp(360px, calc(100vh - 250px), 820px);
   border: 1px solid var(--line); border-radius: 10px; background: var(--pravaha-panel); }
-#chart-stage.with-drawer #chart.chartbox.big { width: calc(100% - 268px); }
+#chart-stage.with-drawer #chart.chartbox.big { width: calc(100% - 350px); }
 .chart-sub { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
 .chart-sub .chartbox.small { height: 132px; border: 1px solid var(--line);
   border-radius: 10px; background: var(--pravaha-panel); }
