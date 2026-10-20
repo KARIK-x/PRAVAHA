@@ -128,3 +128,12 @@ extraction/
 
 # --- Large reference PDFs (not application code) ---
 *.pdf
+
+# --- Generated / runtime data from the report + calendar work ---
+data/bs_ad/
+data/report_templates/
+data/jobs/
+.wrangler/
+.agents/
+opencode.json
+skills-lock.json

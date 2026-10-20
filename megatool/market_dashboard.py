@@ -108,6 +108,146 @@ def index_series(store: Any, limit: int = 400) -> dict[str, Any]:
     }
 
 
+#: Windows the per-sector participation table reports, matching the reference's
+#: "Percentage of stocks above Moving Average" table (10/20/50/200 + 50&200).
+SECTOR_MA_WINDOWS = (10, 20, 50, 200)
+
+
+def _stored_sector_map(store: Any) -> dict[str, str]:
+    """``{symbol: sector}`` from the STORED classification (no network).
+
+    The Sector Explorer / ``fetch-sectors`` writes ``security_master.sector``, so
+    the dashboard reads the same mapping instead of re-fetching the upstream
+    securities list.
+    """
+    try:
+        rows = store.query_rows(
+            "SELECT symbol, sector FROM security_master "
+            "WHERE sector IS NOT NULL AND sector != ''"
+        )
+        return {str(r[0]).upper(): str(r[1]) for r in rows}
+    except Exception:  # noqa: BLE001 - a missing table is an empty map, not a crash
+        return {}
+
+
+def sector_ma_participation(
+    store: Any, sector_map: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """Per-sector share of securities trading above their own moving average.
+
+    Reference parity with the SastaShare "Percentage of stocks above Moving
+    Average" table (Above 10/20/50/200 SMA and Above 50&200 SMA), computed from
+    stored daily closes only.
+
+    Honesty rules:
+    * A security with fewer than ``window`` stored closes is EXCLUDED from that
+      window's denominator — it is never counted as "below", which would invent
+      a bearish reading.
+    * Only symbols with a verified sector classification are counted; the rest
+      are reported as ``unclassified`` rather than bucketed into a sector.
+    * Percentages are ``above / denominator`` for that sector and window.
+    """
+    smap = sector_map if sector_map is not None else _stored_sector_map(store)
+    windows = SECTOR_MA_WINDOWS
+    cols = ", ".join(
+        f"AVG(close) OVER (PARTITION BY symbol ORDER BY trading_date "
+        f"ROWS BETWEEN {w - 1} PRECEDING AND CURRENT ROW) AS sma{w}"
+        for w in windows
+    )
+    try:
+        df = store.query_df(
+            f"""
+            WITH w AS (
+              SELECT symbol, trading_date, close, {cols},
+                COUNT(*) OVER (PARTITION BY symbol) AS n_bars,
+                ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY trading_date DESC) AS rn
+              FROM price_bars WHERE close > 0 AND high >= low
+            )
+            SELECT symbol, close, n_bars, {", ".join(f"sma{w}" for w in windows)}
+            FROM w WHERE rn = 1
+            """
+        )
+    except Exception:  # noqa: BLE001
+        return {"available": False, "reason": "no stored price history", "sectors": []}
+
+    if df is None or getattr(df, "empty", True):
+        return {"available": False, "reason": "no stored price history", "sectors": []}
+
+    # Per sector: one entry per symbol carrying, for each window, whether the
+    # symbol has enough history and whether its close is above that average.
+    # Keeping the per-symbol flags lets "above 50 AND 200" be computed from the
+    # same symbols instead of zipping unrelated lists.
+    buckets: dict[str, dict[str, dict[int, bool | None]]] = {}
+    unclassified = 0
+    for row in df.itertuples(index=False):
+        sym = str(getattr(row, "symbol", "")).upper()
+        sector = smap.get(sym)
+        if not sector:
+            unclassified += 1
+            continue
+        close = _num(getattr(row, "close", None))
+        # DuckDB's window AVG averages whatever rows exist, so a 200-row window
+        # over 30 stored bars returns a NUMBER, not NULL. The window is therefore
+        # only usable when the symbol actually has >= that many stored closes.
+        n_bars = int(getattr(row, "n_bars", 0) or 0)
+        flags: dict[int, bool | None] = {}
+        for w in windows:
+            avg = _num(getattr(row, f"sma{w}", None))
+            # None = not enough stored history for this window (excluded, never
+            # counted as "below", which would invent a bearish reading).
+            flags[w] = (
+                None if (avg is None or close is None or n_bars < w) else bool(close > avg)
+            )
+        buckets.setdefault(sector, {})[sym] = flags
+
+    out = []
+    for sector, members in buckets.items():
+        entry: dict[str, Any] = {"sector": sector}
+        for w in windows:
+            known = [f[w] for f in members.values() if f[w] is not None]
+            den = len(known)
+            above = sum(1 for k in known if k)
+            entry[f"above_{w}"] = above
+            entry[f"denominator_{w}"] = den
+            entry[f"pct_above_{w}"] = round(above / den * 100.0, 1) if den else None
+        both = [
+            1 if (f[50] and f[200]) else 0
+            for f in members.values()
+            if f[50] is not None and f[200] is not None
+        ]
+        den_both = len(both)
+        entry["above_50_and_200"] = sum(both)
+        entry["denominator_50_and_200"] = den_both
+        entry["pct_above_50_and_200"] = (
+            round(sum(both) / den_both * 100.0, 1) if den_both else None
+        )
+        out.append(entry)
+
+    out.sort(key=lambda e: (-(e.get("denominator_200") or 0), e["sector"]))
+    return {
+        "available": bool(out),
+        "windows": list(windows),
+        "as_of": _latest_date(store),
+        "unclassified": unclassified,
+        "classified": sum((e.get("denominator_200") or 0) for e in out),
+        "sectors": out,
+        "note": (
+            "Percentage of each sector's securities trading above their own "
+            "simple moving average on the latest stored session. A security with "
+            "fewer than N stored closes is excluded from that window rather than "
+            "counted as below. Only symbols with a verified sector are counted."
+        ),
+    }
+
+
+def _latest_date(store: Any) -> str | None:
+    try:
+        row = store.query_one("SELECT MAX(trading_date) FROM price_bars")
+        return str(row[0])[:10] if row and row[0] else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def breadth(store: Any) -> dict[str, Any]:
     adv = dec = unc = missing = 0
     try:
@@ -457,6 +597,7 @@ def build_dashboard(
         "movers": movers(quotes, top),
         "heat": heat(quotes),
         "valuation": valuation(store, conn, _sector_map()),
+        "sector_ma": sector_ma_participation(store),
         "sector_map_size": len(_sector_map()),
         "market_closed": market.get("is_open") is False,
     }

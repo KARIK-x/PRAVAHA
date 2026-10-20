@@ -25,7 +25,7 @@ uv run megatool serve        # start the web terminal at http://127.0.0.1:8710
 Run the test suite:
 
 ```bash
-uv run pytest                # 796 tests, ~35s
+uv run pytest                # ≈3,200 tests, ~2.5 min
 ```
 
 Stop the server with `Ctrl-C`.
@@ -36,7 +36,11 @@ Stop the server with `Ctrl-C`.
 | --- | --- |
 | **Data** | 514,018 real daily bars across 372 symbols (1995 → 2026-10-09), every row carrying its source and retrieval time. Rows flagged `invalid` are excluded from every calculation, and `suspect` rows are kept and disclosed. **Two gaps are known and not yet fixed:** all 115 rows whose `high < low` are excluded (that part is sound), but 40,446 bars whose `open` or `close` falls outside `[low, high]` and 10 bars carrying a zero price are still read as-is — they are flagged, not dropped. See B-20/B-21 in `KNOWN_BUGS.md` |
 | **Charting** | Candles, volume and 28 indicators, aligned to price by trading date; swing points and market structure (HH/HL/LH/LL, breaks) drawn as markers |
-| **Research workspace** | One card in the existing Research tab composes overview, swing structure, Fibonacci retracements/extensions, support–resistance zones, candlestick detections, the research report and data quality into a single dated payload — each module reporting its own real state and elapsed time, one failing without hiding the others. No completion percentage is shown, because none is measurable |
+| **Research workspace** | One card in the existing Research tab composes overview, swing structure, Fibonacci retracements/extensions, support–resistance zones, candlestick detections, the research report and data quality into a single dated payload — each module reporting its own real state and elapsed time, one failing without hiding the others. The synchronous card shows no completion percentage, because none is measurable; the background **Research Studio** below does, because it counts finished steps |
+| **Research Studio** | Select one or many symbols and exactly which analyses a report contains, or choose **Full research report** (80 public components across fundamentals, quarterly statements, valuation, eligibility, sector, technicals, dividends, risk, charts and data quality). Builds run as background jobs with a persisted job id, real step-based progress, stage, failure reason and resumable downloads: combined PDF, XLSX (native Excel charts), JSON, and a ZIP with per-symbol PDFs/XLSX and one CSV per component. Journal and portfolio components are stripped for every non-owner request |
+| **Range forecasting** | Next-session **high-low range** (not direction): a naive baseline plus EWMA true range, HAR and a blend, scored by expanding-origin one-step-ahead walk-forward on stored bars. Reports MAE, RMSE, median APE, improvement vs naive and the measured 80% interval coverage. A constant-rupee risk budget turns a forecast into share sizing at 0.5×–2× the expected range; no order is created |
+| **Report Builder** | 200 selectable components in 16 categories. Only selected, available components are computed and rendered; an unselected section is absent from every format. Components with no data stay visible as unavailable with their real reason and are never filled with estimates. XLSX, one-CSV-per-section ZIP, PDF and JSON, plus save/load/rename/delete templates |
+| **Scheduled public data** | A Cloudflare Worker cron (`*/10`) re-reads the public YONEPSE JSON, validates it, keeps the last good snapshot on failure, distinguishes publisher timestamp from retrieval time, and never turns an LTP snapshot into OHLCV. It also pings Render's public health route so the free instance does not cold-start. The Data tab shows the edge's last check, last success, failures and freshness |
 | **Scanner** | 19 metrics, 4 presets, composable AND/OR filter trees |
 | **Backtesting** | Own long/flat engine: next-bar-open fills, fees and slippage, a buy-and-hold benchmark, and every assumption printed with the result |
 | **Research assistant** | A deterministic rules engine that answers *descriptive* questions with the window and definition behind every number, and refuses to predict or recommend |

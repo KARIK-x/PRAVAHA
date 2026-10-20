@@ -149,6 +149,17 @@ FRIEND_ROUTES: tuple[tuple[str, str], ...] = (
     # bounded analysis compute (read-only over public market data)
     ("POST", r"^/api/analysis/run$"),
     ("POST", r"^/api/fundamental/run$"),
+    # BABA public report surface. Journal/portfolio components are stripped
+    # server-side for every non-owner request; templates remain owner-only.
+    ("GET", r"^/api/baba/components$"),
+    ("POST", r"^/api/baba/report/preview$"),
+    ("GET", r"^/api/baba/report/export$"),
+    ("GET", r"^/api/baba/research/catalog$"),
+    ("POST", r"^/api/baba/research/jobs$"),
+    ("GET", r"^/api/baba/research/jobs$"),
+    ("GET", r"^/api/baba/research/jobs/[0-9a-f]{32}$"),
+    ("GET", r"^/api/baba/research/jobs/[0-9a-f]{32}/download/[a-z]+$"),
+    ("GET", r"^/api/baba/volatility/[A-Za-z0-9._-]+$"),
     ("GET", r"^/api/kronos/status$"),
     ("POST", r"^/api/kronos/(forecast|evaluate)$"),
 )

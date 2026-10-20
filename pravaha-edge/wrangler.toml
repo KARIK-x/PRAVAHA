@@ -1,0 +1,52 @@
+name = "pravaha-edge"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# Deploy to workers.dev by default. NO routes are bound to the Netlify domain,
+# so this cannot interfere with the live Netlify site.
+workers_dev = true
+
+[vars]
+# Render backend (authoritative origin). Worker proxies to this.
+ORIGIN_URL = "https://pravaha-hkwt.onrender.com"
+# Netlify frontend origin (CORS allowlist). Matches render.yaml MEGATOOL_FRIEND_ORIGIN.
+FRONTEND_ORIGIN = "https://pravahanepse.netlify.app"
+# The Worker's own public origin, allowed for a frontend served from here.
+EDGE_ORIGIN = "https://pravaha-edge.aadarshakarki.workers.dev"
+# Default edge cache TTL (seconds) for allowlisted GETs.
+DEFAULT_CACHE_TTL = "60"
+# Public YONEPSE JSON base (documented, no auth). Used by the cron refresh.
+YONEPSE_BASE = "https://shubhamnpk.github.io/yonepse"
+
+# Static frontend, deployed to Cloudflare alongside the Worker. The same files
+# are also published by Netlify; both remain valid deployments.
+[assets]
+directory = "../web/static"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# Cron Trigger: every 10 minutes. Each tick does two independent things:
+#   1. refresh YONEPSE (only inside Mon-Fri 11:00-16:00 NPT; unchanged payloads
+#      are recorded as "unchanged", never as a failure);
+#   2. ping Render's public /api/health so the free instance does not sleep
+#      (Render spins down after ~15 min of inactivity, causing 20-60s cold starts).
+[triggers]
+crons = ["*/10 * * * *"]
+
+# KV: small public snapshot + ingestion metadata ONLY. Never the historical
+# 515k-bar database, and never private user data.
+# Created 2026-10-19 in account d6bfd658866817b04bc8ebdefd344061:
+#   wrangler kv namespace create PRAVAHA_KV
+# `wrangler dev` uses a LOCAL simulated KV, so no preview namespace is needed.
+[[kv_namespaces]]
+binding = "PRAVAHA_KV"
+id = "0cdb957c50654d80905c2fbb67ccce34"
+
+# Optional hardening (NOT required for the minimal design):
+#   wrangler secret put MEGATOOL_FRIEND_TOKEN
+# If set, the Worker verifies the browser token with a constant-time compare
+# before serving from cache. Leaving it unset keeps Render as the single source
+# of truth and avoids duplicating the secret.
+
+[observability]
+enabled = true

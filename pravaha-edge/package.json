@@ -1,0 +1,20 @@
+{
+  "name": "pravaha-edge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal Cloudflare Worker: read-through cache + proxy for PRAVAHA (Render backend).",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 8787",
+    "build": "echo \"no build step (plain ES module worker)\"",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "node tests/integration.mjs"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.0",
+    "wrangler": "^4.0.0"
+  }
+}

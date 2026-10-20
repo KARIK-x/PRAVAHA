@@ -7,6 +7,7 @@
      backend). Empty = same origin. Replace with the backend's public https URL
      after deployment; this is not a secret. -->
 <meta name="megatool-api-base" content="" />
+<meta name="megatool-edge-base" content="https://pravaha-edge.aadarshakarki.workers.dev" />
 <title>PRAVAHA — NEPSE Analytics Platform</title>
 <meta name="description" content="PRAVAHA — NEPSE Analytics Platform. Insights today. A brighter tomorrow." />
 <meta name="theme-color" content="#06110F" />
@@ -16,7 +17,7 @@
 <link rel="icon" type="image/png" sizes="64x64" href="/brand/pravaha-symbol-64.png" />
 <link rel="icon" type="image/png" sizes="128x128" href="/brand/pravaha-symbol-128.png" />
 <link rel="apple-touch-icon" sizes="192x192" href="/brand/pravaha-appicon-192.png" />
-<link rel="stylesheet" href="/styles.css?v=wb17" />
+<link rel="stylesheet" href="/styles.css?v=wb21" />
 <script src="/vendor/lightweight-charts.standalone.js"></script>
 </head>
 <body>
@@ -97,6 +98,19 @@
     <div class="nav-group">
       <span class="nav-label">KIMI</span>
       <button data-view="kimi">KIMI Research</button>
+    </div>
+    <div class="nav-group">
+      <span class="nav-label">BABA</span>
+      <button data-view="baba">BABA Dashboard</button>
+      <button data-view="baba/sector">Sector Explorer</button>
+      <button data-view="baba/scanner">Fund. Scanner</button>
+      <button data-view="baba/quarterly">Quarterly</button>
+      <button data-view="baba/eligibility">Eligibility</button>
+      <button data-view="baba/compare">Compare</button>
+      <button data-view="baba/journal">Journal</button>
+      <button data-view="baba/builder">Report Builder</button>
+      <button data-view="baba/exports">Exports</button>
+      <button data-view="baba/extras">Extras</button>
     </div>
     <div class="nav-group">
       <span class="nav-label">Sasto Share</span>
@@ -221,6 +235,16 @@
         <h2>Moving-average participation</h2>
         <div id="ov-ma" class="stat-row"></div>
         <p class="hint" id="ov-ma-hint"></p>
+      </div>
+      <div class="card ov-panel ov-wide">
+        <h2>Moving-average participation by sector</h2>
+        <div id="ov-ma-sector" class="tablewrap"><div class="empty">Loading…</div></div>
+        <p class="hint" id="ov-ma-sector-hint">
+          Share of each sector's securities trading above their <em>own</em> simple
+          moving average on the latest stored session. A security with fewer than
+          N stored closes is excluded from that window's denominator rather than
+          counted as below. Only symbols with a verified sector are counted.
+        </p>
       </div>
       <div class="card ov-panel ov-wide">
         <h2>Valuation — P/E distribution (stored fundamentals)</h2>
@@ -651,6 +675,12 @@
               <option value="100000">all</option>
             </select>
           </label>
+          <!-- Live readout of what these controls actually draw. Written from the
+               real overlay state (nothing is assumed), so a control that changes
+               nothing is visible immediately instead of silently doing nothing. -->
+          <p class="hint cd-render-status" id="cd-render-status" aria-live="polite">
+            Loading detector output…
+          </p>
         </div>
         <p class="hint">
           Marker legend: <b>BO</b> = breakout / trigger level from the chart-pattern
@@ -1314,6 +1344,21 @@
         <div id="live-snapshot" class="stat-row"></div>
         <div id="live-sources" class="tablewrap"></div>
       </div>
+      <div class="card wide" id="edge-card">
+        <h2>Scheduled ingestion (Cloudflare edge)</h2>
+        <p class="hint">
+          The edge Worker runs on a fixed cron even while this browser and the
+          development machine are off. It re-reads the public YONEPSE JSON, keeps
+          the last good snapshot and records every attempt. <b>Source updated</b>
+          is the timestamp the publisher reports; <b>last checked</b> is when the
+          edge actually retrieved it — they are deliberately shown separately.
+          A failure never overwrites the last valid snapshot.
+        </p>
+        <div id="edge-freshness" class="stat-row">
+          <div class="stat"><div class="k">Status</div><div class="v" style="font-size:15px">checking…</div></div>
+        </div>
+        <div id="edge-error" class="error"></div>
+      </div>
       <div class="card wide">
         <h2>Data quality (per symbol)</h2>
         <p class="hint">
@@ -1387,6 +1432,55 @@
       <div id="ws-sections"></div>
     </div>
 
+    <!-- ------------------------------------------- multi-symbol research studio -->
+    <div class="card wide" id="rst-card">
+      <h2>Research Studio — multi-symbol full reports</h2>
+      <p class="hint">
+        Pick one or more symbols and tick exactly which analyses the report
+        contains. “Full research report” selects every public analysis category.
+        The build runs in the background with real progress, and the files stay
+        downloadable after a refresh. Journal and portfolio components are never
+        included here.
+      </p>
+      <div class="controls">
+        <label class="wide">Symbols (comma separated)
+          <input id="rst-symbols" placeholder="NABIL, SCB, NICA" />
+        </label>
+        <label>Preset
+          <select id="rst-preset"></select>
+        </label>
+        <label>Risk budget (NPR, optional)
+          <input id="rst-risk" type="number" min="0" step="100" placeholder="5000" />
+        </label>
+        <label>Capital (NPR, optional)
+          <input id="rst-capital" type="number" min="0" step="1000" placeholder="200000" />
+        </label>
+        <button id="rst-start">Build report</button>
+      </div>
+      <div class="controls">
+        <button id="rst-all" class="ghost">Select all</button>
+        <button id="rst-none" class="ghost">Clear selection</button>
+        <label class="chk"><input type="checkbox" id="rst-only-available" checked /> Hide analyses with no data</label>
+        <span id="rst-count" class="muted"></span>
+      </div>
+      <div id="rst-error" class="error"></div>
+      <div id="rst-components" class="tablewrap">
+        <div class="empty">Loading analyses…</div>
+      </div>
+
+      <div id="rst-job" hidden>
+        <h3>Build progress</h3>
+        <progress id="rst-progress" max="100" value="0" style="width:100%;height:1.1em"></progress>
+        <div id="rst-job-meta" class="chart-meta"></div>
+        <div id="rst-downloads" class="controls"></div>
+      </div>
+
+      <h3>Recent builds</h3>
+      <div id="rst-jobs" class="tablewrap">
+        <div class="empty">No report has been built in this session.</div>
+      </div>
+    </div>
+
     <div class="grid">
       <div class="card wide">
         <h2 id="rs-report-head">Full report</h2>
@@ -1435,6 +1529,26 @@
         <div id="fc-results" class="tablewrap">
           <div class="empty">Press “Compare forecast models” to rank every model on one
             identical, honest split.</div>
+        </div>
+      </div>
+      <div class="card wide" id="rs-vol-card">
+        <h2>Next-session range forecast</h2>
+        <p class="hint">
+          Forecasts the <b>size</b> of the next stored session's range, not its
+          direction. A naive baseline and three volatility models are scored
+          walk-forward on stored NEPSE bars only. The 80% band is calibrated from
+          each model's own out-of-sample errors, and the measured coverage is
+          shown next to it. Nothing is placed or queued.
+        </p>
+        <div class="controls">
+          <label>Symbol <input id="rs-vol-symbol" placeholder="NABIL" /></label>
+          <label>Risk budget (NPR) <input id="rs-vol-risk" type="number" min="0" step="100" placeholder="5000" /></label>
+          <label>Capital (NPR) <input id="rs-vol-capital" type="number" min="0" step="1000" placeholder="200000" /></label>
+          <button id="rs-vol-run">Forecast range</button>
+        </div>
+        <div id="rs-vol-error" class="error"></div>
+        <div id="rs-vol-out" class="tablewrap">
+          <div class="empty">Enter a symbol and press “Forecast range”.</div>
         </div>
       </div>
     </div>
@@ -2229,6 +2343,29 @@
     </div>
   </section>
 
+  <!-- ============================================================== BABA -->
+  <section id="view-baba" class="view">
+    <div class="banner">BABA — Buy-and-build analysis. Fundamental research, sector
+      exploration, eligibility screening, a personal trading journal and a
+      report builder. Every figure is either reported, calculated from a stated
+      formula, or explicitly marked unavailable. No fabricated data.</div>
+    <div class="controls" id="baba-tabs">
+      <button class="ctb-btn baba-tab active" data-tab="dash">BABA Dashboard</button>
+      <button class="ctb-btn baba-tab" data-tab="sector">Sector Explorer</button>
+      <button class="ctb-btn baba-tab" data-tab="scanner">Fundamental Scanner</button>
+      <button class="ctb-btn baba-tab" data-tab="quarterly">Quarterly Analysis</button>
+      <button class="ctb-btn baba-tab" data-tab="eligibility">Eligibility Screener</button>
+      <button class="ctb-btn baba-tab" data-tab="compare">Company Comparison</button>
+      <button class="ctb-btn baba-tab" data-tab="journal">Trading Journal</button>
+      <button class="ctb-btn baba-tab" data-tab="builder">Report Builder</button>
+      <button class="ctb-btn baba-tab" data-tab="exports">Exports &amp; History</button>
+      <button class="ctb-btn baba-tab" data-tab="extras">Extras</button>
+    </div>
+    <div id="baba-content" class="card wide">
+      <div id="baba-body" class="tablewrap"><div class="empty">Select a tab above.</div></div>
+    </div>
+  </section>
+
   <!-- ---------------------------------------------------------- SASTO SHARE -->
   <section id="view-sastoshare" class="view">
     <div class="banner">
@@ -2322,8 +2459,11 @@
 </div>
 
 <script src="/indicator_info.js?v=wb13"></script>
-<script src="/viz.js?v=wb4"></script>
-<script src="/app.js?v=wb79"></script>
+<script src="/viz.js?v=wb5"></script>
+<!-- Central feature registry: one source of truth for universal search,
+     navigation and command suggestions. Must load before app.js. -->
+<script src="/features.js?v=feat1"></script>
+<script src="/app.js?v=wb92"></script>
 <script src="/kronos_ui.js?v=wb2"></script>
 </body>
 </html>

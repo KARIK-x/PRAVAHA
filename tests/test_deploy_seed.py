@@ -150,6 +150,39 @@ def test_seed_from_snapshot_raises_when_absent(tmp_path):
         ds.seed_from_snapshot(store, path=tmp_path / "nope.parquet")
 
 
+def test_seed_from_snapshot_records_an_ingestion_log_row():
+    """A load must leave a trace so /api/status can report the last fetch."""
+    from megatool.db import get_conn
+
+    with MarketStore() as store:
+        out = ds.seed_from_snapshot(store)
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT source, status, symbols_succeeded, rows_read, coverage_start, coverage_end "
+            "FROM ingestion_log ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert row is not None, "the snapshot load wrote no ingestion_log row"
+    assert row[0] == ds.SNAPSHOT_SOURCE
+    assert row[1] == "success"
+    assert row[2] == out["symbols"]
+    assert row[3] > 500_000
+    assert str(row[4]) <= "2000-01-01" and str(row[5]) >= "2026-01-01"
+
+
+def test_a_missing_snapshot_writes_no_success_log(tmp_path):
+    from megatool.db import get_conn, init_app_db
+
+    init_app_db()
+    with MarketStore() as store, pytest.raises(FileNotFoundError):
+        ds.seed_from_snapshot(store, path=tmp_path / "nope.parquet")
+    with get_conn() as conn:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM ingestion_log WHERE status='success'"
+        ).fetchone()[0]
+    assert n == 0
+
+
 # ------------------------------------------------------------- error isolation
 def test_seed_all_prefers_the_snapshot(monkeypatch):
     called = {}

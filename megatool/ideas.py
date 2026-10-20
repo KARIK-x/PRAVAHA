@@ -159,6 +159,105 @@ MODELS: list[dict[str, Any]] = [
         ],
         "status": "insufficient_data",
     },
+    {
+        "id": "earnings_yield",
+        "name": "Earnings yield",
+        "category": "Value",
+        "source": "Earnings yield = EPS / price (the inverse of P/E)",
+        "blurb": "How much earnings you buy per rupee of price; higher is cheaper.",
+        "requires": ["eps", "price"],
+        "status": "available",
+    },
+    {
+        "id": "graham_defensive",
+        "name": "Graham defensive criteria",
+        "category": "Value",
+        "source": "Graham: P/E <= 15 AND P/B <= 1.5 AND (P/E x P/B) <= 22.5",
+        "blurb": "The stricter defensive screen, not just the Graham Number.",
+        "requires": ["eps", "net_worth_per_share", "price"],
+        "status": "available",
+    },
+    {
+        "id": "trend_regime",
+        "name": "Trend regime (MA stack)",
+        "category": "Trend",
+        "source": "price > SMA50 > SMA200 (uptrend stack)",
+        "blurb": "Classic stacked moving-average trend filter on stored closes.",
+        "requires": ["bars_252"],
+        "status": "available",
+    },
+    {
+        "id": "low_volatility",
+        "name": "Low volatility",
+        "category": "Risk",
+        "source": "Annualised stdev of the last 20 daily returns, lowest first",
+        "blurb": "The calmest names — the defensive end of the risk spectrum.",
+        "requires": ["bars_252"],
+        "status": "available",
+    },
+    {
+        "id": "deep_drawdown",
+        "name": "Deep drawdown",
+        "category": "Risk / mean reversion",
+        "source": "Worst running-peak drawdown over the last 252 sessions",
+        "blurb": "Names furthest below their own 52-week high (no look-ahead).",
+        "requires": ["bars_252"],
+        "status": "available",
+    },
+    {
+        "id": "risk_adjusted",
+        "name": "Risk-adjusted return",
+        "category": "Risk / return",
+        "source": "252-session return / annualised 252-session volatility",
+        "blurb": "A Sharpe-style ratio with no risk-free rate — stated, not implied.",
+        "requires": ["bars_252"],
+        "status": "available",
+    },
+    {
+        "id": "mean_reversion",
+        "name": "Mean reversion (z-score)",
+        "category": "Mean reversion",
+        "source": "z = (close - SMA20) / stdev20; most negative first",
+        "blurb": "Furthest below its own 20-day mean, in standard deviations.",
+        "requires": ["bars_252"],
+        "status": "available",
+    },
+    {
+        "id": "volatility_squeeze",
+        "name": "Volatility squeeze",
+        "category": "Volatility",
+        "source": "20-session volatility / 252-session volatility, lowest first",
+        "blurb": "Volatility contraction relative to the name's own norm.",
+        "requires": ["bars_252"],
+        "status": "available",
+    },
+    {
+        "id": "near_52w_high",
+        "name": "Near 52-week high",
+        "category": "Momentum",
+        "source": "Position within the trailing 52-week high/low range",
+        "blurb": "Names trading near the top of their yearly range.",
+        "requires": ["bars_252"],
+        "status": "available",
+    },
+    {
+        "id": "momentum_3m",
+        "name": "3-month momentum",
+        "category": "Momentum",
+        "source": "63-session total return",
+        "blurb": "Short-horizon momentum, the fast counterpart to 12-1.",
+        "requires": ["bars_64"],
+        "status": "available",
+    },
+    {
+        "id": "quality_value",
+        "name": "Quality at a fair price (QARP)",
+        "category": "Quality / value",
+        "source": "P/E <= 20 AND price above the 200-session mean",
+        "blurb": "Reasonably priced and already in an uptrend.",
+        "requires": ["eps", "price", "bars_252"],
+        "status": "available",
+    },
 ]
 
 
@@ -262,6 +361,41 @@ def _price_stats(store: Any, universe: list[str]) -> dict[str, dict[str, Any]]:
         row["range_high"], row["range_low"] = hi, lo
         if hi > lo:
             row["range_pos"] = (float(close[-1]) - lo) / (hi - lo) * 100.0
+        if n >= 50:
+            row["sma50"] = float(close[-50:].mean())
+        if n >= 20:
+            row["sma20"] = float(close[-20:].mean())
+            sd20 = float(close[-20:].std(ddof=1))
+            # A zero/NaN dispersion cannot say anything about deviation.
+            row["zscore_20"] = ((float(close[-1]) - row["sma20"]) / sd20) if sd20 > 0 else None
+        # Daily log-free simple returns, so volatility and drawdown are on the
+        # same basis as the returns the app reports elsewhere.
+        if n >= 21:
+            rets = close[1:] / close[:-1] - 1.0
+            r20 = rets[-20:]
+            row["vol20_annual_pct"] = float(r20.std(ddof=1) * (252 ** 0.5) * 100.0) if len(r20) > 1 else None
+            if n >= 252:
+                r252 = rets[-252:]
+                v252 = float(r252.std(ddof=1) * (252 ** 0.5) * 100.0) if len(r252) > 1 else None
+                row["vol252_annual_pct"] = v252
+                if v252 and row["vol20_annual_pct"] is not None:
+                    row["vol_ratio"] = row["vol20_annual_pct"] / v252
+                # Running-peak max drawdown over the window: for each bar,
+                # the fall from the highest close seen SO FAR (never from a
+                # later peak, which would be look-ahead).
+                window = close[-252:]
+                running_peak = float(window[0])
+                worst = 0.0
+                for v in window:
+                    running_peak = max(running_peak, float(v))
+                    if running_peak > 0:
+                        worst = min(worst, float(v) / running_peak - 1.0)
+                row["max_drawdown_pct"] = worst * 100.0
+                row["ret_252_pct"] = (float(close[-1]) / float(close[-252]) - 1.0) * 100.0
+                if v252 and v252 > 0:
+                    row["risk_adjusted"] = row["ret_252_pct"] / v252
+        if n >= 64:
+            row["ret_63_pct"] = (float(close[-1]) / float(close[-64]) - 1.0) * 100.0
         out[str(sym)] = row
     return out
 
@@ -398,6 +532,76 @@ def evaluate(model_id: str, store: Any, conn: Any, *, limit: int = 40) -> dict[s
                         "above_200sma": None if r.get("sma200") is None else price > r["sma200"],
                     }
                 )
+        elif model_id == "earnings_yield":
+            if eps and eps > 0:
+                score = eps / price * 100.0
+                entry.update({"eps": round(eps, 2), "earnings_yield_pct": round(score, 2)})
+        elif model_id == "graham_defensive":
+            if eps and eps > 0 and bvps and bvps > 0:
+                pe = price / eps
+                pb = price / bvps
+                combo = pe * pb
+                score = 100.0 - min(100.0, max(0.0, (combo - 22.5) * 4.0))
+                entry.update({
+                    "pe": round(pe, 2), "pb": round(pb, 2), "pe_times_pb": round(combo, 2),
+                    "passes_pe": pe <= 15, "passes_pb": pb <= 1.5, "passes_combo": combo <= 22.5,
+                })
+        elif model_id == "trend_regime":
+            sma50, sma200 = r.get("sma50"), r.get("sma200")
+            if sma50 and sma200:
+                stacked = price > sma50 > sma200
+                score = 100.0 if stacked else (50.0 if price > sma200 else 0.0)
+                entry.update({
+                    "sma50": round(sma50, 2), "sma200": round(sma200, 2),
+                    "above_50": price > sma50, "above_200": price > sma200, "stacked": stacked,
+                })
+        elif model_id == "low_volatility":
+            v = r.get("vol20_annual_pct")
+            if v is not None:
+                # Positive score + ascending sort = lowest volatility first.
+                # Negating it here while also sorting ascending ranked the
+                # WILDEST name first (caught by test_ideas_models).
+                score = v
+                entry.update({"vol20_annual_pct": round(v, 2)})
+        elif model_id == "deep_drawdown":
+            dd = r.get("max_drawdown_pct")
+            if dd is not None:
+                score = dd  # most negative first
+                entry.update({"max_drawdown_pct": round(dd, 2)})
+        elif model_id == "risk_adjusted":
+            ra = r.get("risk_adjusted")
+            if ra is not None:
+                score = ra
+                entry.update({
+                    "ret_252_pct": round(r.get("ret_252_pct") or 0.0, 2),
+                    "vol252_annual_pct": round(r.get("vol252_annual_pct") or 0.0, 2),
+                })
+        elif model_id == "mean_reversion":
+            z = r.get("zscore_20")
+            if z is not None:
+                score = z  # most negative (furthest below the mean) first
+                entry.update({"zscore_20": round(z, 2), "sma20": round(r.get("sma20") or 0.0, 2)})
+        elif model_id == "volatility_squeeze":
+            vr = r.get("vol_ratio")
+            if vr is not None:
+                score = vr
+                entry.update({"vol_ratio": round(vr, 3), "vol20_annual_pct": round(r.get("vol20_annual_pct") or 0.0, 2)})
+        elif model_id == "near_52w_high":
+            pos = r.get("range_pos")
+            if pos is not None and (r.get("bars") or 0) >= 252:
+                score = pos
+                entry.update({"range_pos_pct": round(pos, 2), "range_high": round(r.get("range_high") or 0.0, 2)})
+        elif model_id == "momentum_3m":
+            m = r.get("ret_63_pct")
+            if m is not None:
+                score = m
+                entry.update({"return_3m_pct": round(m, 2)})
+        elif model_id == "quality_value":
+            if eps and eps > 0 and r.get("sma200"):
+                pe = price / eps
+                if pe <= 20 and price > r["sma200"]:
+                    score = 100.0 - pe * 2.0
+                    entry.update({"pe": round(pe, 2), "sma200": round(r["sma200"], 2)})
         elif model_id == "canslim":
             g = growth.get(sym)
             mom = r.get("mom_12_1")
@@ -412,7 +616,12 @@ def evaluate(model_id: str, store: Any, conn: Any, *, limit: int = 40) -> dict[s
 
     # Lower is better for a ratio (PEG, P/B); higher is better for a margin
     # of safety (Graham) and for momentum.
-    ascending = model_id in ("lynch", "multibagger", "pb_bargain")
+    ascending = model_id in (
+        "lynch", "multibagger", "pb_bargain",
+        # rank smallest-first: volatility, squeeze ratio, deepest drawdown,
+        # most-negative z-score (furthest below the 20-day mean)
+        "low_volatility", "volatility_squeeze", "deep_drawdown", "mean_reversion",
+    )
     rows.sort(key=lambda x: x["score"], reverse=not ascending)
     rows = rows[:limit]
     # "calculated" means the model ran over the universe. Zero matches is a
@@ -428,7 +637,16 @@ def evaluate(model_id: str, store: Any, conn: Any, *, limit: int = 40) -> dict[s
             f"{len(universe)} symbols with stored prices evaluated; "
             f"{len(rows)} met every condition."
             if rows
-            else f"{len(universe)} symbols evaluated; none met every condition."
+            else (
+                # A fundamental model with NO stored filings must say so: "none
+                # met every condition" would read as a screen that ran and found
+                # nothing, when in fact its input is absent.
+                f"{len(universe)} symbols evaluated; none met every condition. "
+                f"No stored fundamentals for any of them — import fundamentals "
+                f"(POST /api/fundamentals/import) to run this model."
+                if model["requires"] and not any(latest.get(s2) for s2 in universe)
+                else f"{len(universe)} symbols evaluated; none met every condition."
+            )
         ),
     }
 

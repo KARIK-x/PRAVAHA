@@ -457,7 +457,21 @@ textarea:focus { outline: none; border-color: var(--accent); }
   border: 1px solid var(--line); border-radius: 10px; padding: 10px;
   display: flex; flex-direction: column; gap: 8px;
   max-height: 440px; overflow-y: auto; overflow-x: hidden; }
-.cd-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+/* The INDICATOR manager needs more room than the analysis drawer: at 258px the
+   indicator names, the settings grid and the per-instance controls (Hide /
+   settings / remove) were cramped and hard to read. It also gets more height so
+   the catalog results and the "On this chart" list are both usable. */
+#ind-drawer { width: 340px; flex: 0 0 340px; max-height: 560px; }
+/* Narrow viewports: let either drawer shrink instead of crushing the chart. */
+@media (max-width: 1100px) {
+  #ind-drawer { width: 300px; flex-basis: 300px; }
+  .chart-drawer { width: 240px; flex-basis: 240px; }
+}
+.cd-head { display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  /* The head carries a title plus up to five action buttons; without wrapping
+     they overflowed the panel and the last control was clipped. */
+  flex-wrap: wrap; row-gap: 4px; }
+.cd-head b { min-width: 0; overflow-wrap: anywhere; }
 .cd-head b { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
 .cd-sub { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
   color: var(--muted); margin: 6px 0 0; }
@@ -713,6 +727,8 @@ button.ti:hover { text-decoration: underline; }
 .cd-render { display: grid; gap: 4px; padding: 6px 0 2px; border-top: 1px dashed var(--line); }
 .cd-render .cd-field { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .cd-render select { flex: 1; }
+/* Live readout of what the render controls are drawing (real state, not a guess). */
+.cd-render-status { margin: 4px 0 0; font-variant-numeric: tabular-nums; line-height: 1.45; }
 
 /* ---- Indicator manager drawer (this session) ---- */
 .cd-head-actions { display: inline-flex; align-items: center; gap: 4px; }
@@ -723,8 +739,8 @@ button.ti:hover { text-decoration: underline; }
 .ind-results .ind-empty { font-size: 11px; color: var(--muted); padding: 4px 2px; }
 .ind-hit { display: flex; align-items: center; gap: 8px; padding: 5px 7px;
   border: 1px solid var(--line); border-radius: 8px; background: var(--bg3); }
-.ind-hit .ih-name { font-size: 12px; line-height: 1.25; min-width: 0; }
-.ind-hit .ih-name b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ind-hit .ih-name { font-size: 12px; line-height: 1.25; min-width: 0;  overflow-wrap: anywhere;}
+.ind-hit .ih-name b { display: block; white-space: normal; overflow-wrap: anywhere; }
 .ind-hit .ih-name span { font-size: 10px; color: var(--muted); }
 .ind-hit .ih-cat { margin-left: auto; font-size: 10px; color: var(--muted);
   white-space: nowrap; }
@@ -1176,6 +1192,17 @@ th { color: var(--pravaha-muted); font-weight: 600; letter-spacing: .05em;
 td { border-bottom: 1px solid rgba(36,69,60,.55); }
 tbody tr:hover td, tr.click:hover td { background: var(--pravaha-hover); }
 .tablewrap { border-radius: var(--r-md); }
+/* Dense financial tables: cap the height so a long result set scrolls INSIDE
+   the panel with its header pinned. A table shorter than the cap is unaffected
+   (no scrollbar appears), so this only changes tables that actually need it. */
+.tablewrap { max-height: 72vh; overflow-y: auto; }
+.tablewrap thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--pravaha-panel);
+  box-shadow: inset 0 -1px 0 var(--pravaha-border);
+}
+/* Numeric columns read as columns: right-aligned, tabular figures. */
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* --------------------------------------------------- modals / overlays */
 .modal-overlay, .cmdk-modal, .modal-overlay { background: rgba(3, 10, 9, .68);
@@ -1348,3 +1375,11 @@ button:active, .ctb-btn:active { transform: translateY(1px); }
 @media (prefers-reduced-motion: reduce) {
   .reveal { opacity: 1; transform: none; transition: none; }
 }
+
+/* Turnover donut: a slice (and its legend key) is a control. */
+.viz-slice:focus-visible, .viz-key-action:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px; }
+.viz-key-action { cursor: pointer; }
+.viz-key-action:hover { color: var(--txt); }
+/* Sector Explorer row highlighted after a turnover-chart click-through. */
+tr.sector-focus { background: rgba(0,217,232,.14); box-shadow: inset 2px 0 0 var(--accent); }

@@ -157,6 +157,16 @@ const API_BASE = (() => {
   return raw.replace(/\/+$/, "");
 })();
 
+/* Where the public edge endpoints live. The Cloudflare Worker is a separate
+ * origin from both the local app and Netlify, and it exposes only public,
+ * read-only YONEPSE data. Empty falls back to the API origin (which is the
+ * Worker itself when the app is served from Cloudflare). */
+const EDGE_BASE = (() => {
+  const meta = document.querySelector('meta[name="megatool-edge-base"]');
+  const raw = (window.MEGATOOL_EDGE_BASE || (meta && meta.content) || API_BASE).trim();
+  return raw.replace(/\/+$/, "");
+})();
+
 /* Shared read-only friend token, supplied at RUNTIME (never in the bundle).
  * It lives in sessionStorage so it is not persisted to disk by the page. */
 function friendToken() {
@@ -317,7 +327,10 @@ function table(headers, rows) {
 /* ------------------------------------------------------------------ router */
 function showView(name) {
   const newTabs = new Set(["nu","nse","nprof","neps","nepsh","nttm","ncmp","nscr","nelig","ncov"]);
-  const viewName = newTabs.has(name) ? "new" : (SS_NAV_TO_TAB[name] ? "sastoshare" : name);
+  const babaTab = name.startsWith("baba/") ? name.slice(5) : null;
+  const effName = babaTab ? "baba" : name;
+  const viewName = newTabs.has(effName) ? "new" : (SS_NAV_TO_TAB[effName] ? "sastoshare" : effName);
+  if (babaTab) { $$("#baba-tabs .baba-tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === babaTab)); }
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${viewName}`));
   $$("#nav button[data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   if (name !== "overview") stopLivePolling();
@@ -337,6 +350,8 @@ function viewShown(name) {
     loadMarketIntelligence();
   } else if (name === "new" || name === "nu" || name === "nse" || name === "nprof" || name === "neps" || name === "nepsh" || name === "nttm" || name === "ncmp" || name === "nscr" || name === "nelig" || name === "ncov") {
     loadNewSection(name === "new" ? "nu" : name);
+  } else if (name === "baba" || name.startsWith("baba/")) {
+    loadBabaSection(name === "baba" ? "dash" : name.slice(5));
   } else if (name === "research") {
     if (!state.researchMeta) loadResearchMeta();
     // Prefill from the chart's symbol only while the field is still empty, so a
@@ -349,6 +364,15 @@ function viewShown(name) {
       const src = ($("#rs-symbol").value || $("#symbol-input").value || "").trim();
       if (src) $("#ws-symbol").value = src.toUpperCase();
     }
+    if (!($("#rst-symbols").value || "").trim()) {
+      const src = ($("#rs-symbol").value || $("#symbol-input").value || "").trim();
+      if (src) $("#rst-symbols").value = src.toUpperCase();
+    }
+    if (!($("#rs-vol-symbol").value || "").trim()) {
+      const src = ($("#rs-symbol").value || $("#symbol-input").value || "").trim();
+      if (src) $("#rs-vol-symbol").value = src.toUpperCase();
+    }
+    loadResearchStudio();
   } else if (name === "watchlists") {
     loadWatchlists();
   } else if (name === "backtest") {
@@ -3595,8 +3619,43 @@ async function importFundamentals(dryRun) {
 }
 
 /* -------------------------------------------------------------------- data */
+async function loadEdgeFreshness() {
+  const host = $("#edge-freshness");
+  if (!host) return;
+  const err = $("#edge-error");
+  err.textContent = "";
+  try {
+    const res = await fetch(EDGE_BASE + "/edge/yonepse/health", { headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const h = await res.json();
+    const failures = Number(h.consecutive_failures || 0);
+    host.innerHTML = [
+      ["Snapshot quotes", fmtInt(h.quote_count)],
+      ["Source updated", (h.source_updated_at || "—").replace("T", " ").slice(0, 19) + "Z"],
+      ["Last checked", (h.last_checked_at || "—").replace("T", " ").slice(0, 19) + "Z"],
+      ["Last success", (h.last_success_at || "—").replace("T", " ").slice(0, 19) + "Z"],
+      ["Freshness", h.freshness || "—"],
+      ["Market", h.is_open ? "open" : "closed"],
+      ["Scheduled runs", fmtInt(h.runs)],
+    ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v" style="font-size:15px">${esc(v)}</div></div>`).join("");
+    if (failures > 0) {
+      err.innerHTML = `<span class="down">${failures} consecutive failed attempt(s): ${esc(h.last_failure_reason || "reason not recorded")}. The last valid snapshot is still being served.</span>`;
+    } else if (h.last_failure_at) {
+      err.innerHTML = `<span class="warn">Last failure ${esc((h.last_failure_at || "").slice(0, 19))}: ${esc(h.last_failure_reason || "—")} (recovered).</span>`;
+    }
+    host.insertAdjacentHTML("beforeend",
+      `<div class="stat" style="grid-column:1/-1"><div class="k">Price basis</div>` +
+      `<div class="v" style="font-size:13px">LTP snapshot only — it is never converted into OHLCV candles. ` +
+      `Reason for the last run: ${esc(h.last_run_reason || "—")}.</div></div>`);
+  } catch (e) {
+    host.innerHTML = `<div class="stat"><div class="k">Edge ingestion</div>` +
+      `<div class="v down" style="font-size:14px">not reachable: ${esc(e.message)}</div></div>`;
+  }
+}
+
 async function loadData() {
   loadLiveSources();
+  loadEdgeFreshness();
   try {
     const s = await api("/api/status");
     const c = s.coverage;
@@ -7317,10 +7376,371 @@ function boot() {
   loadData();
   loadStrategies();
   loadResearchMeta();
+  bindResearchStudio();
 }
 
 document.addEventListener("DOMContentLoaded", boot);
 
+
+/* ==========================================================================
+   RESEARCH STUDIO — multi-symbol reports, real background progress
+   --------------------------------------------------------------------------
+   The browser never guesses how far a build has got: the server reports
+   completed steps / total steps, and this code renders exactly that. Jobs are
+   re-openable after a refresh because the server persists them.
+   ========================================================================== */
+const RST = {
+  catalog: null,
+  selected: new Set(),
+  preset: "full",
+  job: null,
+  timer: null,
+  pollErrors: 0,
+};
+
+function rstFmt(v) {
+  if (v === null || v === undefined) return "—";
+  if (typeof v === "number") return fmtSmart(v);
+  return String(v);
+}
+
+function rstGroupByCategory(components) {
+  const cats = RST.catalog && RST.catalog.categories ? RST.catalog.categories : [];
+  const byCat = new Map(cats.map((c) => [c.id, { name: c.name, items: [] }]));
+  components.forEach((c) => {
+    if (!byCat.has(c.category)) byCat.set(c.category, { name: c.category, items: [] });
+    byCat.get(c.category).items.push(c);
+  });
+  return byCat;
+}
+
+function rstRenderComponents() {
+  const host = $("#rst-components");
+  if (!host) return;
+  if (!RST.catalog) { host.innerHTML = `<div class="empty">Catalog unavailable.</div>`; return; }
+  const hideUnavailable = $("#rst-only-available") && $("#rst-only-available").checked;
+  const visible = RST.catalog.components.filter((c) => !hideUnavailable || c.available);
+  const groups = rstGroupByCategory(visible);
+  const parts = [];
+  for (const [catId, group] of groups) {
+    if (!group.items.length) continue;
+    parts.push(`<h3 class="topic-head">${esc(group.name)}</h3><div class="controls rst-cat">`);
+    group.items.forEach((c) => {
+      const checked = RST.selected.has(c.id) ? "checked" : "";
+      const avail = c.available
+        ? ""
+        : ` <span class="warn" title="${esc(c.reason || "")}">unavailable</span>`;
+      parts.push(
+        `<label class="chk" title="${esc(c.description || "")}" style="min-width:20em">` +
+        `<input type="checkbox" class="rst-comp" value="${esc(c.id)}" ${checked}` +
+        `${c.available ? "" : " data-missing=\"1\""} /> ${esc(c.name)}${avail}</label>`
+      );
+    });
+    parts.push(`</div>`);
+  }
+  if (!parts.length) parts.push(`<div class="empty">No analyses match this filter.</div>`);
+  host.innerHTML = parts.join("");
+  rstUpdateCount();
+}
+
+function rstUpdateCount() {
+  const el = $("#rst-count");
+  if (!el) return;
+  const available = RST.catalog
+    ? RST.catalog.components.filter((c) => RST.selected.has(c.id) && c.available).length
+    : 0;
+  el.textContent = `${RST.selected.size} selected · ${available} with data`;
+}
+
+function rstApplyPreset(id) {
+  if (!RST.catalog) return;
+  const p = (RST.catalog.presets || []).find((x) => x.id === id);
+  if (!p) return;
+  RST.preset = id;
+  RST.selected = new Set(p.components);
+  rstRenderComponents();
+}
+
+async function loadResearchStudio(force) {
+  if (RST.catalog && !force) return;
+  try {
+    const d = await api("/api/baba/research/catalog");
+    RST.catalog = d;
+    const sel = $("#rst-preset");
+    if (sel) {
+      sel.innerHTML = (d.presets || [])
+        .map((p) => `<option value="${esc(p.id)}">${esc(p.label)} (${p.count})</option>`)
+        .join("");
+      sel.value = d.default_preset || "full";
+    }
+    rstApplyPreset(d.default_preset || "full");
+    $("#rst-error").textContent = "";
+  } catch (e) {
+    const host = $("#rst-components");
+    if (host) host.innerHTML = `<div class="empty">Could not load the analysis catalog: ${esc(e.message)}</div>`;
+  }
+  loadResearchJobs();
+}
+
+function rstJobSymbols(job) {
+  return (job.params && job.params.symbols ? job.params.symbols : []).join(", ");
+}
+
+function rstArtifactButton(job, fmt, label) {
+  if (!job.artifacts || !job.artifacts[fmt]) return "";
+  return `<button class="ghost rst-dl" data-job="${esc(job.id)}" data-fmt="${esc(fmt)}">${esc(label)}</button>`;
+}
+
+function rstRenderJob(job) {
+  const card = $("#rst-job");
+  if (!card) return;
+  card.hidden = false;
+  const bar = $("#rst-progress");
+  if (bar) bar.value = Number(job.progress || 0);
+  const meta = $("#rst-job-meta");
+  if (meta) {
+    const steps = job.steps_total ? ` · step ${job.steps_done}/${job.steps_total}` : "";
+    const statusCls = job.status === "SUCCEEDED" ? "up" : (job.status === "FAILED" ? "down" : "warn");
+    meta.innerHTML =
+      `<b class="${statusCls}">${esc(job.status)}</b> · <b>${Number(job.progress || 0).toFixed(1)}%</b>` +
+      `${esc(steps)} · stage: ${esc(job.stage || "—")}<br>` +
+      `<span class="muted">${esc(job.message || "")}</span>` +
+      (job.error ? `<br><span class="down">${esc(job.error)}</span>` : "") +
+      `<br><span class="muted">Symbols: ${esc(rstJobSymbols(job))} · job ${esc(job.id)}</span>`;
+  }
+  const dl = $("#rst-downloads");
+  if (dl) {
+    dl.innerHTML =
+      rstArtifactButton(job, "pdf", "Download PDF") +
+      rstArtifactButton(job, "xlsx", "Download Excel") +
+      rstArtifactButton(job, "zip", "Download full ZIP") +
+      rstArtifactButton(job, "json", "Download JSON");
+  }
+  $$("#rst-downloads .rst-dl").forEach((b) => {
+    b.addEventListener("click", () => rstDownload(b.dataset.job, b.dataset.fmt));
+  });
+}
+
+async function rstDownload(jobId, fmt) {
+  const err = $("#rst-error");
+  err.textContent = "";
+  try {
+    const res = await fetch(API_BASE + `/api/baba/research/jobs/${jobId}/download/${fmt}`,
+      _withFriendToken({}));
+    if (!res.ok) {
+      let msg = `${res.status} ${res.statusText}`;
+      try { const b = await res.json(); msg = b.detail || b.error || msg; } catch (e) { /* no body */ }
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") || "";
+    const m = /filename="?([^";]+)"?/.exec(cd);
+    const name = m ? m[1] : `research-report.${fmt}`;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch (e) {
+    err.textContent = `Download failed: ${e.message}`;
+  }
+}
+
+function rstStopPolling() {
+  if (RST.timer) { clearTimeout(RST.timer); RST.timer = null; }
+}
+
+function rstPoll(jobId) {
+  rstStopPolling();
+  const tick = async () => {
+    try {
+      const d = await api(`/api/baba/research/jobs/${jobId}`);
+      RST.job = d.job;
+      RST.pollErrors = 0;
+      rstRenderJob(d.job);
+      loadResearchJobs(true);
+      if (["SUCCEEDED", "FAILED", "INTERRUPTED", "CANCELLED"].includes(d.job.status)) {
+        rstStopPolling();
+        return;
+      }
+    } catch (e) {
+      RST.pollErrors += 1;
+      if (RST.pollErrors >= 8) {
+        $("#rst-error").textContent = `Lost contact with the job: ${e.message}`;
+        rstStopPolling();
+        return;
+      }
+    }
+    RST.timer = setTimeout(tick, 1200);
+  };
+  tick();
+}
+
+async function rstStart() {
+  const err = $("#rst-error");
+  err.textContent = "";
+  const raw = ($("#rst-symbols").value || "").trim();
+  if (!raw) { err.textContent = "Enter at least one symbol."; return; }
+  const symbols = raw.split(/[\s,;]+/).map((s) => s.trim().toUpperCase()).filter(Boolean);
+  if (!RST.selected.size) { err.textContent = "Select at least one analysis."; return; }
+  const risk = ($("#rst-risk").value || "").trim();
+  const capital = ($("#rst-capital").value || "").trim();
+  const body = {
+    symbols,
+    components: Array.from(RST.selected),
+    preset: RST.preset,
+    risk_budget: risk ? Number(risk) : null,
+    capital: capital ? Number(capital) : null,
+    title: `Research report: ${symbols.join(", ")}`,
+  };
+  const btn = $("#rst-start");
+  btn.disabled = true;
+  btn.textContent = "Starting…";
+  try {
+    const d = await api("/api/baba/research/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    RST.job = d.job;
+    rstRenderJob(d.job);
+    rstPoll(d.job.id);
+    loadResearchJobs(true);
+  } catch (e) {
+    err.textContent = `Could not start the report: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Build report";
+  }
+}
+
+async function loadResearchJobs(quiet) {
+  const host = $("#rst-jobs");
+  if (!host) return;
+  try {
+    const d = await api("/api/baba/research/jobs?limit=10");
+    const jobs = d.jobs || [];
+    if (!jobs.length) {
+      host.innerHTML = `<div class="empty">No report has been built yet.</div>`;
+      return;
+    }
+    const rows = jobs.map((j) => [
+      { html: `<b>${esc(j.status)}</b>` },
+      { html: `${Number(j.progress || 0).toFixed(0)}%` },
+      { html: esc(rstJobSymbols(j) || "—"), cls: "wrap" },
+      { html: esc(j.created_at || ""), cls: "wrap muted" },
+      { html: esc((j.message || "").slice(0, 90)), cls: "wrap muted" },
+      { html: [
+        rstArtifactButton(j, "pdf", "PDF"),
+        rstArtifactButton(j, "xlsx", "XLSX"),
+        rstArtifactButton(j, "zip", "ZIP"),
+        `<button class="ghost rst-open" data-job="${esc(j.id)}">Open</button>`,
+      ].join(" ") },
+    ]);
+    host.innerHTML = table(["Status", "Progress", "Symbols", "Started", "Stage", "Files"], rows);
+    $$("#rst-jobs .rst-dl").forEach((b) => {
+      b.addEventListener("click", () => rstDownload(b.dataset.job, b.dataset.fmt));
+    });
+    $$("#rst-jobs .rst-open").forEach((b) => {
+      b.addEventListener("click", async () => {
+        try {
+          const r = await api(`/api/baba/research/jobs/${b.dataset.job}`);
+          RST.job = r.job;
+          rstRenderJob(r.job);
+          if (["QUEUED", "RUNNING"].includes(r.job.status)) rstPoll(r.job.id);
+        } catch (e) { $("#rst-error").textContent = e.message; }
+      });
+    });
+  } catch (e) {
+    if (!quiet) host.innerHTML = `<div class="empty">Could not list builds: ${esc(e.message)}</div>`;
+  }
+}
+
+async function runVolatilityForecast() {
+  const err = $("#rs-vol-error");
+  const out = $("#rs-vol-out");
+  err.textContent = "";
+  const sym = ($("#rs-vol-symbol").value || $("#rs-symbol").value || "").trim().toUpperCase();
+  if (!sym) { err.textContent = "Enter a symbol."; return; }
+  const risk = ($("#rs-vol-risk").value || "").trim();
+  const capital = ($("#rs-vol-capital").value || "").trim();
+  const qs = new URLSearchParams();
+  if (risk) qs.set("risk_budget", risk);
+  if (capital) qs.set("capital", capital);
+  out.innerHTML = `<div class="empty">Computing walk-forward evaluation…</div>`;
+  try {
+    const d = await api(`/api/baba/volatility/${encodeURIComponent(sym)}?${qs.toString()}`);
+    const f = d.forecast;
+    const rows = [
+      ["As-of session", f.as_of_session],
+      ["Price basis", f.price_kind],
+      ["Point range forecast", f.point_range],
+      ["Point as % of last close", f.point_range_percent_of_price],
+      ["80% band (points)", `${f.band_80[0]} – ${f.band_80[1]}`],
+      ["80% band (% of close)", `${f.band_80_percent_of_price[0]} – ${f.band_80_percent_of_price[1]}`],
+      ["Band method", f.band_80_method],
+      ["60-session median range", f.normal_range_60_session_median],
+      ["Forecast / normal", f.ratio_to_normal],
+      ["Selected model", f.model],
+      ["Measured 80% coverage", f.measured_interval_coverage_percent],
+      ["History", `${f.history_first} → ${f.as_of_session} (${f.history_bars} bars)`],
+    ];
+    const modelRows = Object.entries(d.evaluation.models).map(([k, m]) => [
+      { html: `<b>${esc(k)}</b>` }, { html: esc(rstFmt(m.n)) }, { html: esc(rstFmt(m.mae)) },
+      { html: esc(rstFmt(m.rmse)) }, { html: esc(rstFmt(m.median_ape_percent)) },
+      { html: esc(rstFmt(m.improvement_vs_naive_percent)) },
+      { html: esc(rstFmt(m.interval_coverage_percent)) },
+    ]);
+    let sizing = "";
+    if (d.position_sizing && d.position_sizing.table) {
+      const srows = d.position_sizing.table.map((s) => [
+        { html: `<b>${esc(s.label)}</b>` }, { html: esc(rstFmt(s.stop_distance)) },
+        { html: esc(rstFmt(s.shares)) }, { html: esc(rstFmt(s.notional)) },
+        { html: esc(rstFmt(s.max_loss_at_stop)) }, { html: esc(rstFmt(s.risk_used_percent_of_budget)) },
+        { html: esc(s.cap_note || "—") },
+      ]);
+      sizing = `<h3>Risk-budget sizing</h3>` +
+        table(["Stop", "Stop distance", "Shares", "Notional", "Max loss at stop",
+               "Risk used %", "Cap"], srows) +
+        `<p class="hint">${esc(d.position_sizing.note)}</p>`;
+    }
+    out.innerHTML =
+      `<p class="hint"><b>${esc(d.symbol)}</b> — forecasts the SIZE of the next session's range, not its direction.</p>` +
+      table(["Item", "Value"], rows.map((r) => [{ html: `<b>${esc(r[0])}</b>` }, { html: esc(rstFmt(r[1])) }])) +
+      `<h3>Out-of-sample model comparison</h3>` +
+      table(["Model", "Observations", "MAE (points)", "RMSE", "Median APE %",
+             "Improvement vs naive %", "80% coverage %"], modelRows) +
+      `<p class="hint">${esc(d.evaluation.note)}</p>` +
+      sizing +
+      `<p class="hint">${(d.caveats || []).map(esc).join(" ")}</p>`;
+  } catch (e) {
+    out.innerHTML = "";
+    err.textContent = `Forecast failed: ${e.message}`;
+  }
+}
+
+function bindResearchStudio() {
+  if (!$("#rst-card")) return;
+  $("#rst-preset").addEventListener("change", () => rstApplyPreset($("#rst-preset").value));
+  $("#rst-start").addEventListener("click", rstStart);
+  $("#rst-all").addEventListener("click", () => {
+    RST.selected = new Set((RST.catalog ? RST.catalog.components : []).map((c) => c.id));
+    rstRenderComponents();
+  });
+  $("#rst-none").addEventListener("click", () => {
+    RST.selected = new Set();
+    rstRenderComponents();
+  });
+  $("#rst-only-available").addEventListener("change", rstRenderComponents);
+  $("#rst-components").addEventListener("change", (ev) => {
+    const t = ev.target;
+    if (!t || !t.classList || !t.classList.contains("rst-comp")) return;
+    if (t.checked) RST.selected.add(t.value); else RST.selected.delete(t.value);
+    rstUpdateCount();
+  });
+  $("#rs-vol-run").addEventListener("click", runVolatilityForecast);
+  $("#rs-vol-symbol").addEventListener("keydown", (e) => { if (e.key === "Enter") runVolatilityForecast(); });
+}
 
 /* ==========================================================================
    CHART ANALYSIS PANELS — candlesticks, Elliott, harmonic
@@ -12870,6 +13290,8 @@ function chartChrome() {
   window.__mtToolInfo = { openToolInfo, toolInfoHtml, catalogToolIdFor, showToolInfo: openToolInfo };
   // NEW section tabs
   bindNewSection();
+  // BABA workspace tabs
+  bindBabaSection();
   // KIMI research workspace tabs
   bindKimiSection();
 
@@ -13618,6 +14040,478 @@ function loadNewSection(tab) {
   if (fn) fn(body);
   else body.innerHTML = `<div class="empty">Unknown tab.</div>`;
 }
+/* ==================================================================== BABA */
+const BABA = { comps: null, selected: new Set(), templates: [], fmt: "xlsx",
+               sector: null, period: null };
+
+async function loadBabaSection(tab) {
+  const body = $("#baba-body");
+  if (!body) return;
+  $$("#baba-tabs .baba-tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+  if (!BABA.comps) {
+    try { BABA.comps = await (await fetch("/api/baba/components")).json(); }
+    catch (e) { body.innerHTML = `<div class="empty">Could not load the component registry: ${esc(e.message)}</div>`; return; }
+  }
+  const loaders = { dash: babaDash, sector: babaSector, scanner: babaScanner,
+    quarterly: babaQuarterly, eligibility: babaEligibility, compare: babaCompare,
+    journal: babaJournal, builder: babaBuilder, exports: babaExports, extras: babaExtras };
+  (loaders[tab] || babaDash)(body);
+}
+
+/* ------------------------------------------------------------ dashboard */
+async function babaDash(body) {
+  body.innerHTML = `<div class="controls">
+      <label>Symbol <input id="baba-sym" placeholder="NABIL" /></label>
+      <button class="ctb-btn" id="baba-go">Analyse</button>
+      <label>Sector <select id="baba-sector-sel"></select></label>
+      <button class="ctb-btn" id="baba-sector-go">Sector report</button>
+    </div>
+    <div id="baba-dash-out" class="tablewrap"><div class="empty">Enter a symbol and press Analyse.</div></div>`;
+  const sel = $("#baba-sector-sel");
+  // Actual sectors come from the sector map, not the component categories.
+  try {
+    const d = await api("/api/sectors");
+    const sectors = Object.keys(d.by_sector || {}).sort();
+    sel.innerHTML = `<option value="">— choose sector —</option>` +
+      sectors.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join("");
+  } catch (e) { sel.innerHTML = `<option value="">sectors unavailable</option>`; }
+
+  $("#baba-go").onclick = async () => {
+    const sym = ($("#baba-sym").value || "").trim().toUpperCase();
+    if (!sym) return;
+    const out = $("#baba-dash-out");
+    out.innerHTML = `<div class="empty">Loading ${esc(sym)}…</div>`;
+    try {
+      const rep = await babaPreview(["profile", "last_price", "pe_ratio", "market_cap",
+                                     "net_worth_ps", "eps_quarterly", "elig_result"], [sym]);
+      out.innerHTML = babaRenderSections(rep);
+    } catch (e) { out.innerHTML = `<div class="empty">Could not build dashboard: ${esc(e.message)}</div>`; }
+  };
+  $("#baba-sector-go").onclick = () => {
+    const s = sel.value;
+    if (!s) return;
+    BABA.sector = s;
+    showView("baba/builder"); viewShown("baba/builder");
+    setTimeout(() => { const el = document.getElementById("rb-sector"); if (el) el.value = s; }, 80);
+  };
+}
+
+/* -------------------------------------------------------- sector explorer */
+async function babaSector(body) {
+  body.innerHTML = `<div class="empty">Loading sector classifications…</div>`;
+  try {
+    const d = await api("/api/sectors");
+    const by = d.by_sector || {};
+    const targets = (BABA.comps.sector_targets || {});
+    const names = Array.from(new Set([...Object.keys(by), ...Object.keys(targets)])).sort();
+    const rows = names.map(n => {
+      const actual = (by[n] || []).length;
+      const target = targets[n];
+      const members = by[n] || [];
+      const sample = members.slice(0, 6).join(", ") + (members.length > 6 ? "…" : "");
+      return [{ html: `<b>${esc(n)}</b>` },
+              { html: `${fmtInt(actual)}` },
+              { html: target == null ? `<span class="pill">—</span>` : fmtInt(target) },
+              { html: esc(sample) || "—" }];
+    });
+    body.innerHTML = `
+      <p class="hint">${fmtInt(d.total_classified || 0)} symbols classified into
+        ${fmtInt(d.total_sectors || 0)} sectors, from a stored reference
+        classification (${esc(d.source || "reference file")}). The <b>actual</b> column is
+        computed from that classification. The <b>target</b> column is a <b>provisional</b>
+        user-supplied reference count and is <b>not</b> a verified current NEPSE listing count.</p>
+      <div class="tablewrap">${table(["Sector", "Actual companies", "Reference target", "Members (sample)"], rows)}</div>`;
+  } catch (e) { body.innerHTML = `<div class="empty">Could not load sectors: ${esc(e.message)}</div>`; }
+}
+
+/* ------------------------------------------------------ fundamental scanner */
+async function babaScanner(body) {
+  body.innerHTML = `<div class="controls">
+      <label>Symbols (comma or newline separated) <input id="baba-scan-syms" placeholder="NABIL, SCB" /></label>
+      <label>Sector <input id="baba-scan-sector" placeholder="optional" /></label>
+      <button class="ctb-btn" id="baba-scan-go">Run analysis</button>
+    </div>
+    <div id="baba-scan-out" class="tablewrap"><div class="empty">Enter one or more symbols.</div></div>`;
+  $("#baba-scan-go").onclick = async () => {
+    const raw = $("#baba-scan-syms").value || "";
+    const syms = [...new Set(raw.split(/[,\n]+/).map(s => s.trim().toUpperCase()).filter(Boolean))];
+    const out = $("#baba-scan-out");
+    if (!syms.length) { out.innerHTML = `<div class="empty">Enter at least one symbol.</div>`; return; }
+    out.innerHTML = `<div class="empty">Analysing ${fmtInt(syms.length)} symbol(s)…</div>`;
+    try {
+      const comps = ["profile", "last_price", "pe_ratio", "pb_ratio", "net_worth_ps",
+                    "eps_quarterly", "eps_ttm", "dps", "dividend_yield", "market_cap",
+                    "missing_summary", "cmp_side_by_side"];
+      const rep = await babaPreview(comps, syms, { sector: $("#baba-scan-sector").value || undefined });
+      out.innerHTML = babaRenderSections(rep);
+    } catch (e) { out.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+}
+
+/* --------------------------------------------------------- quarterly view */
+async function babaQuarterly(body) {
+  body.innerHTML = `<div class="controls">
+      <label>Symbol <input id="baba-q-sym" placeholder="NABIL" /></label>
+      <button class="ctb-btn" id="baba-q-go">Quarterly analysis</button>
+    </div><div id="baba-q-out" class="tablewrap"></div>`;
+  $("#baba-q-go").onclick = async () => {
+    const sym = ($("#baba-q-sym").value || "").trim().toUpperCase();
+    const out = $("#baba-q-out");
+    if (!sym) { out.innerHTML = `<div class="empty">Enter a symbol.</div>`; return; }
+    out.innerHTML = `<div class="empty">Loading…</div>`;
+    try {
+      const rep = await babaPreview(["q1_results", "q2_results", "q3_results", "q4_results",
+        "q_eps_comparison", "yoy_growth", "seq_growth", "annual_summary",
+        "missing_quarters", "comparability", "fundamental_trend"], [sym]);
+      out.innerHTML = babaRenderSections(rep);
+    } catch (e) { out.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+}
+
+/* ------------------------------------------------------ eligibility screen */
+async function babaEligibility(body) {
+  body.innerHTML = `<div class="controls">
+      <label>Symbols <input id="baba-e-syms" placeholder="NABIL" /></label>
+      <button class="ctb-btn" id="baba-e-go">Screen</button>
+    </div><div id="baba-e-out" class="tablewrap"></div>`;
+  $("#baba-e-go").onclick = async () => {
+    const raw = $("#baba-e-syms").value || "";
+    const syms = [...new Set(raw.split(/[,\n]+/).map(s => s.trim().toUpperCase()).filter(Boolean))];
+    const out = $("#baba-e-out");
+    if (!syms.length) { out.innerHTML = `<div class="empty">Enter at least one symbol.</div>`; return; }
+    out.innerHTML = `<div class="empty">Screening ${fmtInt(syms.length)} symbol(s)…</div>`;
+    try {
+      const rep = await babaPreview(["elig_config", "elig_result", "elig_failed",
+                                     "elig_listing_age", "elig_share_count", "elig_networth",
+                                     "elig_profit"], syms);
+      out.innerHTML = babaRenderSections(rep);
+    } catch (e) { out.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+}
+
+/* ------------------------------------------------------------ comparison */
+async function babaCompare(body) {
+  body.innerHTML = `<div class="controls">
+      <label>Symbols <input id="baba-c-syms" placeholder="NABIL, SCB, GBIME" /></label>
+      <button class="ctb-btn" id="baba-c-go">Compare</button>
+    </div><div id="baba-c-out" class="tablewrap"></div>`;
+  $("#baba-c-go").onclick = async () => {
+    const raw = $("#baba-c-syms").value || "";
+    const syms = [...new Set(raw.split(/[,\n]+/).map(s => s.trim().toUpperCase()).filter(Boolean))];
+    const out = $("#baba-c-out");
+    if (!syms.length) { out.innerHTML = `<div class="empty">Enter at least one symbol.</div>`; return; }
+    out.innerHTML = `<div class="empty">Comparing…</div>`;
+    try {
+      const rep = await babaPreview(["cmp_overview", "cmp_side_by_side", "cmp_eps", "cmp_pe",
+        "cmp_pb", "cmp_networth", "cmp_dividend", "cmp_growth", "cmp_profitability",
+        "cmp_eligibility", "cmp_warnings"], syms);
+      out.innerHTML = babaRenderSections(rep);
+    } catch (e) { out.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+}
+
+async function babaJournal(body) {
+  body.innerHTML = `<div class="controls">
+      <label>Traded on <input type="date" id="baba-j-date" /></label>
+      <label>Symbol <input id="baba-j-sym" placeholder="NABIL" /></label>
+      <label>Side <select id="baba-j-side"><option value="buy">buy</option><option value="sell">sell</option></select></label>
+      <label>Qty <input type="number" id="baba-j-qty" min="1" step="1" /></label>
+      <label>Price <input type="number" id="baba-j-price" min="0" step="0.01" /></label>
+      <label>Fees <input type="number" id="baba-j-fees" min="0" step="0.01" value="0" /></label>
+      <label>Notes <input id="baba-j-notes" /></label>
+      <button class="ctb-btn" id="baba-j-add">Add transaction</button>
+    </div>
+    <p class="hint">The ledger stores exactly what you enter: symbol, side, quantity,
+      price, fees, date and notes. Commission and taxes are not stored separately,
+      so a breakdown by charge type is not reported. A sale of more shares than the
+      ledger holds on that date is rejected rather than silently adjusted.</p>
+    <div id="baba-j-msg"></div>
+    <div id="baba-j-out" class="tablewrap"></div>`;
+
+  const load = async () => {
+    const out = $("#baba-j-out");
+    out.innerHTML = `<div class="empty">Loading ledger…</div>`;
+    try {
+      const rep = await babaPreview(["j_ledger", "j_day_summary", "j_symbol_summary",
+        "j_charges", "j_holdings", "j_unrealized", "j_avg_cost", "j_realized",
+        "j_open_positions", "j_closed_positions", "j_warnings"], []);
+      out.innerHTML = babaRenderSections(rep);
+    } catch (e) { out.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+
+  $("#baba-j-add").onclick = async () => {
+    const q = parseFloat($("#baba-j-qty").value);
+    const pr = parseFloat($("#baba-j-price").value);
+    const fees = parseFloat($("#baba-j-fees").value || "0");
+    const sym = ($("#baba-j-sym").value || "").trim().toUpperCase();
+    const msg = $("#baba-j-msg");
+    if (!sym) { msg.innerHTML = `<div class="banner">Enter a symbol.</div>`; return; }
+    if (!(q > 0) || !Number.isInteger(q)) {
+      msg.innerHTML = `<div class="banner">Quantity must be a whole number above zero.</div>`; return;
+    }
+    if (!(pr > 0)) { msg.innerHTML = `<div class="banner">Price must be above zero.</div>`; return; }
+    const payload = {
+      symbol: sym, side: $("#baba-j-side").value, quantity: q, price: pr, fees: fees || 0,
+      notes: $("#baba-j-notes").value || null,
+    };
+    const d = $("#baba-j-date").value;
+    if (d) payload.traded_at = d;
+    try {
+      const r = await fetch("/api/portfolio/transactions", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload) });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        msg.innerHTML = `<div class="banner">${esc(j.detail || "Could not save the transaction.")}</div>`;
+        return;
+      }
+      msg.innerHTML = `<div class="hint">Saved.</div>`;
+      ["#baba-j-qty", "#baba-j-price", "#baba-j-notes"].forEach((sel) => { $(sel).value = ""; });
+      await load();
+    } catch (e) { msg.innerHTML = `<div class="banner">${esc(e.message)}</div>`; }
+  };
+  await load();
+}
+
+/* ------------------------------------------------------------ report builder */
+async function babaPreview(comps, symbols, extra) {
+  const body = { components: comps, symbols: symbols || [], format: "json" };
+  if (extra && extra.sector) body.sector = extra.sector;
+  const r = await fetch("/api/baba/report/preview", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+}
+
+function babaRenderSections(rep) {
+  const parts = [];
+  for (const [cid, sec] of Object.entries(rep.sections || {})) {
+    if (!sec.available) continue;
+    const hdr = sec.headers || [];
+    const rows = (sec.rows || []).map(r => r.map(c => ({ html: esc(c) })));
+    parts.push(`<h4 style="margin-top:12px">${esc(sec.name || cid)}</h4>
+      <div class="tablewrap">${table(hdr, rows)}</div>`);
+  }
+  const un = (rep.quality && rep.quality.unavailable) || [];
+  if (un.length) {
+    parts.push(`<h4 style="margin-top:12px">Unavailable</h4>
+      <div class="tablewrap">${table(["Component", "Reason"],
+        un.map(u => [{html: esc(u.name)}, {html: esc(u.reason)}]))}</div>`);
+  }
+  return parts.join("") || `<div class="empty">No sections produced.</div>`;
+}
+
+async function babaBuilder(body) {
+  const comps = BABA.comps;
+  const byCat = {};
+  for (const c of comps.components) (byCat[c.category_name] ||= []).push(c);
+  const cats = Object.keys(byCat);
+  body.innerHTML = `
+    <div class="controls">
+      <label>Symbols <input id="rpt-syms" placeholder="NABIL, SCB" /></label>
+      <label>Sector <input id="rpt-sector" placeholder="optional" /></label>
+      <label>Period <input id="rpt-period" placeholder="FY2081" /></label>
+      <label>Format <select id="rpt-fmt">
+        ${["xlsx","csv","pdf","json"].map(f => `<option value="${f}">${f.toUpperCase()}</option>`).join("")}
+      </select></label>
+      <label>Title <input id="rpt-title" placeholder="Report title" /></label>
+      <label>Notes <input id="rpt-notes" placeholder="optional notes" /></label>
+    </div>
+    <div class="controls">
+      <button class="ctb-btn" id="rpt-all">Select all</button>
+      <button class="ctb-btn" id="rpt-none">Deselect all</button>
+      <input id="rpt-search" placeholder="Search components…" style="flex:1;min-width:180px" />
+      <span class="pill" id="rpt-count">0 selected</span>
+      <button class="ctb-btn" id="rpt-preview">Preview</button>
+      <button class="ctb-btn" id="rpt-export">Export</button>
+      <button class="ctb-btn" id="rpt-save">Save template</button>
+    </div>
+    <details id="rpt-templates"><summary>Saved templates</summary>
+      <div id="rpt-tpl-list" class="tablewrap"></div></details>
+    <div id="rpt-out" class="tablewrap"></div>`;
+
+  const out = $("#rpt-out");
+  const catHtml = cats.map(cat => `
+    <details class="rb-cat" open>
+      <summary><b>${esc(cat)}</b>
+        <button class="ctb-btn rb-cat-all" data-cat="${esc(cat)}">select</button>
+        <button class="ctb-btn rb-cat-none" data-cat="${esc(cat)}">clear</button>
+      </summary>
+      ${byCat[cat].map(c => `
+        <label class="rb-item">
+          <input type="checkbox" class="rb-cb" value="${c.id}" data-cat="${esc(cat)}" />
+          <span class="${c.available ? "" : "pill pill-warn"}">${esc(c.name)}</span>
+          <span class="hint">${esc(c.description)}</span>
+          ${c.available ? "" : `<span class="hint">— ${esc(c.reason)}</span>`}
+        </label>`).join("")}
+    </details>`).join("");
+  out.innerHTML = catHtml;
+  $("#rpt-out").insertAdjacentHTML("beforeend",
+    `<div id="rpt-preview-out" class="tablewrap" style="margin-top:12px"></div>`);
+
+  const upd = () => {
+    const n = $$(".rb-cb:checked").length;
+    $("#rpt-count").textContent = `${n} selected`;
+  };
+  $$(".rb-cb").forEach(cb => cb.addEventListener("change", upd));
+  $("#rpt-all").onclick = () => { $$(".rb-cb").forEach(c => { c.checked = true; }); upd(); };
+  $("#rpt-none").onclick = () => { $$(".rb-cb").forEach(c => { c.checked = false; }); upd(); };
+  $$(".rb-cat-all").forEach(b => b.onclick = () => {
+    $$(`.rb-cb[data-cat="${b.dataset.cat}"]`).forEach(c => { c.checked = true; }); upd();
+  });
+  $$(".rb-cat-none").forEach(b => b.onclick = () => {
+    $$(`.rb-cb[data-cat="${b.dataset.cat}"]`).forEach(c => { c.checked = false; }); upd();
+  });
+  $("#rpt-search").addEventListener("input", e => {
+    const q = e.target.value.toLowerCase();
+    $$(".rb-item").forEach(it => {
+      const cb = it.querySelector(".rb-cb");
+      const c = comps.components.find(x => x.id === cb.value);
+      it.style.display = (c.name + " " + c.description).toLowerCase().includes(q) ? "" : "none";
+    });
+  });
+
+  const gather = () => ({
+    components: $$(".rb-cb:checked").map(c => c.value),
+    symbols: ($("#rpt-syms").value || "").split(/[,\n]+/).map(s => s.trim().toUpperCase()).filter(Boolean),
+    sector: $("#rpt-sector").value || undefined,
+    period: $("#rpt-period").value || undefined,
+    format: $("#rpt-fmt").value,
+    title: $("#rpt-title").value || undefined,
+    notes: $("#rpt-notes").value || undefined,
+  });
+
+  $("#rpt-preview").onclick = async () => {
+    const req = gather();
+    if (!req.components.length) { $("#rpt-preview-out").innerHTML = `<div class="empty">Select at least one component.</div>`; return; }
+    $("#rpt-preview-out").innerHTML = `<div class="empty">Assembling preview…</div>`;
+    try {
+      const rep = await babaPreview(req.components, req.symbols,
+        { sector: req.sector, period: req.period });
+      $("#rpt-preview-out").innerHTML =
+        `<p class="hint">${fmtInt(req.components.length)} section(s) selected ·
+           ${fmtInt(req.symbols.length)} symbol(s) · format ${esc(req.format.toUpperCase())}</p>` +
+        babaRenderSections(rep);
+    } catch (e) { $("#rpt-preview-out").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+
+  $("#rpt-export").onclick = () => {
+    const req = gather();
+    if (!req.components.length) { alert("Select at least one component."); return; }
+    const q = new URLSearchParams({ components: req.components.join(","), format: req.format });
+    if (req.symbols.length) q.set("symbols", req.symbols.join(","));
+    if (req.sector) q.set("sector", req.sector);
+    if (req.period) q.set("period", req.period);
+    if (req.title) q.set("title", req.title);
+    if (req.notes) q.set("notes", req.notes);
+    // A real download of the real generated file — never a placeholder. An
+    // anchor click keeps the page in place; `location = url` aborts the current
+    // navigation (harmless, but it shows up as a failed request).
+    const a = document.createElement("a");
+    a.href = "/api/baba/report/export?" + q.toString();
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  $("#rpt-save").onclick = async () => {
+    const name = prompt("Template name:");
+    if (!name) return;
+    const req = gather();
+    if (!req.components.length) { alert("Select at least one component."); return; }
+    try {
+      await fetch("/api/baba/templates", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, ...req }) });
+      await babaLoadTemplates();
+    } catch (e) { alert("Could not save template: " + e.message); }
+  };
+
+  async function babaLoadTemplates() {
+    try {
+      const d = await (await fetch("/api/baba/templates")).json();
+      const tpls = d.templates || [];
+      const list = $("#rpt-tpl-list");
+      if (!tpls.length) { list.innerHTML = `<div class="empty">No saved templates yet.</div>`; return; }
+      list.innerHTML = table(["Name", "Sections", "Symbols", "Format", "Actions"],
+        tpls.map(t => [
+          { html: esc(t.name) },
+          { html: fmtInt(t.components.length) },
+          { html: esc((t.symbols || []).join(", ") || "—") },
+          { html: esc((t.format || "xlsx").toUpperCase()) },
+          { html: `<button class="ctb-btn rb-tpl-load" data-n="${esc(t.name)}">Load</button>
+                   <button class="ctb-btn rb-tpl-del" data-n="${esc(t.name)}">Delete</button>` },
+        ]));
+      $$(".rb-tpl-load").forEach(b => b.onclick = () => {
+        const t = tpls.find(x => x.name === b.dataset.n);
+        if (!t) return;
+        $$(".rb-cb").forEach(c => { c.checked = (t.components || []).includes(c.value); });
+        if (t.symbols && t.symbols.length) $("#rpt-syms").value = t.symbols.join(", ");
+        if (t.sector) $("#rpt-sector").value = t.sector;
+        if (t.period) $("#rpt-period").value = t.period;
+        if (t.format) $("#rpt-fmt").value = t.format;
+        if (t.title) $("#rpt-title").value = t.title;
+        upd();
+      });
+      $$(".rb-tpl-del").forEach(b => b.onclick = async () => {
+        if (!confirm(`Delete template "${b.dataset.n}"?`)) return;
+        await fetch("/api/baba/templates/" + encodeURIComponent(b.dataset.n), { method: "DELETE" });
+        await babaLoadTemplates();
+      });
+    } catch (e) { $("#rpt-tpl-list").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  }
+  await babaLoadTemplates();
+  upd();
+}
+
+/* ---------------------------------------------------------------- exports */
+async function babaExports(body) {
+  body.innerHTML = `<div class="empty">Loading export history…</div>`;
+  try {
+    const d = await (await fetch("/api/baba/templates")).json();
+    const tpls = d.templates || [];
+    body.innerHTML = `
+      <p class="hint">Reports are generated on demand from the Report Builder and
+        downloaded immediately. Saved templates are listed here and in the builder.
+        Nothing is retained server-side beyond the template definition.</p>
+      <div class="tablewrap">${table(["Template", "Sections", "Format", "Updated"],
+        tpls.map(t => [{html: esc(t.name)}, {html: fmtInt(t.components.length)},
+                      {html: esc((t.format || "xlsx").toUpperCase())},
+                      {html: esc(t.updated_at || "—")}]))}</div>`;
+  } catch (e) { body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+/* ----------------------------------------------------------------- extras */
+async function babaExtras(body) {
+  const avail = BABA.comps.available, total = BABA.comps.count;
+  body.innerHTML = `
+    <h4>BABA Extras</h4>
+    <div class="stat-row">
+      <div class="stat"><div class="k">Report components</div><div class="v">${fmtInt(total)}</div></div>
+      <div class="stat"><div class="k">Currently available</div><div class="v">${fmtInt(avail)}</div></div>
+      <div class="stat"><div class="k">Saved templates</div><div class="v" id="baba-tpl-n">—</div></div>
+    </div>
+    <p class="hint">Availability is computed from whether a data source currently
+      backs a component. A component that cannot run is reported as unavailable
+      with a reason; it is never replaced with an invented figure.</p>
+    <p class="hint">Personal journal data is private. Journal and portfolio
+      components are only produced for an authorised local session and are always
+      served with <code>Cache-Control: no-store</code>.</p>
+    <p class="hint">Prices are end-of-day stored closes, not live quotes.</p>`;
+  try {
+    const d = await (await fetch("/api/baba/templates")).json();
+    const el = $("#baba-tpl-n");
+    if (el) el.textContent = fmtInt((d.templates || []).length);
+  } catch (e) { /* optional */ }
+}
+
+function bindBabaSection() {
+  $$("#baba-tabs .baba-tab").forEach((btn) => {
+    btn.addEventListener("click", () => loadBabaSection(btn.dataset.tab));
+  });
+}
+
 function bindNewSection() {
   $$("#new-tabs .new-tab").forEach((btn) => {
     btn.addEventListener("click", () => loadNewSection(btn.dataset.tab));

@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -2716,6 +2716,381 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
             media_type="application/pdf",
             headers={"Content-Disposition": "attachment; filename=screen.pdf"},
         )
+
+    # ==================================================================== BABA
+    # The BABA report builder. Everything runs in-process so it shares the
+    # already-open market store (DuckDB allows only one process to hold the
+    # file lock).
+    from megatool import report_builder as rb
+
+    #: Journal and portfolio components contain private records. They are only
+    #: ever included when the caller is the owner (loopback + trusted) AND asks
+    #: for them explicitly. A shared deployment can therefore never export them
+    #: by guessing a component id.
+    _PRIVATE_CATEGORIES = ("K_journal", "L_portfolio")
+
+    def _baba_owner(request: Request) -> bool:
+        from megatool.friend_access import client_is_loopback, trust_loopback
+
+        host = request.client.host if request.client else None
+        return bool(trust_loopback() and client_is_loopback(host))
+
+    def _baba_components(body: dict[str, Any], *, allow_private: bool) -> list[str]:
+        reg = rb._registry()
+        out = []
+        for cid in body.get("components") or []:
+            comp = reg.get(cid)
+            if comp is None:
+                raise HTTPException(400, f"unknown component {cid!r}")
+            if not allow_private and comp.category in _PRIVATE_CATEGORIES:
+                continue
+            out.append(cid)
+        return out
+
+    @app.get("/api/baba/components")
+    def baba_components(request: Request) -> dict[str, Any]:
+        """The report component registry: what exists, and what can run today.
+
+        Availability is computed per component from whether a data source
+        currently backs it, so a checkbox is never offered for a section that
+        would have to be invented. Private categories are omitted for a
+        non-owner client.
+        """
+        reg = rb._registry()
+        owner = _baba_owner(request)
+        out = []
+        for cid in rb.get_component_ids():
+            c = reg[cid]
+            if not owner and c.category in _PRIVATE_CATEGORIES:
+                continue
+            out.append({
+                "id": c.id,
+                "name": c.name,
+                "category": c.category,
+                "category_name": dict(rb.COMPONENT_CATEGORIES).get(c.category, c.category),
+                "description": c.description,
+                "output": c.output,
+                "requires": list(c.requires),
+                "scope": list(c.scope),
+                "available": c.available,
+                "reason": c.reason,
+                "methodology": c.methodology,
+                "private": c.category in _PRIVATE_CATEGORIES,
+            })
+        categories = [
+            {"id": cid, "name": name}
+            for cid, name in rb.COMPONENT_CATEGORIES
+            if owner or cid not in _PRIVATE_CATEGORIES
+        ]
+        return {
+            "categories": categories,
+            "components": out,
+            "count": len(out),
+            "available": sum(1 for c in reg.values() if c.available),
+            "private_included": owner,
+            "sector_targets": {
+                "note": ("Provisional user-supplied reference counts. These are NOT "
+                         "verified current NEPSE listing counts and are never presented "
+                         "as fact. Actual counts are computed from stored data."),
+                "Commercial Banks": 19, "Development Banks": 11, "Hydropower": 28,
+                "Microfinance": 17, "Life Insurance": 12, "Non-Life Insurance": 11,
+                "Finance Companies": 11, "Investment Companies": 6, "Hotels": 3,
+                "Manufacturing and Processing": 2, "Others": 3,
+            },
+        }
+
+    def _baba_request(body: dict[str, Any], *, allow_private: bool = True) -> rb.ReportRequest:
+        """Validate an incoming report request.
+
+        Symbol and component counts are bounded so a request cannot make the
+        generator scan the whole universe or build an unbounded document.
+        """
+        symbols = body.get("symbols") or []
+        if isinstance(symbols, str):
+            symbols = [s.strip() for s in symbols.replace("\n", ",").split(",") if s.strip()]
+        if not isinstance(symbols, list) or len(symbols) > rb.MAX_SYMBOLS:
+            raise HTTPException(400, f"too many symbols (max {rb.MAX_SYMBOLS})")
+        components = body.get("components") or []
+        if not isinstance(components, list) or len(components) > rb.MAX_COMPONENTS:
+            raise HTTPException(400, f"too many components (max {rb.MAX_COMPONENTS})")
+        ids = _baba_components(body, allow_private=allow_private)
+        return rb.ReportRequest(
+            components=ids,
+            symbols=[str(s).strip().upper() for s in symbols if str(s).strip()],
+            sector=body.get("sector"),
+            period=body.get("period"),
+            fmt=str(body.get("format") or "xlsx").lower(),
+            title=body.get("title"),
+            notes=body.get("notes"),
+        )
+
+    @app.post("/api/baba/report/preview")
+    def baba_report_preview(body: dict[str, Any], request: Request) -> dict[str, Any]:
+        """Assemble the selected sections and return them for on-screen preview.
+
+        The preview is exactly what will be exported: the same sections, the
+        same values, the same unavailable list.
+        """
+        req = _baba_request(body, allow_private=_baba_owner(request))
+        report = rb.assemble_report(req)
+        report["quality"]["private_components_included"] = any(
+            c.startswith(("j_", "p_")) for c in req.components
+        )
+        return report
+
+    @app.get("/api/baba/report/export")
+    def baba_report_export(request: Request, components: str, format: str = "xlsx",
+                           symbols: str = "", sector: str | None = None,
+                           period: str | None = None, title: str | None = None,
+                           notes: str | None = None) -> Response:
+        """Render the selected sections to a file and download it.
+
+        ``components`` is a comma-separated id list. Journal and portfolio
+        components are private: they are included only for the owner, and only
+        with an explicit ``include_private=true`` flag. A shared request can
+        never silently attach personal transactions.
+        """
+        fmt = (format or "xlsx").lower()
+        if fmt not in ("xlsx", "csv", "pdf", "json"):
+            raise HTTPException(400, f"unsupported format {fmt!r}")
+        ids = [c.strip() for c in components.split(",") if c.strip()]
+        owner = _baba_owner(request)
+        include_private = (
+            owner and str(request.query_params.get("include_private", "")).lower()
+            in ("1", "true", "yes")
+        )
+        body = {
+            "components": ids,
+            "symbols": [s.strip().upper() for s in symbols.split(",") if s.strip()],
+            "sector": sector, "period": period, "format": fmt,
+            "title": title, "notes": notes,
+        }
+        req = _baba_request(body, allow_private=include_private)
+        report = rb.assemble_report(req)
+        renderer = {
+            "xlsx": (rb.render_xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                     "report.xlsx"),
+            "csv": (rb.render_csv, "application/zip", "report_csv.zip"),
+            "pdf": (rb.render_pdf, "application/pdf", "report.pdf"),
+            "json": (rb.render_json, "application/json", "report.json"),
+        }[fmt]
+        data, media, filename = renderer[0](report), renderer[1], renderer[2]
+        # Private data must never be cacheable.
+        private = any(c.startswith(("j_", "p_")) for c in req.components)
+        headers = {"Content-Disposition": f"attachment; filename={filename}"}
+        if private:
+            headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+            headers["Pragma"] = "no-cache"
+        return Response(content=data, media_type=media, headers=headers)
+
+    # ------------------------------------------------------- research studio
+    @app.get("/api/baba/research/catalog")
+    def baba_research_catalog() -> dict[str, Any]:
+        """Components, categories and presets for the multi-symbol report UI.
+
+        Journal and portfolio components are deliberately absent: a research
+        report is public-market analysis, and a job never assembles private
+        records. (The BABA component catalog keeps them for the owner's
+        on-screen report builder.)
+        """
+        from megatool.research_report import research_catalog
+
+        return research_catalog(allow_private=False)
+
+    @app.post("/api/baba/research/jobs")
+    def baba_research_job_start(body: dict[str, Any], request: Request) -> dict[str, Any]:
+        """Start a real background build. Returns the job id immediately."""
+        from megatool import jobs
+        from megatool import research_report as rr
+
+        owner = _baba_owner(request)
+        raw_components = body.get("components")
+        if raw_components is not None and not isinstance(raw_components, list):
+            raise HTTPException(400, "components must be a list of component ids")
+        components = rr.clean_components(raw_components or [], allow_private=False)
+        if not components:
+            preset = rr.RESEARCH_PRESETS.get(str(body.get("preset") or "full"))
+            if preset is None:
+                raise HTTPException(400, f"unknown preset {body.get('preset')!r}")
+            components = rr.clean_components(preset["components"], allow_private=False)
+        raw_symbols = body.get("symbols") or []
+        if isinstance(raw_symbols, str):
+            raw_symbols = [s.strip() for s in raw_symbols.replace("\n", ",").split(",") if s.strip()]
+        if not isinstance(raw_symbols, list):
+            raise HTTPException(400, "symbols must be a list")
+        if len(raw_symbols) > rr.MAX_RESEARCH_SYMBOLS:
+            raise HTTPException(400, f"too many symbols (max {rr.MAX_RESEARCH_SYMBOLS})")
+        try:
+            symbols = rr.clean_symbols([str(s) for s in raw_symbols])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if not symbols:
+            raise HTTPException(400, "select at least one symbol")
+        risk_budget = body.get("risk_budget")
+        capital = body.get("capital")
+        if risk_budget is not None:
+            try:
+                risk_budget = float(risk_budget)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(400, "risk_budget must be a number") from exc
+            if risk_budget < 0:
+                raise HTTPException(400, "risk_budget must be >= 0")
+        if capital is not None:
+            try:
+                capital = float(capital)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(400, "capital must be a number") from exc
+            if capital < 0:
+                raise HTTPException(400, "capital must be >= 0")
+        title = body.get("title")
+        notes = body.get("notes")
+
+        steps = len(symbols) * 3 + 4
+        job = jobs.create_job(
+            "research_report",
+            params={
+                "symbols": symbols,
+                "components": components,
+                "title": title,
+                "risk_budget": risk_budget,
+                "capital": capital,
+                "owner": owner,
+            },
+            steps_total=steps,
+            stage="queued",
+        )
+
+        def _work(job_id: str) -> dict[str, Any]:
+            from pathlib import Path
+
+            def progress(done: int, stage: str, message: str) -> None:
+                jobs.update_job(job_id, steps_done=done, stage=stage, message=message)
+
+            bundle = rr.build_bundle(
+                symbols, components,
+                title=title, notes=notes,
+                risk_budget=risk_budget,
+                progress=progress,
+                allow_private=False,
+                store=get_store(),
+            )
+            out = jobs.exports_dir(job_id)
+            artifacts: dict[str, Path] = {}
+            # One XLSX and one PDF per symbol: real, separately reported steps.
+            parts: dict[str, dict[str, bytes]] = {}
+            done = len(symbols)
+            for idx, sym in enumerate(bundle["symbols"], start=1):
+                xlsx_bytes = rr.render_symbol_xlsx(bundle, sym)
+                parts[sym] = {"xlsx": xlsx_bytes}
+                progress(done + (idx - 1) * 2 + 1, "rendering_symbol",
+                         f"{sym}: workbook written")
+                pdf_bytes = rr.render_symbol_pdf(bundle, sym)
+                parts[sym]["pdf"] = pdf_bytes
+                progress(done + (idx - 1) * 2 + 2, "rendering_symbol",
+                         f"{sym}: PDF written")
+                (out / f"{sym}-research.xlsx").write_bytes(xlsx_bytes)
+                (out / f"{sym}-research.pdf").write_bytes(pdf_bytes)
+
+            base = len(symbols) * 3
+            progress(base + 1, "rendering_pdf", "Writing the combined PDF")
+            pdf = out / "research-report.pdf"
+            pdf.write_bytes(rr.render_bundle_pdf(bundle))
+            artifacts["pdf"] = pdf
+            progress(base + 2, "rendering_xlsx", "Writing the combined workbook")
+            xlsx = out / "research-report.xlsx"
+            xlsx.write_bytes(rr.render_bundle_xlsx(bundle))
+            artifacts["xlsx"] = xlsx
+            progress(base + 3, "rendering_json", "Writing the assembled JSON")
+            js = out / "research-report.json"
+            js.write_bytes(rr.render_bundle_json(bundle))
+            artifacts["json"] = js
+            progress(base + 4, "packaging", "Packaging per-symbol reports and CSVs")
+            zpath = out / "research-package.zip"
+            zpath.write_bytes(rr.render_bundle_zip(bundle, parts=parts))
+            artifacts["zip"] = zpath
+            return artifacts
+
+        jobs.start_job(job.id, _work)
+        return {"job": job.to_dict(), "steps_total": steps}
+
+    @app.get("/api/baba/research/jobs")
+    def baba_research_jobs(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
+        from megatool import jobs
+
+        return {"jobs": [j.to_dict() for j in jobs.list_jobs(kind="research_report", limit=limit)]}
+
+    @app.get("/api/baba/research/jobs/{job_id}")
+    def baba_research_job(job_id: str) -> dict[str, Any]:
+        from megatool import jobs
+
+        try:
+            return {"job": jobs.get_job(job_id).to_dict()}
+        except jobs.JobError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.get("/api/baba/research/jobs/{job_id}/download/{fmt}")
+    def baba_research_download(job_id: str, fmt: str) -> Response:
+        from megatool import jobs
+
+        media = {
+            "pdf": "application/pdf",
+            "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "json": "application/json",
+            "zip": "application/zip",
+        }
+        if fmt not in media:
+            raise HTTPException(400, f"unsupported format {fmt!r}")
+        try:
+            path = jobs.artifact_path(job_id, fmt)
+        except jobs.JobError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        headers = {
+            "Content-Disposition": f'attachment; filename="{path.name}"',
+            "Cache-Control": "no-store, no-cache, must-revalidate, private",
+            "Pragma": "no-cache",
+            "X-Content-Type-Options": "nosniff",
+        }
+        return Response(content=path.read_bytes(), media_type=media[fmt], headers=headers)
+
+    @app.get("/api/baba/volatility/{symbol}")
+    def baba_volatility(symbol: str, risk_budget: float | None = Query(None, ge=0),
+                        capital: float | None = Query(None, ge=0)) -> dict[str, Any]:
+        """Next-session range forecast from stored bars, with out-of-sample scoring."""
+        from megatool.volatility import VolatilityError, volatility_report
+
+        sym = symbol.upper()
+        if not re.fullmatch(r"[A-Z0-9][A-Z0-9._-]{0,19}", sym):
+            raise HTTPException(400, "invalid symbol")
+        store = get_store()
+        df = store.get_bars(sym)
+        if df is None or df.empty:
+            raise HTTPException(404, f"no stored history for {sym}")
+        try:
+            return volatility_report(df, sym, risk_budget=risk_budget, capital=capital)
+        except VolatilityError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/api/baba/templates")
+    def baba_templates_list() -> dict[str, Any]:
+        return {"templates": rb.list_templates()}
+
+    @app.post("/api/baba/templates")
+    def baba_templates_save(body: dict[str, Any]) -> dict[str, Any]:
+        name = str(body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "a template name is required")
+        req = _baba_request(body)
+        return rb.save_template(name, req)
+
+    @app.put("/api/baba/templates/{name}")
+    def baba_templates_rename(name: str, body: dict[str, Any]) -> dict[str, Any]:
+        return rb.rename_template(name, str(body.get("name") or "").strip())
+
+    @app.delete("/api/baba/templates/{name}")
+    def baba_templates_delete(name: str) -> dict[str, Any]:
+        if not rb.delete_template(name):
+            raise HTTPException(404, f"no template named {name!r}")
+        return {"deleted": name}
 
     # ------------------------------------------------------------- dashboard
     # ------------------------------------------------------------- backtest

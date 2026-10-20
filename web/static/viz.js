@@ -410,6 +410,22 @@
       const d = `M${x0.toFixed(1)} ${y0.toFixed(1)} A${r} ${r} 0 ${large} 1 ${x1.toFixed(1)} ${y1.toFixed(1)} L${x2.toFixed(1)} ${y2.toFixed(1)} A${ir} ${ir} 0 ${large} 0 ${x3.toFixed(1)} ${y3.toFixed(1)} Z`;
       const path = mk("path", { d, fill: s.color || PALETTE[i % PALETTE.length], opacity: 0.92 });
       path.appendChild(mk("title", {})).textContent = `${s.label}: ${spec.valueFormat ? spec.valueFormat(s.value) : fmt(s.value, 0)} (${(frac * 100).toFixed(1)}%)`;
+      // Selection: a segment is a real control, not decoration — clickable AND
+      // keyboard-reachable (Enter/Space), with the same handler for both.
+      if (typeof spec.onSelect === "function") {
+        path.setAttribute("tabindex", "0");
+        path.setAttribute("role", "button");
+        path.setAttribute("aria-label", `${s.label}: ${(frac * 100).toFixed(1)}% of total`);
+        path.style.cursor = "pointer";
+        path.classList.add("viz-slice");
+        const fire = () => spec.onSelect(s);
+        path.addEventListener("click", fire);
+        path.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); fire(); }
+        });
+        path.addEventListener("mouseenter", () => { path.setAttribute("opacity", "1"); });
+        path.addEventListener("mouseleave", () => { path.setAttribute("opacity", "0.92"); });
+      }
       svg.appendChild(path);
       a0 = a1;
     });
@@ -430,9 +446,23 @@
     lg.className = "viz-legend viz-legend-col";
     lg.innerHTML = slices.map((s, i) => {
       const pct = (s.value / total) * 100;
-      return `<span class="viz-key" title="${esc(s.label)}"><i style="background:${esc(s.color || PALETTE[i % PALETTE.length])}"></i>${esc(s.label)} <b>${pct.toFixed(1)}%</b></span>`;
+      const key = typeof spec.onSelect === "function"
+        ? `viz-key viz-key-action" tabindex="0" role="button"`
+        : `viz-key"`;
+      return `<span class="${key}" data-sector="${esc(s.label)}" title="${esc(s.label)}"><i style="background:${esc(s.color || PALETTE[i % PALETTE.length])}"></i>${esc(s.label)} <b>${pct.toFixed(1)}%</b></span>`;
     }).join("");
     wrap.appendChild(lg);
+    if (typeof spec.onSelect === "function") {
+      lg.querySelectorAll(".viz-key-action").forEach((el) => {
+        const slice = slices.find((x) => String(x.label) === el.dataset.sector);
+        if (!slice) return;
+        const fire = () => spec.onSelect(slice);
+        el.addEventListener("click", fire);
+        el.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); fire(); }
+        });
+      });
+    }
     host.appendChild(wrap);
     registerSpec(host, donut, spec);
     return svg;

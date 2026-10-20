@@ -263,6 +263,130 @@ def weekday_seasonality(store: MarketStore, symbol: str) -> dict[str, Any]:
     }
 
 
+#: Nepal's financial year runs Shrawan 1 – Ashadh end, which falls in mid-July.
+#: The stored bars are Gregorian, so the boundary is DEFINED on the Gregorian
+#: calendar as 16 July: FY N covers 16 Jul (N-1) .. 15 Jul (N). This is a stated
+#: convention, not something inferred from the price data.
+FY_START_MONTH, FY_START_DAY = 7, 16
+
+
+def fiscal_year_of(d: date) -> int:
+    """The Nepali financial year a Gregorian date belongs to (see FY_START_*)."""
+    return d.year + 1 if (d.month, d.day) >= (FY_START_MONTH, FY_START_DAY) else d.year
+
+
+def _period_seasonality(store: MarketStore, symbol: str, period_of, *, kind: str,
+                        season_of=None, min_bars: int = 1) -> dict[str, Any]:
+    """Shared engine for quarterly / financial-year seasonality.
+
+    ``period_of`` identifies one concrete period (e.g. ``"2026-Q3"``); ``season_of``
+    (optional) maps a date to the RECURRING label the statistics pool on (e.g.
+    ``"Q3"``). Without it each period stands alone — correct for a financial year,
+    wrong for a quarter, which must pool Q1 across every year.
+
+    Groups stored bars into periods, takes the LAST STORED CLOSE of each period,
+    computes period-over-period percentage returns, and aggregates them by the
+    period's label. A period with fewer than ``min_bars`` stored bars is marked
+    partial and excluded from the aggregates together with its successor (the
+    return between them is not comparable) — the same rule monthly uses.
+    """
+    series = load_close_series(store, symbol)
+    dates = series["dates"]
+    closes = series["closes"]
+    if not dates:
+        return {"symbol": symbol.strip().upper(), "kind": kind, "periods": [],
+                "by_period": [], "excluded_periods": 0,
+                "definitions": {"period_return": "no stored bars"}}
+
+    buckets: dict[Any, list[tuple[date, float]]] = {}
+    for d, c in zip(dates, closes, strict=False):
+        buckets.setdefault(period_of(d), []).append((d, float(c)))
+
+    periods: list[dict[str, Any]] = []
+    for label in sorted(buckets):
+        rows = buckets[label]
+        periods.append({
+            "period": label,
+            "season": (season_of(rows[-1][0]) if season_of else None),
+            "bars": len(rows),
+            "last_close": rows[-1][1],
+            "first_date": _iso(rows[0][0]),
+            "last_date": _iso(rows[-1][0]),
+            "partial": bool(len(rows) < min_bars),
+        })
+    for i, per in enumerate(periods):
+        if i == 0:
+            per["prev_last_close"] = None
+            per["return_pct"] = None
+        else:
+            prev = periods[i - 1]
+            per["prev_last_close"] = prev["last_close"]
+            per["return_pct"] = (
+                100.0 * (per["last_close"] / prev["last_close"] - 1.0)
+                if prev["last_close"] else None
+            )
+        per["excluded_from_aggregates"] = bool(
+            per["return_pct"] is None or per["partial"] or (i > 0 and periods[i - 1]["partial"])
+        )
+
+    usable = [p2 for p2 in periods if not p2["excluded_from_aggregates"]]
+    # Pool on the RECURRING label when one exists (Q1..Q4 across years); otherwise
+    # each period stands alone (a financial year is not a recurring season).
+    key_of = (lambda x: x["season"]) if season_of else (lambda x: x["period"])
+    by_period: list[dict[str, Any]] = []
+    for label in sorted({key_of(p2) for p2 in usable}):
+        rets = [p2["return_pct"] for p2 in usable if key_of(p2) == label]
+        if not rets:
+            continue
+        arr = pd.Series(rets, dtype="float64")
+        by_period.append({
+            "period": label,
+            "n": int(arr.size),
+            "mean_pct": float(arr.mean()),
+            "median_pct": float(arr.median()),
+            "stdev_pct": float(arr.std(ddof=1)) if arr.size > 1 else None,
+            "positive": int((arr > 0).sum()),
+            "positive_pct": float((arr > 0).mean() * 100.0),
+            "best_pct": float(arr.max()),
+            "worst_pct": float(arr.min()),
+        })
+
+    return {
+        "symbol": symbol.strip().upper(),
+        "kind": kind,
+        "observations": len(dates),
+        "first_date": _iso(dates[0]),
+        "last_date": _iso(dates[-1]),
+        "periods": periods,
+        "by_period": by_period,
+        "excluded_periods": sum(1 for p2 in periods if p2["excluded_from_aggregates"]),
+        "definitions": {
+            "period_return": "last stored close of the period / last stored close of the "
+            "previous stored period - 1, in percent",
+            "quarterly": "calendar quarters (Jan-Mar, Apr-Jun, Jul-Sep, Oct-Dec)",
+            "fiscal_year": f"FY N = {FY_START_DAY} Jul (N-1) .. {FY_START_DAY - 1} Jul (N) "
+                           "(Nepal's Shrawan–Ashadh year, stated on the Gregorian calendar)",
+            "partial_period": f"fewer than {int(min_bars)} stored bars; excluded with its successor",
+        },
+    }
+
+
+def quarterly_seasonality(store: MarketStore, symbol: str) -> dict[str, Any]:
+    """Per-calendar-quarter return statistics."""
+    return _period_seasonality(
+        store, symbol,
+        lambda d: f"{d.year}-Q{(d.month - 1) // 3 + 1}",
+        kind="quarterly",
+        # Pool Q1/Q2/Q3/Q4 ACROSS years — that is what quarterly seasonality means.
+        season_of=lambda d: f"Q{(d.month - 1) // 3 + 1}",
+    )
+
+
+def fiscal_year_seasonality(store: MarketStore, symbol: str) -> dict[str, Any]:
+    """Per-Nepali-financial-year return statistics."""
+    return _period_seasonality(store, symbol, fiscal_year_of, kind="fiscal_year")
+
+
 def holiday_effect(
     store: MarketStore,
     symbol: str,
@@ -363,6 +487,178 @@ def holiday_effect(
     }
 
 
+def calendar_event_study(
+    store: MarketStore,
+    symbol: str,
+    calendar_path: Path | str | None = None,
+    *,
+    pre_days: int = 5,
+    post_days: int = 5,
+    classifications: list[str] | None = None,
+) -> dict[str, Any]:
+    """Event-window study over the extracted Hamro Patro calendar.
+
+    For every calendar record whose Gregorian date resolved and falls inside
+    the symbol's stored history, this measures the return across a pre-event
+    window and a post-event window, using **only sessions actually present in
+    the stored bars**. Nothing is forward-filled and no bar is invented.
+
+    Honesty properties:
+      * An event is only used when enough real sessions exist on both sides;
+        the count that qualified is reported next to the statistics.
+      * Windows are labelled with the session dates that produced them, so a
+        reader can re-derive every number.
+      * The result is an association over a small sample. It is never described
+        as causation, and no significance claim is made without a stated test.
+      * Calendar events, public holidays and confirmed NEPSE closures are
+        kept as distinct classifications; a red calendar cell is never
+        promoted to a market closure.
+    """
+    path = Path(calendar_path) if calendar_path is not None else DEFAULT_CALENDAR_PATH
+    out_base: dict[str, Any] = {
+        "symbol": symbol.strip().upper(),
+        "calendar_path": str(path),
+        "pre_days": pre_days,
+        "post_days": post_days,
+    }
+    if not path.is_file():
+        return {**out_base, "available": False, "events_considered": 0,
+                "reason": f"calendar dataset not found at {path}"}
+    try:
+        records = (json.loads(path.read_text(encoding="utf-8")).get("records")) or []
+    except (json.JSONDecodeError, OSError) as exc:
+        return {**out_base, "available": False, "reason": f"unreadable calendar: {exc}"}
+
+    events: list[date] = []
+    seen: set[date] = set()
+    skipped_unresolved = skipped_class = 0
+    for r in records:
+        gd = r.get("gregorian_date")
+        if not gd:
+            skipped_unresolved += 1
+            continue
+        try:
+            d = date.fromisoformat(str(gd))
+        except ValueError:
+            skipped_unresolved += 1
+            continue
+        if classifications and r.get("classification") not in classifications:
+            skipped_class += 1
+            continue
+        if d not in seen:
+            seen.add(d)
+            events.append(d)
+    events.sort()
+
+    dates: list[date] = []
+    closes: list[float] = []
+    try:
+        series = load_close_series(store, symbol)
+    except KeyError as exc:
+        # A symbol with no stored history is an honest "unavailable", not a crash.
+        # The summary dict is built first so this path reports the same fields.
+        dates, closes = [], []
+        out = {**out_base,
+               "events_considered": len(records),
+               "events_unresolved_skipped": skipped_unresolved,
+               "events_class_skipped": skipped_class,
+               "events_distinct": len(events),
+               "first_date": None,
+               "last_date": None}
+        return {**out, "available": False, "reason": str(exc)}
+    dates = series["dates"]
+    closes = series["closes"]
+    n = len(dates)
+    out = {**out_base,
+           "events_considered": len(records),
+           "events_unresolved_skipped": skipped_unresolved,
+           "events_class_skipped": skipped_class,
+           "events_distinct": len(events),
+           "first_date": _iso(dates[0]) if dates else None,
+           "last_date": _iso(dates[-1]) if dates else None}
+    if n < pre_days + post_days + 2:
+        return {**out, "available": False, "reason": "not enough stored history"}
+
+    rows: list[dict[str, Any]] = []
+    for ev in events:
+        # Last session strictly before the event, first session after it.
+        pre_i = None
+        post_i = None
+        for i, d in enumerate(dates):
+            if d < ev:
+                pre_i = i
+            elif d > ev and post_i is None:
+                post_i = i
+                break
+        if pre_i is None or post_i is None:
+            continue
+        if pre_i - pre_days < 0 or post_i + post_days > n - 1:
+            continue  # not enough real sessions on one side: skip, never pad
+        pre_close = closes[pre_i]
+        if not pre_close:
+            continue
+        pre_win = 100.0 * (pre_close / closes[pre_i - pre_days] - 1.0)
+        post_win = 100.0 * (closes[post_i + post_days] / pre_close - 1.0)
+        # The session immediately after the event, when there is one.
+        event_day = None
+        if post_i == pre_i + 1:
+            event_day = 100.0 * (closes[post_i] / pre_close - 1.0)
+        rows.append({
+            "event": ev.isoformat(),
+            "last_session_before": _iso(dates[pre_i]),
+            "first_session_after": _iso(dates[post_i]),
+            "sessions_before": pre_days,
+            "sessions_after": post_days,
+            "pre_window_pct": pre_win,
+            "post_window_pct": post_win,
+            "event_day_pct": event_day,
+            "market_closure_status": next(
+                (r.get("market_closure") for r in records
+                 if r.get("gregorian_date") == ev.isoformat()), "not_independently_verified"),
+        })
+
+    if not rows:
+        return {**out, "available": False,
+                "reason": "no resolved calendar event has enough stored history on both sides"}
+
+    def _stats(key: str) -> dict[str, Any]:
+        vals = np.array([r[key] for r in rows if r[key] is not None], dtype=float)
+        if vals.size == 0:
+            return {"n": 0}
+        return {
+            "n": int(vals.size),
+            "mean_pct": float(vals.mean()),
+            "median_pct": float(np.median(vals)),
+            "stdev_pct": float(vals.std(ddof=1)) if vals.size > 1 else None,
+            "positive": int((vals > 0).sum()),
+            "positive_pct": float((vals > 0).mean() * 100.0),
+            "best_pct": float(vals.max()),
+            "worst_pct": float(vals.min()),
+        }
+
+    return {
+        **out,
+        "available": True,
+        "events_used": len(rows),
+        "pre_window": _stats("pre_window_pct"),
+        "post_window": _stats("post_window_pct"),
+        "event_day": _stats("event_day_pct"),
+        "events": rows,
+        "definitions": {
+            "pre_window_pct": f"close of the last session before the event / close "
+                             f"{pre_days} sessions earlier - 1, percent",
+            "post_window_pct": f"close {post_days} sessions after the last session before "
+                              f"the event / that close - 1, percent",
+            "event_day_pct": "close of the first session after the event / the last close "
+                             "before it - 1, percent",
+            "session": "a session actually present in the stored bars; no session is "
+                       "forward-filled and none is invented",
+            "scope": "association over a small sample; not causation, and no significance "
+                     "claim is made",
+        },
+    }
+
+
 def seasonality_report(
     store: MarketStore,
     symbol: str,
@@ -374,7 +670,10 @@ def seasonality_report(
         "symbol": symbol.strip().upper(),
         "monthly": monthly_seasonality(store, symbol, min_month_bars=min_month_bars),
         "weekday": weekday_seasonality(store, symbol),
+        "quarterly": quarterly_seasonality(store, symbol),
+        "fiscal_year": fiscal_year_seasonality(store, symbol),
         "holiday": holiday_effect(store, symbol, calendar_path=calendar_path),
+        "event_study": calendar_event_study(store, symbol, calendar_path=calendar_path),
         "disclaimer": "Descriptive historical statistics over the stored range; "
         "sample sizes are quoted everywhere. Not a forecast.",
     }

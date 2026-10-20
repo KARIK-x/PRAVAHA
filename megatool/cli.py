@@ -305,6 +305,101 @@ def _cmd_fetch_sectors(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_calendar_import(args: argparse.Namespace) -> int:
+    """Import the public Hamro Patro calendar into a versioned dataset.
+
+    Fetches each BS month in the requested range (cached on disk, spaced
+    requests), parses it, merges into the dataset and prints a coverage report.
+    A red-marked cell is stored as a holiday/event CANDIDATE — never as an
+    official public holiday and never as a confirmed NEPSE closure.
+    """
+    from megatool.calendar_import import (
+        SOURCE_BASE,
+        extract_range,
+        extraction_report,
+        write_dataset,
+    )
+    from megatool.config import PATHS
+
+    out_path = args.out or str(PATHS.data / "calendar" / "hamropatro_calendar.json")
+    cache = args.cache or str(PATHS.data / "calendar" / "cache")
+    print("Hamro Patro calendar import")
+    print(f"  range      : BS {args.start} .. {args.end}")
+    print(f"  dataset    : {out_path}")
+    print(f"  page cache : {cache}")
+    print(f"  request gap: {args.delay}s\n")
+
+    def progress(key: str, i: int, total: int) -> None:
+        if args.quiet:
+            return
+        if i == 1 or i % 12 == 0 or i == total:
+            print(f"  [{i}/{total}] BS {key}", flush=True)
+
+    try:
+        result = extract_range(args.start, args.end, cache_dir=cache, delay=args.delay,
+                               progress=progress,
+                               resolve_gregorian_dates=not args.no_resolve)
+    except Exception as exc:  # noqa: BLE001 - surface the real reason, never a traceback
+        print(f"\ncalendar-import failed: {exc}")
+        return 2
+    records = [r.to_dict() for r in result["records"]]
+    if args.dry_run:
+        # Nothing is written, so the report describes the incoming record set.
+        report = extraction_report(records, missing_periods=result["missing_periods"])
+        print("\nDRY RUN — nothing written.")
+    else:
+        written = write_dataset(records, out_path)
+        # Report on what was actually written: the incoming set is deduplicated
+        # by the merge, so the two counts differ and only the stored one is real.
+        from megatool.calendar_import import load_dataset
+
+        report = extraction_report(load_dataset(out_path),
+                                   missing_periods=result["missing_periods"])
+        print(f"\nDataset written: {written['path']}")
+        print(f"  added {written['added']} · updated {written['updated']} "
+              f"· unchanged {written['unchanged']} · total {written['total']}")
+    print("\nCoverage")
+    print(f"  periods requested : {len(result['periods'])}")
+    print(f"  distinct BS dates : {report['distinct_bs_dates']}")
+    print(f"  event records     : {report['event_records']}")
+    print(f"  red-marked dates  : {report['red_marked_dates']}")
+    print(f"  festivals         : {report['by_classification'].get('festival', 0)}")
+    print(f"  observances       : {report['by_classification'].get('religious_or_cultural_observance', 0)}")
+    print(f"  unverified closure: {report['by_market_closure'].get('not_independently_verified', 0)}")
+    print(f"  gregorian resolved: {report['gregorian_resolved']} / {report['event_records']}")
+    if result.get("resolution"):
+        r = result["resolution"]
+        print(f"  resolution detail : resolved {r['resolved']} · out of range {r['out_of_range']}"
+              f" · invalid BS date {r['invalid_bs_date']}")
+    print(f"  first/last period : {report['first_period']} .. {report['last_period']}")
+    if report["missing_periods"]:
+        print(f"  MISSING PERIODS   : {len(report['missing_periods'])} "
+              f"(e.g. {', '.join(report['missing_periods'][:6])})")
+    if result["failed"]:
+        print("\nFetch/parse failures:")
+        for f in result["failed"][:10]:
+            print(f"  - {f}")
+    print(f"\nSource: {SOURCE_BASE}  (public page; a red cell is a candidate, not a ruling)")
+    return 0
+
+
+def _cmd_calendar_report(args: argparse.Namespace) -> int:
+    """Print the coverage report for an existing calendar dataset (no network)."""
+    import json
+
+    from megatool.calendar_import import extraction_report, load_dataset
+    from megatool.config import PATHS
+
+    path = args.out or str(PATHS.data / "calendar" / "hamropatro_calendar.json")
+    records = load_dataset(path)
+    if not records:
+        print(f"No dataset at {path} — run `megatool calendar-import` first.")
+        return 1
+    report = extraction_report(records)
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    return 0
+
+
 def _cmd_status(args: argparse.Namespace) -> int:
     from megatool.db import get_conn, init_app_db
     from megatool.market_store import MarketStore
@@ -1182,6 +1277,25 @@ def build_parser() -> argparse.ArgumentParser:
     is_.add_argument("--db", help="DuckDB market database path (default: market DB)")
     is_.add_argument("--source", help="provenance label (default: owner-supplied CSV)")
     is_.set_defaults(func=_cmd_import_sectors)
+
+    ci = sub.add_parser(
+        "calendar-import",
+        help="import the public Hamro Patro calendar into a versioned dataset",
+    )
+    ci.add_argument("--start", default="2052-01", help="first BS month, YYYY-MM (default 2052-01)")
+    ci.add_argument("--end", default="2084-12", help="last BS month, YYYY-MM (default 2084-12)")
+    ci.add_argument("--out", help="dataset path (default data/calendar/hamropatro_calendar.json)")
+    ci.add_argument("--cache", help="page cache dir (default data/calendar/cache)")
+    ci.add_argument("--delay", type=float, default=0.6, help="seconds between requests (default 0.6)")
+    ci.add_argument("--no-resolve", action="store_true",
+                    help="leave Gregorian dates unresolved (skip the BS<->AD mapping)")
+    ci.add_argument("--dry-run", action="store_true", help="parse and report without writing")
+    ci.add_argument("--quiet", action="store_true")
+    ci.set_defaults(func=_cmd_calendar_import)
+
+    cr = sub.add_parser("calendar-report", help="print the coverage report (no network)")
+    cr.add_argument("--out", help="dataset path (default data/calendar/hamropatro_calendar.json)")
+    cr.set_defaults(func=_cmd_calendar_report)
 
     sub.add_parser(
         "fetch-index",
