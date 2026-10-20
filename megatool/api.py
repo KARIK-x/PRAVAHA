@@ -6261,6 +6261,155 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
         except Exception as exc:
             return {"sector_map": {}, "by_sector": {}, "total_classified": 0, "total_sectors": 0, "error": str(exc)}
 
+    @app.get("/api/search")
+    def universal_search(request: Request, q: str = "", limit: int = Query(30, ge=1, le=100)) -> dict[str, Any]:
+        """Permission-aware universal search over navigation, symbols, sectors,
+        report components, research topics, journal and portfolio records.
+
+        The endpoint is intentionally read-only and uses bounded SQL filters.
+        Private user records are included only for the owner (loopback + trusted).
+        """
+        needle = (q or "").strip().lower()
+        owner = False
+        try:
+            from megatool.friend_access import client_is_loopback, trust_loopback
+            owner = bool(trust_loopback() and client_is_loopback(request.client.host if request.client else None))
+        except Exception:  # noqa: BLE001
+            owner = False
+
+        results: list[dict[str, Any]] = []
+        def add(kind: str, label: str, hint: str, source: str, target: dict[str, Any] | None = None) -> None:
+            if len(results) >= 500:
+                return
+            hay = f"{label} {hint} {source}".lower()
+            if needle and needle not in hay:
+                # token/prefix fallback: every query word must appear somewhere
+                if not all(tok in hay for tok in needle.split()):
+                    return
+            results.append({
+                "id": f"{kind}:{len(results)}",
+                "kind": kind,
+                "label": label,
+                "hint": hint,
+                "source": source,
+                "target": target or {},
+            })
+
+        # Navigation and major modules.
+        for view, label, hint in [
+            ("charts", "Charts", "Price chart, overlays and drawing tools"),
+            ("overview", "Market overview", "Market summary and breadth"),
+            ("baba/sector", "BABA sector report", "Canonical sector report"),
+            ("baba/scanner", "Fundamental Scanner", "Stored fundamentals and eligibility"),
+            ("baba/quarterly", "Quarterly Analysis", "Quarterly periods and growth"),
+            ("baba/builder", "Report Builder", "Shared report components and export"),
+            ("baba/journal", "Trading Journal", "Journal entries and review"),
+            ("baba/compare", "Company Comparison", "Side-by-side fundamentals"),
+            ("portfolio", "Portfolio", "Holdings and risk"),
+            ("screener", "Screener", "Financial screening"),
+            ("backtest", "Backtesting", "Strategy backtests"),
+        ]:
+            add("view", label, hint, "navigation", {"type": "view", "view": view})
+
+        # Symbols and sectors from the stored security master.
+        try:
+            meta = get_store().securities_meta()
+        except Exception:  # noqa: BLE001
+            meta = {}
+        try:
+            from megatool.report_components import review_company_names
+            fallback_names = review_company_names()
+        except Exception:  # noqa: BLE001
+            fallback_names = {}
+        for sym, info in meta.items():
+            name = str(info.get("name") or fallback_names.get(sym) or "").strip()
+            sector = canonical_sector(info.get("sector"))
+            hint = " · ".join(x for x in [name, sector, info.get("status")] if x)
+            add("symbol", sym, hint, "security_master", {"type": "symbol", "symbol": sym})
+        # Symbols that only appear in review sources or fundamentals.
+        for sym, name in fallback_names.items():
+            if sym in meta:
+                continue
+            add("symbol", sym, str(name or ""), "review source", {"type": "symbol", "symbol": sym})
+
+        # BABA report components.
+        try:
+            from megatool import report_builder as rb
+            reg = rb._registry()
+            for cid in rb.get_component_ids():
+                c = reg[cid]
+                if not owner and c.category in ("K_journal", "L_portfolio"):
+                    continue
+                add("component", c.name, c.description, f"report component · {c.category}",
+                    {"type": "component", "id": c.id})
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Research topics.
+        try:
+            topics = research_topics()
+            for t in (topics.get("topics") if isinstance(topics, dict) else topics) or []:
+                label = t.get("title") or t.get("topic") or str(t)
+                add("research", str(label), str(t.get("summary") or t.get("description") or ""),
+                    "research topics", {"type": "research", "topic": label})
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Algorithm / scanner / fundamental catalogue.
+        try:
+            from megatool import catalog as _cat
+            for kind in ("scanner", "algorithm", "fundamental"):
+                for t in _cat.all_tools(kind):
+                    label = t.get("name") or t.get("id") or t.get("key")
+                    desc = t.get("description") or t.get("short") or t.get("summary") or ""
+                    add(kind, str(label), str(desc), f"{kind} catalogue",
+                        {"type": "catalog", "kind": kind, "id": t.get("id") or t.get("key")})
+        except Exception:  # noqa: BLE001
+            pass
+
+        # User records (owner only).
+        if owner:
+            try:
+                with get_conn() as conn:
+                    rows = conn.execute(
+                        """SELECT id, symbol, strategy, thesis, outcome_notes, opened_at
+                           FROM journal_entries
+                           WHERE LOWER(COALESCE(symbol,'') || ' ' || COALESCE(strategy,'') || ' ' ||
+                                 COALESCE(thesis,'') || ' ' || COALESCE(outcome_notes,''))
+                                 LIKE ? LIMIT 20""",
+                        (f"%{needle or '%'}%",),
+                    ).fetchall()
+                    for r in rows:
+                        add("journal", f"Journal entry #{r[0]} · {r[1] or '—'}",
+                            " ".join(str(x) for x in (r[2], r[3], r[4], r[5]) if x),
+                            "trading journal", {"type": "journal", "id": r[0]})
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                with get_conn() as conn:
+                    rows = conn.execute(
+                        """SELECT name, symbols FROM watchlists
+                           WHERE LOWER(name || ' ' || symbols) LIKE ? LIMIT 20""",
+                        (f"%{needle or '%'}%",),
+                    ).fetchall()
+                    for name, symbols in rows:
+                        add("watchlist", f"Watchlist {name}", str(symbols or ""), "watchlist",
+                            {"type": "watchlist", "name": name})
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Rank exact-ish matches first.
+        if needle:
+            def score(r: dict[str, Any]) -> tuple[int, str]:
+                hay = f"{r['label']} {r['hint']}".lower()
+                if hay.startswith(needle):
+                    return (0, hay)
+                if needle in r["label"].lower():
+                    return (1, hay)
+                return (2, hay)
+            results.sort(key=score)
+        return {"query": q, "count": len(results), "results": results[:limit]}
+
     # Serve the terminal UI (same origin, no CORS involved).
     if PATHS.web.exists():
         app.mount("/", StaticFiles(directory=str(PATHS.web), html=True), name="web")

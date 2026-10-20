@@ -11578,24 +11578,68 @@ async function openPalette() {
 
 function closePalette() { const el = $("#cmdk"); if (el) el.hidden = true; }
 
-function renderPalette(q) {
+let cmdkSearchReq = 0;
+async function fetchUniversalSearch(query) {
+  if (!query || query.length < 2) return [];
+  try {
+    const d = await api(`/api/search?q=${encodeURIComponent(query)}&limit=30`);
+    return (d.results || []).map((r) => {
+      const t = r.target || {};
+      return {
+        group: "Universal search",
+        label: r.label,
+        hint: `${r.hint || ""} · ${r.source || ""}`.trim(),
+        keywords: `${r.label} ${r.hint || ""} ${r.source || ""}`,
+        disabled: false,
+        run: () => {
+          if (t.type === "view") { showView(t.view); viewShown(t.view); }
+          else if (t.type === "symbol") {
+            showView("charts"); viewShown("charts");
+            const inp = $("#symbol-input"); if (inp) inp.value = t.symbol;
+            if (typeof loadChart === "function") loadChart();
+          } else if (t.type === "sector") {
+            showView("baba/sector"); viewShown("baba/sector");
+            if (typeof BABA !== "undefined") BABA.sector = t.sector;
+            if (typeof babaSectorReport === "function") babaSectorReport();
+          } else if (t.type === "component") {
+            showView("baba/builder"); viewShown("baba/builder");
+          } else if (t.type === "journal") {
+            showView("baba/journal"); viewShown("baba/journal");
+          } else if (t.type === "research") {
+            showView("research"); viewShown("research");
+          } else {
+            drawStatus(`Selected: ${r.label}`);
+          }
+        },
+      };
+    });
+  } catch (e) {
+    return [];
+  }
+}
+
+async function renderPalette(q) {
   const list = $("#cmdk-list");
   if (!list) return;
+  const reqId = ++cmdkSearchReq;
   const query = (q || "").trim().toLowerCase();
   const scored = [];
   cmdkState.items.forEach((it) => {
-    // Unavailable entries stay hidden until the user actually searches for
-    // them — visible when relevant, never presented as usable.
     if (it.disabled && !query) return;
     const s = cmdkScore(query, `${it.label} ${it.hint || ""} ${it.keywords || ""} ${it.group}`);
     if (s < 0) return;
     scored.push({ it, s });
   });
-  // With no query keep the authored group order (Views → Chart types → …);
-  // with a query rank by score (Array.sort is stable, so equal scores stay
-  // grouped). Sorting the empty query alphabetically interleaved the groups.
+  if (query.length >= 2) {
+    const extra = await fetchUniversalSearch(query);
+    if (reqId !== cmdkSearchReq) return;
+    extra.forEach((it) => {
+      const s = cmdkScore(query, `${it.label} ${it.hint || ""} ${it.keywords || ""} ${it.group}`);
+      if (s >= 0) scored.push({ it, s: Math.max(s, 0) });
+    });
+  }
   if (query) scored.sort((a, b) => b.s - a.s || String(a.it.label).localeCompare(String(b.it.label)));
-  cmdkState.filtered = scored.slice(0, 80).map((x) => x.it);
+  cmdkState.filtered = scored.slice(0, 100).map((x) => x.it);
   if (cmdkState.idx >= cmdkState.filtered.length) cmdkState.idx = 0;
   const countEl = $("#cmdk-count");
   if (!cmdkState.filtered.length) {
