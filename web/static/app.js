@@ -95,6 +95,13 @@ const state = {
   // forecast overlays (per symbol, from real /api/kronos/forecast runs only)
   forecastOverlays: [], // [{symbol, model, origin, series:[LWC], chip}]
   drawVisible: true,
+  anchorHandlePrim: null,
+  // Dedicated marker host. Markers attached to the candlestick series make
+  // Lightweight Charts reserve vertical space and re-autoscale the price pane,
+  // which moved drawing anchors away from the pointer. This series renders the
+  // same markers but is excluded from autoscaling.
+  markerSeries: null,
+  markerSeriesKey: null,
   // chart-pattern overlay (detector output — distinct from manual drawings)
   patternSeries: [],
   patternMarkers: [],
@@ -1158,6 +1165,9 @@ function destroyCharts() {
   state.harmonicMarkers = [];
   state.harmonicData = null;
   state.drawSeries = [];
+  state.markerSeries = null;
+  state.markerSeriesKey = null;
+  state.anchorHandlePrim = null;
   state.drawMarkers = [];
   state.drawPreviewSeries = [];
   state.customFormulaSeries = [];  state.pendingMarker = [];
@@ -1386,22 +1396,17 @@ async function loadChart() {
 
     const chart = makeChart($("#chart"), Math.max(360, ($("#chart").clientHeight || 520)));
     state.charts.price = chart;
+    state.panEnabled = !(state.drawTool && !DRAW_MODES.has(state.drawTool));
+    try { chart.applyOptions({ handleScroll: { pressedMouseMove: state.panEnabled } }); } catch (e) { /* older build */ }
     // Real pointer coordinates from the chart itself (data-coordinate system),
     // so manual drawings stay correct under zoom/pan/range changes.
     chart.subscribeClick(onChartClick);
     // §5.7: navigation (zoom/pan) becomes undoable via the unified stack.
     installViewHistory(chart);
-    // Track mousedown so a pan that ends on the chart is not treated as an
-    // anchor click (see the drag guard in onChartClick).
+    // The pointer tracker is bound once in bindDrawings(), not on every chart
+    // rebuild. Re-adding it here leaked duplicate listeners and could reset the
+    // drag guard mid-gesture.
     state.chartDrag = { mouseDown: null };
-    $("#chart").addEventListener("mousedown", (ev) => {
-      if (state.chartDrag) {
-        state.chartDrag.mouseDown = { x: ev.clientX, y: ev.clientY };
-      }
-    }, true);
-    $("#chart").addEventListener("mouseup", () => {
-      if (state.chartDrag) state.chartDrag.mouseDown = null;
-    }, true);
     // §5.6: compact OHLCV strip that follows the crosshair (bound after the
     // bars are in state — see below, before afterChartBuilt). Assumes the
     // chart exists so the crosshair subscription lands on the real instance.
@@ -1816,8 +1821,46 @@ function cappedCandleMarkers() {
    call. Two markers can share a date (e.g. a swing and a candlestick shape on
    the same bar); lightweight-charts accepts that as long as the request is
    sorted ascending by time, so we sort and de-duplicate identical entries. */
+function markerHostSeries(candleSeries) {
+  const candle = candleSeries || state.candleSeries;
+  if (!candle || candle !== state.candleSeries || !state.charts.price) return null;
+  const dates = state.chartDates || [];
+  if (!dates.length) return null;
+  let host = state.markerSeries;
+  if (!host) {
+    // An invisible candlestick series mirrors the visible OHLC exactly, so
+    // aboveBar/belowBar markers keep their normal high/low anchoring. Only the
+    // autoscale exclusion is different.
+    host = state.charts.price.addCandlestickSeries({
+      upColor: "rgba(0,0,0,0)", downColor: "rgba(0,0,0,0)",
+      borderVisible: false, wickUpColor: "rgba(0,0,0,0)",
+      wickDownColor: "rgba(0,0,0,0)", priceLineVisible: false,
+      lastValueVisible: false, autoscaleInfoProvider: () => null,
+    });
+    state.markerSeries = host;
+  }
+  const key = `${dates.length}|${dates[0]}|${dates[dates.length - 1]}`;
+  if (state.markerSeriesKey !== key) {
+    const bars = state.chartBars || [];
+    const fallback = bars.length ? Number(bars[0].close) : 0;
+    const value = (v) => (isFinite(Number(v)) ? Number(v) : (isFinite(fallback) ? fallback : 0));
+    host.setData(dates.map((t, i) => {
+      const b = bars[i] || {};
+      const close = value(b.close);
+      return {
+        time: String(t), open: value(b.open), high: value(b.high),
+        low: value(b.low), close,
+      };
+    }));
+    state.markerSeriesKey = key;
+  }
+  // Do not leave a second copy of the markers on the candle series.
+  try { candle.setMarkers([]); } catch (e) { /* older build */ }
+  return host;
+}
+
 function flushMarkers(candleSeries) {
-  const series = candleSeries || state.candleSeries;
+  const series = markerHostSeries(candleSeries) || candleSeries || state.candleSeries;
   if (!series) return;  const all = [
     ...state.markers,
     ...cappedCandleMarkers(),
@@ -9397,17 +9440,10 @@ function afterDrawingsChanged() {
    setMarkers() call in flushMarkers — lightweight-charts allows only one
    marker call per series, so every marker source funnels through there. */
 function refreshSelectionMarkers() {
-  const sel = (state.drawings || []).find((d) => d.id === state.drawSelectId && !d.hidden);
+  // Handles are a primitive, not bar markers: an inBar marker can be hidden
+  // under a candle and any marker on the candle series changes autoscaling.
   state.selectionMarkers = [];
-  if (sel && state.drawVisible && !(state.replay && state.replay.on)) {
-    const letters = DRAW_ANCHOR_LETTERS[sel.type] || null;
-    anchorParts(sel).forEach(([, t, p], i) => {
-      state.selectionMarkers.push({
-        time: String(t), position: "inBar", color: PRAVAHA.white, shape: "circle",
-        text: letters ? letters[i] : String(i + 1),
-      });
-    });
-  }
+  renderAnchorHandles();
   flushMarkers();
 }
 
@@ -9471,13 +9507,36 @@ function drawingLevels(d) {
     .filter((l) => isFinite(l.price));
 }
 
+/* Drawing overlays must never drive the price scale. Before this, moving the
+   preview outside the visible price range re-autoscaled the candle pane under
+   the pointer, so the anchor landed a few pixels away from the cursor and the
+   chart appeared to jump. Returning null from autoscaleInfoProvider excludes
+   the overlay from autoscaling while still rendering it on the main scale. */
+function addDrawSeries(chart, options = {}) {
+  return chart.addLineSeries(Object.assign({}, options, { autoscaleInfoProvider: () => null }));
+}
+
 /* Remove the previous overlay series (the drawings themselves are kept). */
 /* Live preview while placing a multi-anchor drawing: a ~50%-opacity line from
    the first anchor to the current cursor. Removed on commit/cancel. */
 function clearDrawPreview() {
+  if (drawPreviewRaf) { cancelAnimationFrame(drawPreviewRaf); drawPreviewRaf = 0; }
+  drawPreviewPoint = null;
   const chart = state.charts.price;
   (state.drawPreviewSeries || []).forEach((s) => { try { chart.removeSeries(s); } catch (e) { /* gone */ } });
   state.drawPreviewSeries = [];
+}
+let drawPreviewRaf = 0;
+let drawPreviewPoint = null;
+function queueDrawPreview(mx, my) {
+  drawPreviewPoint = { mx, my };
+  if (drawPreviewRaf) return;
+  drawPreviewRaf = requestAnimationFrame(() => {
+    drawPreviewRaf = 0;
+    const p = drawPreviewPoint;
+    drawPreviewPoint = null;
+    if (p) renderDrawPreview(p.mx, p.my);
+  });
 }
 function renderDrawPreview(mx, my) {
   const chart = state.charts.price;
@@ -9485,15 +9544,16 @@ function renderDrawPreview(mx, my) {
   const dates = state.chartDates || [];
   if (!dates.length) return;
   const first = state.drawPending;
-  const t1 = first.t, p1 = Number(first.p);
+  const t1 = chartTimeKey(first.t), p1 = Number(first.p);
   if (!t1 || !isFinite(p1)) return;
-  // resolve cursor to a time/price
+  // Resolve the cursor to a time/price using the chart's own coordinate APIs.
+  // x/y are chart-local (the caller subtracts the content-box origin).
   const idx = barIndexAtX(mx);
   const t2 = idx != null ? String(dates[idx]) : null;
   let p2 = null;
   try { p2 = state.candleSeries.coordinateToPrice(my); } catch (e) { p2 = null; }
-  // coordinateToPrice is unreliable in this LWC build; fall back to the
-  // clicked bar's close price.
+  // coordinateToPrice can return null just outside the pane. Fall back to the
+  // close of the bar under the pointer rather than to an unrelated value.
   if (p2 == null || !isFinite(p2)) {
     if (idx != null && state.chartBars && state.chartBars[idx]) {
       const b = state.chartBars[idx];
@@ -9503,20 +9563,35 @@ function renderDrawPreview(mx, my) {
   if (t2 == null || p2 == null || !isFinite(p2)) { clearDrawPreview(); return; }
   const color = "rgba(157,180,174,.5)";
   const isRect = state.drawTool === "rectangle" || state.drawTool === "long_pos" || state.drawTool === "short_pos";
-  // Reuse an existing preview series if one exists (avoids series churn on
-  // every mousemove, which caused flicker and candle redraw issues).
   let series = (state.drawPreviewSeries || [])[0];
   if (!series) {
-    series = chart.addLineSeries({ color, lineWidth: isRect ? 1 : 1.5, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+    series = addDrawSeries(chart, {
+      color, lineWidth: isRect ? 1 : 1.5, lineStyle: 2,
+      priceLineVisible: false, lastValueVisible: false,
+    });
     state.drawPreviewSeries.push(series);
   }
+  // Lightweight Charts requires strictly ascending time. A left-to-right draw
+  // met that by accident; drawing right-to-left sent descending timestamps and
+  // the library failed every frame (the "Value is null" errors). Sorting and
+  // de-duplicating here makes both directions identical.
+  const lowFirst = String(t1) <= String(t2);
+  const tLo = lowFirst ? t1 : t2;
+  const tHi = lowFirst ? t2 : t1;
+  const pLo = lowFirst ? p1 : p2;
+  const pHi = lowFirst ? p2 : p1;
   if (isRect) {
-    const tLo = String(t1) <= String(t2) ? t1 : t2;
-    const tHi = String(t1) <= String(t2) ? t2 : t1;
-    const pLo = Math.min(p1, p2), pHi = Math.max(p1, p2);
-    series.setData([{ time: tLo, value: pLo }, { time: tHi, value: pLo }, { time: tHi, value: pHi }, { time: tLo, value: pHi }, { time: tLo, value: pLo }]);
+    const priceLo = Math.min(p1, p2), priceHi = Math.max(p1, p2);
+    if (tLo === tHi) series.setData([{ time: tLo, value: priceLo }]);
+    else series.setData([
+      { time: tLo, value: priceLo }, { time: tHi, value: priceLo },
+      { time: tHi, value: priceHi }, { time: tLo, value: priceHi },
+      { time: tLo, value: priceLo },
+    ]);
+  } else if (tLo === tHi) {
+    series.setData([{ time: tLo, value: pLo }]);
   } else {
-    series.setData([{ time: t1, value: p1 }, { time: t2, value: p2 }]);
+    series.setData([{ time: tLo, value: pLo }, { time: tHi, value: pHi }]);
   }
 }
 
@@ -9527,6 +9602,7 @@ function clearDrawingSeries() {
   clearDrawPreview();
   (state.drawPrimitives || []).forEach((p) => { try { if (p.series && p.prim) p.series.detachPrimitive(p.prim); } catch (e) { /* gone */ } });
   state.drawPrimitives = [];
+  state.anchorHandlePrim = null;
 }
 
 /* Segment chain between consecutive anchors — the renderer for every N-point
@@ -9541,7 +9617,7 @@ function segMulti(d, color, opts = {}) {
   for (let k = 0; k < xy.length - 1; k++) {
     const A = xy[k], B = xy[k + 1];
     const lo = A.i <= B.i ? A : B, hi = A.i <= B.i ? B : A;
-    const s = chart.addLineSeries({
+    const s = addDrawSeries(chart, {
       color, lineWidth: opts.width ?? 1, priceLineVisible: false,
       lastValueVisible: false, title: (opts.titles && opts.titles[k]) || "",
       lineStyle: opts.dashed ? 2 : 0,
@@ -9553,7 +9629,7 @@ function segMulti(d, color, opts = {}) {
   if (opts.close && xy.length > 2) {
     const A = xy[0], B = xy[xy.length - 1];
     const lo = A.i <= B.i ? A : B, hi = A.i <= B.i ? B : A;
-    const s = chart.addLineSeries({
+    const s = addDrawSeries(chart, {
       color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: "", lineStyle: 2,
     });
     s.setData([{ time: lo.t, value: lo.p }, { time: hi.t, value: hi.p }]);
@@ -9588,6 +9664,98 @@ function makeVerticalLinePrimitive(chart, time, color) {
   };
 }
 
+/* Exact anchor handles. Markers are bar-anchored and (for inBar) can be hidden
+   behind the candle body; more importantly, markers on the candle series change
+   the autoscale range. A primitive draws at the real (time, price) coordinate
+   without taking part in autoscaling. */
+function makeAnchorHandlesPrimitive(chart, series, items) {
+  let chartRef = null;
+  let seriesRef = null;
+  return {
+    paneViews: () => [{
+      renderer: () => ({
+        draw: (target) => {
+          target.useMediaCoordinateSpace((scope) => {
+            const ctx = scope.context;
+            items.forEach((a) => {
+              const x = chartRef ? chartRef.timeScale().timeToCoordinate(String(a.time)) : null;
+              const y = seriesRef ? seriesRef.priceToCoordinate(Number(a.price)) : null;
+              if (x == null || y == null) return;
+              const r = a.selected ? 7 : 6;
+              ctx.save();
+              // Dark halo keeps the handle legible over both candles and the line.
+              ctx.beginPath();
+              ctx.arc(x, y, r + 1.5, 0, Math.PI * 2);
+              ctx.strokeStyle = "rgba(6,18,15,0.9)";
+              ctx.lineWidth = 2.5;
+              ctx.stroke();
+              ctx.beginPath();
+              ctx.arc(x, y, r, 0, Math.PI * 2);
+              ctx.fillStyle = a.selected ? "#FFE600" : "#F5F8F7";
+              ctx.fill();
+              ctx.lineWidth = a.selected ? 2 : 1.25;
+              ctx.strokeStyle = a.color || "#0B1512";
+              ctx.stroke();
+              if (a.label) {
+                ctx.fillStyle = "#0B1512";
+                ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(a.label, x, y + 0.5);
+              }
+              ctx.restore();
+            });
+          });
+        },
+        zOrder: () => "top",
+      }),
+    }],
+    attached: (p) => {
+      chartRef = p.chart;
+      seriesRef = p.series;
+      if (p.requestUpdate) p.requestUpdate();
+    },
+    detached: () => { chartRef = null; seriesRef = null; },
+    updateAllViews: () => {},
+  };
+}
+
+function renderAnchorHandles() {
+  const chart = state.charts.price;
+  if (!chart || !state.candleSeries) return;
+  if (state.anchorHandlePrim) {
+    const at = (state.drawPrimitives || []).findIndex((p) => p.prim === state.anchorHandlePrim);
+    if (at >= 0) {
+      try { if (state.drawPrimitives[at].series) state.drawPrimitives[at].series.detachPrimitive(state.anchorHandlePrim); }
+      catch (e) { /* already gone */ }
+      state.drawPrimitives.splice(at, 1);
+    }
+    state.anchorHandlePrim = null;
+  }
+  if (!state.drawVisible || (state.replay && state.replay.on)) return;
+  const items = [];
+  (state.drawings || []).forEach((d, i) => {
+    if (d.hidden) return;
+    const color = d.color || DRAW_COLORS[i % DRAW_COLORS.length];
+    const letters = DRAW_ANCHOR_LETTERS[d.type];
+    const selected = d.id === state.drawSelectId;
+    anchorParts(d).forEach(([, t, p], k) => {
+      if (!t || !isFinite(Number(p))) return;
+      items.push({
+        time: t, price: Number(p), color, selected,
+        label: letters ? (letters[k] || String(k + 1)) : String(k + 1),
+      });
+    });
+  });
+  if (!items.length) return;
+  const prim = makeAnchorHandlesPrimitive(chart, state.candleSeries, items);
+  try {
+    state.candleSeries.attachPrimitive(prim);
+    state.anchorHandlePrim = prim;
+    state.drawPrimitives.push({ series: state.candleSeries, prim });
+  } catch (e) { /* primitive API unavailable */ }
+}
+
 function renderDrawings() {
   const chart = state.charts.price;
   if (!chart) return;
@@ -9610,7 +9778,7 @@ function renderDrawings() {
     if (d.type === "hline") {
       const price = Number(d.p1);
       if (!isFinite(price)) return;
-      const s = chart.addLineSeries({
+      const s = addDrawSeries(chart, {
         color, lineWidth: 2, priceLineVisible: false, lastValueVisible: true,
         title: `hline ${fmtNum(price)}`,
       });
@@ -9652,7 +9820,7 @@ function renderDrawings() {
       }
       if (pts.length < 3) return;
       pts.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
-      const s = chart.addLineSeries({ color, lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false, title: "" });
+      const s = addDrawSeries(chart, { color, lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false, title: "" });
       s.setData(pts);
       state.drawSeries.push(s);
       } catch (e) { console.error("circle render err:", e && e.message); }
@@ -9688,12 +9856,12 @@ function renderDrawings() {
         }
         if (pts.length < 3) return;
         pts.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
-        const s = chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: "", lineStyle: 2 });
+        const s = addDrawSeries(chart, { color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: "", lineStyle: 2 });
         s.setData(pts);
         state.drawSeries.push(s);
       });
       // base leg
-      const s = chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: "", lineStyle: 1 });
+      const s = addDrawSeries(chart, { color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: "", lineStyle: 1 });
       const lo = Math.min(i1, i2), hi = Math.max(i1, i2);
       s.setData([{ time: dts[lo], value: P1 }, { time: dts[hi], value: P2 }]);
       state.drawSeries.push(s);
@@ -9727,7 +9895,7 @@ function renderDrawings() {
       }
       if (pts.length < 3) return;
       pts.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
-      const s = chart.addLineSeries({ color, lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false, title: "" });
+      const s = addDrawSeries(chart, { color, lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false, title: "" });
       s.setData(pts);
       state.drawSeries.push(s);
       return;
@@ -9746,7 +9914,7 @@ function renderDrawings() {
       if (!isFinite(P1) || !isFinite(P2) || i1 == null || i2 == null) return;
 
       const seg = (priceA, priceB, opts) => {
-        const s = chart.addLineSeries({
+        const s = addDrawSeries(chart, {
           color, lineWidth: (opts && opts.width) || 1, priceLineVisible: false,
           lastValueVisible: false, title: (opts && opts.title) || "",
           lineStyle: (opts && opts.dashed) ? 2 : 0,
@@ -9771,7 +9939,7 @@ function renderDrawings() {
           if (dow === 5 || dow === 6) continue;
           proj.push({ time: cur.toISOString().slice(0, 10), value: P2 + perBar * (proj.length + 1) * (goingUpIdx ? 1 : 1) });
         }
-        const s = chart.addLineSeries({
+        const s = addDrawSeries(chart, {
           color, lineWidth: 2, priceLineVisible: false, lastValueVisible: false,
           title: "ray",
         });
@@ -9790,7 +9958,7 @@ function renderDrawings() {
         seg(P1, P2, { title: label });
         const top = Math.max(P1, P2), bot = Math.min(P1, P2);
         [top, bot].forEach((price) => {
-          const e = chart.addLineSeries({
+          const e = addDrawSeries(chart, {
             color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
             lineStyle: 2, title: "",
           });
@@ -9834,7 +10002,7 @@ function renderDrawings() {
           catch (e) { const v = seg(lo, hi, { title: "" }); v.setData([{ time: a, value: lo }, { time: a, value: hi }]); state.drawSeries.push(v); }
         }
         // horizontal component
-        const h = chart.addLineSeries({
+        const h = addDrawSeries(chart, {
           color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
           lineStyle: 2, title: "",
         });
@@ -9847,7 +10015,7 @@ function renderDrawings() {
         const projT = nextWeekdayDates(30, dts[dts.length - 1]);
         const data = [{ time: a, value: P1 }, ...projT.map((tt) => ({ time: tt, value: P1 }))]
           .sort((u, v) => (u.time < v.time ? -1 : 1));
-        const s = chart.addLineSeries({
+        const s = addDrawSeries(chart, {
           color, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, title: "",
         });
         s.setData(data);
@@ -9863,7 +10031,7 @@ function renderDrawings() {
         const top = Math.max(P1, P2), bot = Math.min(P1, P2);
         seg(top, top, {}); seg(bot, bot, {});
         const defVert = (when) => {
-          const s = chart.addLineSeries({
+          const s = addDrawSeries(chart, {
             color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: "",
           });
           s.setData([{ time: when, value: top }, { time: when, value: bot }]);
@@ -9896,7 +10064,7 @@ function renderDrawings() {
           v.setData(a === b ? [{ time: a, value: P1 }] : [{ time: a, value: P1 }, { time: a, value: P2 }]);
           const top = Math.max(P1, P2), bot = Math.min(P1, P2);
           [top, bot].forEach((price) => {
-            const e = chart.addLineSeries({
+            const e = addDrawSeries(chart, {
               color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, lineStyle: 2, title: "",
             });
             e.setData(a === b ? [{ time: a, value: price }]
@@ -9925,7 +10093,7 @@ function renderDrawings() {
           const target = Math.min(i1 + f * step, dts.length - 1);
           const tt = dts[target];
           if (tt == null) return;
-          const s = chart.addLineSeries({
+          const s = addDrawSeries(chart, {
             color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: "", lineStyle: 2,
           });
           s.setData([{ time: tt, value: lo }, { time: tt, value: hi }]);
@@ -9948,7 +10116,7 @@ function renderDrawings() {
           const iLast = dts.length - 1;
           const slope = (pEnd - P1) / span;
           const pLast = P1 + slope * (iLast - i1);
-          const s = chart.addLineSeries({
+          const s = addDrawSeries(chart, {
             color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
             title: "", lineStyle: 2,
           });
@@ -9976,7 +10144,7 @@ function renderDrawings() {
           if (!fitResp) return;   // degenerate (all-identical inputs): draw nothing
           const { slope, intercept, sd } = fitResp;
           const fit = () => {
-            const s3 = chart.addLineSeries({
+            const s3 = addDrawSeries(chart, {
               color, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, title: "",
             });
             s3.setData([
@@ -9987,7 +10155,7 @@ function renderDrawings() {
           };
           fit();
           [[k, "raw"], [-k, "raw"]].forEach(([kv]) => {
-            const s3 = chart.addLineSeries({
+            const s3 = addDrawSeries(chart, {
               color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: "", lineStyle: 2,
             });
             s3.setData([
@@ -10010,20 +10178,20 @@ function renderDrawings() {
         const target = P1 + dir * riskAbs * R;
         const riskPct = riskAbs / P1 * 100;
         seg(P1, P2, { title: "", width: 1, dashed: true });
-        const entry = chart.addLineSeries({
+        const entry = addDrawSeries(chart, {
           color, lineWidth: 2, priceLineVisible: false,
           lastValueVisible: false, title: `entry ${fmtNum(P1)}`,
         });
         entry.setData(a === b ? [{ time: a, value: P1 }] : [{ time: a, value: P1 }, { time: b, value: P1 }]);
         state.drawSeries.push(entry);
-        const stp = chart.addLineSeries({
+        const stp = addDrawSeries(chart, {
           color: PRAVAHA.down, lineWidth: 1, priceLineVisible: false,
           lastValueVisible: false, lineStyle: 2, title: `stop ${fmtNum(P2)}`,
         });
         stp.setData(a === b ? [{ time: a, value: P2 }] : [{ time: a, value: P2 }, { time: b, value: P2 }]);
         state.drawSeries.push(stp);
         if (isFinite(target) && target !== P1) {
-          const tgt = chart.addLineSeries({
+          const tgt = addDrawSeries(chart, {
             color: PRAVAHA.up, lineWidth: 1, priceLineVisible: false,
             lastValueVisible: false, lineStyle: 2, title: `target ${fmtNum(target)}`,
           });
@@ -10040,7 +10208,7 @@ function renderDrawings() {
       if (d.type === "price_label") {
         // labelled level chip: a full-span horizontal line titled with the
         // user's text + the exact price (both live in chart coordinates)
-        const s = chart.addLineSeries({
+        const s = addDrawSeries(chart, {
           color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
           title: `${(d.text || "label")}${d.text ? "" : ""} ${fmtNum(Number(d.p1))}`, lineStyle: 0,
         });
@@ -10070,7 +10238,7 @@ function renderDrawings() {
           const PS = d.type === "schiff_pitchfork" ? (PA + PM) / 2 : PA;
           const slope = iM !== iA ? (PM - PS) / (iM - iA) : 0;
           const line = (i0, p0, widthPx) => {
-            const s = chart.addLineSeries({
+            const s = addDrawSeries(chart, {
               color, lineWidth: widthPx, priceLineVisible: false, lastValueVisible: false, title: "",
             });
             const iLast = dts.length - 1;
@@ -10110,7 +10278,7 @@ function renderDrawings() {
         const iLast = dts.length - 1;
         const iFrom = Math.max(0, Math.min(i1, iLast));
         const ray = (k, dashed) => {
-          const s = chart.addLineSeries({
+          const s = addDrawSeries(chart, {
             color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
             title: "", lineStyle: dashed ? 2 : 0,
           });
@@ -10154,7 +10322,7 @@ function renderDrawings() {
         }
         if (pts.length < 3) return;
         pts.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
-        const s = chart.addLineSeries({ color, lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false, title: "" });
+        const s = addDrawSeries(chart, { color, lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false, title: "" });
         s.setData(pts);
         state.drawSeries.push(s);
         return;
@@ -10171,7 +10339,7 @@ function renderDrawings() {
         const i4 = idx.get(String(d.t4)), i5 = idx.get(String(d.t5));
         const P4 = Number(d.p4), P5 = Number(d.p5);
         if (i4 != null && i5 != null && [P4, P5].every(isFinite)) {
-          const s = chart.addLineSeries({ color, lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false, title: "", lineStyle: 2 });
+          const s = addDrawSeries(chart, { color, lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false, title: "", lineStyle: 2 });
           const lo = Math.min(i4, i5), hi = Math.max(i4, i5);
           s.setData([{ time: dts[lo], value: lo === i4 ? P4 : P5 }, { time: dts[hi], value: lo === i4 ? P5 : P4 }]);
           state.drawSeries.push(s);
@@ -10196,7 +10364,7 @@ function renderDrawings() {
         ? d.ratios : [...(DRAW_DEFAULT_RATIOS[d.type] || [])];
       if (i1 == null || i2 == null || i3 == null || ![P1, P2, P3].every(isFinite)) return;
       const hline = (priceVal, fromI, titleTxt, dashed) => {
-        const s = chart.addLineSeries({
+        const s = addDrawSeries(chart, {
           color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
           title: titleTxt || "", lineStyle: dashed ? 2 : 0,
         });
@@ -10219,7 +10387,7 @@ function renderDrawings() {
         segMulti({ ...d, t3: undefined }, color, {});
         ratios.forEach((r) => {
           const lo = Math.min(i1, i3), hi = Math.max(i2, i3);
-          const s = chart.addLineSeries({
+          const s = addDrawSeries(chart, {
             color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
             title: `fib ${fmtNum(r, 3)}`, lineStyle: r === 0 ? 0 : 2,
           });
@@ -10234,7 +10402,7 @@ function renderDrawings() {
     }
 
     drawingLevels(d).forEach((lvl) => {
-      const s = chart.addLineSeries({
+      const s = addDrawSeries(chart, {
         color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
         title: `${d.type === "fib_extension" ? "ext" : "fib"} ${lvl.ratio} @ ${fmtNum(lvl.price)}`,
       });
@@ -10259,17 +10427,9 @@ function renderDrawings() {
         shape: "circle", text: "⚑",
       });
     }
-    const parts = anchorParts(d);
-    const letters = DRAW_ANCHOR_LETTERS[d.type];
-    parts.forEach(([, t, p], k) => {
-      if (!t || !isFinite(Number(p))) return;
-      state.drawMarkers.push({
-        time: t, position: "inBar", color: PRAVAHA.white, shape: "circle",
-        text: letters ? (letters[k] || String(k + 1)) : String(k + 1),
-      });
-    });
   });
   flushMarkers();
+  renderAnchorHandles();
 }
 
 /* ---------------------------------------------------------- draw list panel */
@@ -10422,6 +10582,38 @@ function updateToolBanner() {
   el.dataset.tool = tool;
 }
 
+/* Normalise every time shape Lightweight Charts can give us (business-day
+   string, BusinessDay object or UTCTimestamp) to the date key used by
+   state.chartDates. Without this, an object time became "[object Object]" and
+   the anchor could not be resolved back to a bar. */
+function chartTimeKey(value) {
+  if (value == null) return null;
+  if (typeof value === "string") return value;
+  if (typeof value === "number") {
+    const d = new Date(value > 1e12 ? value : value * 1000);
+    return isFinite(d.getTime()) ? d.toISOString().slice(0, 10) : null;
+  }
+  if (typeof value === "object") {
+    if (value.timestamp != null) return chartTimeKey(value.timestamp);
+    if (value.year != null && value.month != null && value.day != null) {
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${value.year}-${pad(value.month)}-${pad(value.day)}`;
+    }
+  }
+  return String(value);
+}
+
+/* Chart-local pointer coordinates. LWC coordinates start at the plot's content
+   box, so the border (clientLeft/clientTop) is removed as well as the element's
+   viewport offset. getBoundingClientRect also accounts for scroll, CSS zoom and
+   fullscreen layout changes. */
+function chartPointFromEvent(ev, container) {
+  const el = container || $("#chart");
+  if (!el) return { x: 0, y: 0 };
+  const r = el.getBoundingClientRect();
+  return { x: ev.clientX - r.left - (el.clientLeft || 0), y: ev.clientY - r.top - (el.clientTop || 0) };
+}
+
 function snapPriceToOhlc(t, price, strength) {
   if (!strength || strength === "off" || !isFinite(price)) return { price, snapped: false };
   const i = (state.chartDates || []).indexOf(String(t));
@@ -10452,7 +10644,8 @@ function onChartClick(param) {
   // click. When the pointer travelled since mousedown, the intent is
   // navigation, not an anchor — drop it instead of planting an accidental
   // drawing (§5.8 drawing interaction correctness).
-  if (tool && !DRAW_MODES.has(tool) && param && param.point && state.drawTool !== "select") {
+  if (tool && !DRAW_MODES.has(tool) && state.panEnabled !== false &&
+      param && param.point && state.drawTool !== "select") {
     state.chartDrag = state.chartDrag || {};
     const dg = state.chartDrag;
     const md = dg.mouseDown;
@@ -10520,10 +10713,7 @@ function onChartClick(param) {
   // drag path uses — keeps placement stable and clamps to the data range
   // instead of jumping to an unrelated bar. A click left of the first bar
   // clamps to the first bar; a click right of the last bar clamps to the last.
-  let t = null;
-  if (param.time != null) {
-    t = typeof param.time === "object" ? param.time : String(param.time);
-  }
+  let t = chartTimeKey(param.time);
   if (t == null) {
     const idx = barIndexAtX(param.point.x);
     if (idx != null && state.chartDates && state.chartDates[idx] != null) {
@@ -10825,9 +11015,9 @@ function drawPointer(e, kind) {
   const chart = state.charts.price;
   const container = $("#chart");
   if (!chart || !container || !state.candleSeries) return false;
-  const rect = container.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
+  const pt = chartPointFromEvent(e, container);
+  const x = pt.x;
+  const y = pt.y;
   state.drawHover = { x, y };
 
   if (kind === "down") {
@@ -11367,10 +11557,9 @@ function setDrawTool(tool) {
   // here keeps the cursor tool's panning intact.
   try {
     const c = state.charts.price;
-    if (c) {
-      const on = !(tool && !DRAW_MODES.has(tool));
-      c.applyOptions({ handleScroll: { pressedMouseMove: on } });
-    }
+    const on = !(tool && !DRAW_MODES.has(tool));
+    state.panEnabled = on;
+    if (c) c.applyOptions({ handleScroll: { pressedMouseMove: on } });
   } catch (e) { /* chart not ready */ }
   state.drawPending = null;
   state.drawPending3 = null;
@@ -11592,8 +11781,10 @@ function bindDrawings() {
     // starts panning at the same moment the drawing moves, so the line slides
     // away from the cursor instead of following it.
     container.addEventListener("mousedown", (e) => {
-      const r = container.getBoundingClientRect();
-      state.drawHover = { x: e.clientX - r.left, y: e.clientY - r.top };
+      const p = chartPointFromEvent(e, container);
+      state.drawHover = { x: p.x, y: p.y };
+      state.chartDrag = state.chartDrag || {};
+      state.chartDrag.mouseDown = { x: e.clientX, y: e.clientY };
       // When a drawing tool is active, the chart must NOT start panning: a
       // pan gesture steals the click (Lightweight Charts treats a moved
       // pointer as a drag, so subscribeClick never fires and the drawing is
@@ -11606,16 +11797,20 @@ function bindDrawings() {
       if (drawPointer(e, "down")) { e.preventDefault(); e.stopPropagation(); }
     }, true);
     container.addEventListener("mousemove", (e) => {
-      const r = container.getBoundingClientRect();
-      const mx = e.clientX - r.left, my = e.clientY - r.top;
+      const p = chartPointFromEvent(e, container);
+      const mx = p.x, my = p.y;
       state.drawHover = { x: mx, y: my };
       if (state.drawDrag) { drawPointer(e, "move"); e.preventDefault(); return; }
-      if (state.drawPending) { renderDrawPreview(mx, my); return; }
+      if (state.drawPending) { queueDrawPreview(mx, my); return; }
       if (state.drawTool === "eraser") { container.style.cursor = "not-allowed"; return; }
       const hit = anchorHitAt(mx, my, 20) || drawingBodyHit(mx, my, 10);
       container.style.cursor = hit ? "grab" : (state.drawTool ? "crosshair" : "");
     }, true);
-    window.addEventListener("mouseup", (e) => drawPointer(e, "up"));
+    window.addEventListener("mouseup", (e) => {
+      drawPointer(e, "up");
+      if (state.chartDrag) state.chartDrag.mouseDown = null;
+      if (state.drawPending) clearDrawPreview();
+    });
   }
   if ($("#draw-tool")) {
     $("#draw-tool").addEventListener("change", () => setDrawTool($("#draw-tool").value || null));
@@ -14044,6 +14239,593 @@ function loadNewSection(tab) {
 const BABA = { comps: null, selected: new Set(), templates: [], fmt: "xlsx",
                sector: null, period: null };
 
+/* =========================================================== BABA shared UI
+   One symbol catalogue, one sector catalogue and one formatting path for every
+   BABA screen. The old screens each re-implemented a bare text box and printed
+   the report API's raw cells, which is how numbers like 3437500000 and the
+   words "no stored record" appeared without context.
+   ======================================================================== */
+const BABA_SECTORS = { by: {}, map: {}, source: "", loaded: false, loading: null };
+const BABA_CATALOG = { items: [], bySymbol: new Map(), loaded: false, loading: null, error: null };
+const BABA_SECTOR_ALIASES = {
+  "commercial bank": "Commercial Banks", "commercial banks": "Commercial Banks",
+  "development bank": "Development Banks", "development banks": "Development Banks",
+  "finance": "Finance Companies", "finance companies": "Finance Companies",
+  "hotel & tourism": "Hotels", "hotels": "Hotels",
+  "hydro power": "Hydropower", "hydropower": "Hydropower",
+  "investment": "Investment Companies", "investment companies": "Investment Companies",
+  "life insurance": "Life Insurance", "microfinance": "Microfinance",
+  "manufacturing and processing": "Manufacturing and Processing",
+  "mutual fund": "Mutual Fund", "non-life insurance": "Non-Life Insurance",
+  "others": "Others", "trading": "Trading",
+};
+function babaCanonicalSector(name) {
+  const clean = String(name || "").trim();
+  return clean ? (BABA_SECTOR_ALIASES[clean.toLowerCase()] || clean) : "";
+}
+async function babaLoadSectors(force = false) {
+  if (BABA_SECTORS.loaded && !force) return BABA_SECTORS;
+  if (BABA_SECTORS.loading && !force) return BABA_SECTORS.loading;
+  BABA_SECTORS.loading = (async () => {
+    try {
+      const d = await api("/api/sectors");
+      const by = {};
+      for (const [name, members] of Object.entries(d.by_sector || {})) {
+        const key = babaCanonicalSector(name);
+        if (!key) continue;
+        (by[key] ||= []).push(...(members || []));
+      }
+      for (const name of Object.keys(by)) {
+        by[name] = [...new Set(by[name].map((s) => String(s).toUpperCase()))].sort();
+      }
+      BABA_SECTORS.by = by;
+      BABA_SECTORS.map = d.sector_map || {};
+      BABA_SECTORS.source = d.source || "stored sector classification";
+      BABA_SECTORS.loaded = true;
+    } finally {
+      BABA_SECTORS.loading = null;
+    }
+    return BABA_SECTORS;
+  })();
+  return BABA_SECTORS.loading;
+}
+async function babaLoadCatalog(force = false) {
+  if (BABA_CATALOG.loaded && !force) return BABA_CATALOG;
+  if (BABA_CATALOG.loading && !force) return BABA_CATALOG.loading;
+  BABA_CATALOG.loading = (async () => {
+    BABA_CATALOG.error = null;
+    try {
+      const d = await api("/api/baba/symbols");
+      BABA_CATALOG.items = (d.symbols || []).filter((x) => x && x.symbol);
+    } catch (e) {
+      // Keep the screen usable on an older backend: this fallback is the same
+      // stored-bar catalogue the chart uses, with dataset flags set to unknown.
+      try {
+        const d = await api("/api/securities?limit=2000");
+        BABA_CATALOG.items = (d.securities || []).map((x) => ({
+          symbol: x.symbol, name: "", sector: "", has_prices: Number(x.bars) > 0,
+          bars: Number(x.bars || 0), has_fundamentals: null, has_quarterly: null,
+        }));
+      } catch (e2) {
+        BABA_CATALOG.error = String((e && e.message) || e2);
+      }
+    }
+    BABA_CATALOG.bySymbol = new Map(BABA_CATALOG.items.map((x) => [String(x.symbol).toUpperCase(), x]));
+    BABA_CATALOG.loaded = true;
+    BABA_CATALOG.loading = null;
+    return BABA_CATALOG;
+  })();
+  return BABA_CATALOG.loading;
+}
+function babaCatalogItem(sym) {
+  return BABA_CATALOG.bySymbol.get(String(sym || "").toUpperCase()) || null;
+}
+function babaCatalogMatches(query, limit = 18) {
+  const q = String(query || "").trim().toLowerCase();
+  const scored = [];
+  for (const item of BABA_CATALOG.items) {
+    const sym = String(item.symbol || "").toLowerCase();
+    const name = String(item.name || "").toLowerCase();
+    const sector = String(item.sector || "").toLowerCase();
+    let score;
+    if (!q) score = item.has_prices ? 0 : 1;
+    else if (sym === q) score = 0;
+    else if (sym.startsWith(q)) score = 1;
+    else if (name.startsWith(q)) score = 2;
+    else if (sym.includes(q)) score = 3;
+    else if (name.includes(q)) score = 4;
+    else if (sector.includes(q)) score = 5;
+    else continue;
+    scored.push({ item, score });
+  }
+  scored.sort((a, b) => a.score - b.score || String(a.item.symbol).localeCompare(String(b.item.symbol)));
+  return scored.slice(0, limit).map((x) => x.item);
+}
+function babaSectorNames() {
+  return Object.keys(BABA_SECTORS.by || {}).sort();
+}
+function babaParseSymbols(raw) {
+  return [...new Set(String(raw || "").split(/[,\n;]+/).map((s) => s.trim().toUpperCase()).filter(Boolean))];
+}
+async function babaUnknownSymbols(syms) {
+  await babaLoadCatalog();
+  if (!BABA_CATALOG.loaded || BABA_CATALOG.error) return [];
+  return syms.filter((s) => !BABA_CATALOG.bySymbol.has(s));
+}
+
+/* ---------------------------------------------------- one shared autocomplete */
+const BABA_AC = { el: null, input: null, items: [], active: -1, seq: 0, timer: null,
+  opts: null, suppressUntil: 0 };
+function babaAcElement() {
+  if (BABA_AC.el) return BABA_AC.el;
+  const el = document.createElement("div");
+  el.id = "baba-sym-ac";
+  el.className = "sym-ac";
+  el.hidden = true;
+  el.setAttribute("role", "listbox");
+  el.setAttribute("aria-label", "Matching symbols");
+  el.addEventListener("pointerdown", (e) => {
+    // Keep focus in the input and prevent the document outside-click handler.
+    e.preventDefault();
+  });
+  document.body.appendChild(el);
+  BABA_AC.el = el;
+  return el;
+}
+function babaAcClose() {
+  const el = babaAcElement();
+  el.hidden = true;
+  el.innerHTML = "";
+  BABA_AC.items = [];
+  BABA_AC.active = -1;
+  if (BABA_AC.input) {
+    BABA_AC.input.setAttribute("aria-expanded", "false");
+    BABA_AC.input.removeAttribute("aria-activedescendant");
+  }
+}
+function babaAcPosition() {
+  const input = BABA_AC.input;
+  const el = babaAcElement();
+  if (!input || el.hidden) return;
+  const r = input.getBoundingClientRect();
+  const width = Math.min(Math.max(r.width, 320), Math.max(240, window.innerWidth - 16));
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+  let top = r.bottom + 4;
+  const wanted = Math.min(340, Math.max(120, el.scrollHeight || 240));
+  if (top + wanted > window.innerHeight - 8) top = Math.max(8, r.top - wanted - 4);
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+  el.style.width = `${width}px`;
+  el.style.maxHeight = `${Math.max(120, window.innerHeight - top - 12)}px`;
+}
+function babaAcRender() {
+  const el = babaAcElement();
+  if (!BABA_AC.input) return;
+  const q = BABA_AC.tokenText || "";
+  if (BABA_AC.loading) {
+    el.innerHTML = `<div class="sym-ac-empty">Loading the stored symbol catalogue…</div>`;
+  } else if (BABA_AC.opts && BABA_AC.opts.error) {
+    el.innerHTML = `<div class="sym-ac-empty">${esc(BABA_AC.opts.error)}</div>`;
+  } else if (!BABA_AC.items.length) {
+    el.innerHTML = `<div class="sym-ac-empty">No stored symbol matches “${esc(q)}”. ` +
+      `Type a different symbol; the field is not submitted as a valid symbol automatically.</div>`;
+  } else {
+    el.innerHTML = BABA_AC.items.map((item, i) => {
+      const flags = [];
+      if (item.has_prices) flags.push(`<span class="sym-flag ok">price</span>`);
+      if (item.has_fundamentals) flags.push(`<span class="sym-flag ok">financials</span>`);
+      if (item.has_quarterly) flags.push(`<span class="sym-flag ok">quarterly</span>`);
+      if (item.has_fundamentals === false && item.has_prices === false) {
+        flags.push(`<span class="sym-flag warn">no stored data yet</span>`);
+      }
+      return `<div class="sym-ac-item${i === BABA_AC.active ? " active" : ""}" role="option"` +
+        ` id="baba-sym-opt-${i}" data-i="${i}" aria-selected="${i === BABA_AC.active}">` +
+        `<span class="sym-code">${esc(item.symbol)}</span>` +
+        `<span class="sym-name">${esc(item.name || "Company name not stored")}</span>` +
+        `<span class="sym-sector">${esc(item.sector || "sector unknown")}</span>` +
+        `<span class="sym-flags">${flags.join("")}</span></div>`;
+    }).join("");
+    el.querySelectorAll(".sym-ac-item").forEach((node) => {
+      node.addEventListener("mouseenter", () => {
+        BABA_AC.active = Number(node.dataset.i);
+        babaAcRender();
+      });
+      node.addEventListener("click", () => babaAcChoose(Number(node.dataset.i)));
+    });
+  }
+  el.hidden = false;
+  BABA_AC.input.setAttribute("aria-expanded", "true");
+  if (BABA_AC.active >= 0) {
+    BABA_AC.input.setAttribute("aria-activedescendant", `baba-sym-opt-${BABA_AC.active}`);
+    const active = el.querySelector(`.sym-ac-item[data-i="${BABA_AC.active}"]`);
+    if (active) active.scrollIntoView({ block: "nearest" });
+  } else {
+    BABA_AC.input.removeAttribute("aria-activedescendant");
+  }
+  babaAcPosition();
+}
+function babaAcToken(input, multiple) {
+  const value = input.value || "";
+  if (!multiple) return { start: 0, end: value.length, text: value.trim() };
+  let pos = input.selectionStart == null ? value.length : input.selectionStart;
+  let start = pos;
+  while (start > 0 && !/[,\n;]/.test(value[start - 1])) start--;
+  let end = pos;
+  while (end < value.length && !/[,\n;]/.test(value[end])) end++;
+  while (start < end && /\s/.test(value[start])) start++;
+  while (end > start && /\s/.test(value[end - 1])) end--;
+  return { start, end, text: value.slice(start, end).trim() };
+}
+function babaAcRefresh() {
+  const input = BABA_AC.input;
+  if (!input) return;
+  const token = babaAcToken(input, !!(BABA_AC.opts && BABA_AC.opts.multiple));
+  BABA_AC.tokenText = token.text;
+  BABA_AC.active = -1;
+  const seq = ++BABA_AC.seq;
+  if (!BABA_CATALOG.loaded) {
+    BABA_AC.loading = true;
+    BABA_AC.items = [];
+    babaAcRender();
+    babaLoadCatalog().then(() => {
+      if (seq !== BABA_AC.seq || BABA_AC.input !== input) return; // stale load
+      BABA_AC.loading = false;
+      BABA_AC.items = babaCatalogMatches(token.text);
+      if (BABA_CATALOG.error) BABA_AC.opts.error = `Symbol catalogue unavailable: ${BABA_CATALOG.error}`;
+      babaAcRender();
+    });
+    return;
+  }
+  BABA_AC.loading = false;
+  BABA_AC.items = babaCatalogMatches(token.text);
+  babaAcRender();
+}
+function babaAcChoose(index) {
+  const item = BABA_AC.items[index];
+  const input = BABA_AC.input;
+  if (!item || !input) return;
+  const opts = BABA_AC.opts || {};
+  const token = babaAcToken(input, !!opts.multiple);
+  if (opts.multiple) {
+    const before = input.value.slice(0, token.start).replace(/[,\s;]+$/, "");
+    const after = input.value.slice(token.end).replace(/^[,\s;]+/, "");
+    input.value = [before, item.symbol, after].filter(Boolean).join(", ");
+  } else {
+    input.value = item.symbol;
+  }
+  babaShowPickedSymbol(input, item, !!opts.multiple);
+  // The synthetic input/change events below must not immediately reopen the
+  // list we just closed. Suppress focus/open handling for one interaction turn.
+  BABA_AC.suppressUntil = Date.now() + 250;
+  babaAcClose();
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  input.focus();
+  const end = input.value.length;
+  try { input.setSelectionRange(end, end); } catch (e) { /* not a text-like input */ }
+  if (typeof opts.onSelect === "function") opts.onSelect(item.symbol, item);
+}
+function babaShowPickedSymbol(input, item, multiple) {
+  const host = input.closest("label") || input.parentElement;
+  if (!host) return;
+  let badge = host.querySelector(".sym-picked");
+  if (!badge) {
+    badge = document.createElement("span");
+    badge.className = "sym-picked";
+    host.appendChild(badge);
+  }
+  const data = item.has_fundamentals === null || item.has_fundamentals === undefined
+    ? "dataset status not reported" : item.has_fundamentals ? "financials available" : "no financial record";
+  badge.textContent = multiple
+    ? `Added ${item.symbol} · ${item.name || "name not stored"} · ${data}`
+    : `${item.symbol} · ${item.name || "name not stored"} · ${item.sector || "sector unknown"} · ${data}`;
+}
+function babaAcOpen(input, opts) {
+  BABA_AC.input = input;
+  BABA_AC.opts = opts || {};
+  BABA_AC.opts.error = BABA_CATALOG.error ? `Symbol catalogue unavailable: ${BABA_CATALOG.error}` : null;
+  const token = babaAcToken(input, !!BABA_AC.opts.multiple);
+  BABA_AC.tokenText = token.text;
+  BABA_AC.seq++;
+  BABA_AC.active = -1;
+  babaAcRefresh();
+}
+function attachBabaSymbolAutocomplete(input, opts = {}) {
+  if (!input || input.dataset.symAcBound === "1") return;
+  input.dataset.symAcBound = "1";
+  input.setAttribute("autocomplete", "off");
+  input.setAttribute("spellcheck", "false");
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-autocomplete", "list");
+  input.setAttribute("aria-expanded", "false");
+  input.setAttribute("aria-controls", "baba-sym-ac");
+  const multiple = !!opts.multiple;
+  const open = () => {
+    if (Date.now() < BABA_AC.suppressUntil) return;
+    babaAcOpen(input, opts);
+  };
+  input.addEventListener("focus", open);
+  input.addEventListener("click", open);
+  input.addEventListener("input", () => {
+    if (Date.now() < BABA_AC.suppressUntil) return;
+    if (BABA_AC.input !== input) babaAcOpen(input, opts);
+    clearTimeout(BABA_AC.timer);
+    BABA_AC.timer = setTimeout(() => {
+      if (BABA_AC.input === input && Date.now() >= BABA_AC.suppressUntil) babaAcRefresh();
+    }, 70);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { babaAcClose(); return; }
+    if (e.key === "Tab") { babaAcClose(); return; }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      if (!BABA_AC.el || BABA_AC.el.hidden) open();
+      if (!BABA_AC.items.length) return;
+      e.preventDefault();
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      BABA_AC.active = (BABA_AC.active + step + BABA_AC.items.length) % BABA_AC.items.length;
+      babaAcRender();
+      return;
+    }
+    if (e.key === "Enter") {
+      if (BABA_AC.input === input && BABA_AC.items.length) {
+        if (BABA_AC.active < 0) BABA_AC.active = 0;
+        e.preventDefault();
+        babaAcChoose(BABA_AC.active);
+      }
+    }
+  });
+  // Select the exact symbol when the user leaves the field after typing one.
+  input.addEventListener("blur", () => {
+    const token = babaAcToken(input, multiple).text.toUpperCase();
+    const item = babaCatalogItem(token);
+    if (item && (multiple || input.value.trim().toUpperCase() === token)) {
+      babaShowPickedSymbol(input, item, multiple);
+    }
+  });
+  if (!BABA_CATALOG.loaded) babaLoadCatalog();
+}
+if (typeof window !== "undefined") {
+  document.addEventListener("pointerdown", (e) => {
+    if (!BABA_AC.input) return;
+    if (e.target === BABA_AC.input || (BABA_AC.el && BABA_AC.el.contains(e.target))) return;
+    babaAcClose();
+  }, true);
+  window.addEventListener("resize", babaAcPosition);
+  window.addEventListener("scroll", babaAcPosition, true);
+  window.addEventListener("blur", babaAcClose);
+}
+
+/* ------------------------------------------------------- report formatting */
+function babaIsNumber(v) {
+  return v !== null && v !== undefined && v !== "" && (typeof v === "number" || /^-?\d+(\.\d+)?$/.test(String(v)));
+}
+function babaHeaderClass(header) {
+  const h = String(header || "").toLowerCase();
+  if (h.includes("%") || h.includes("growth") || h.includes("yield")) return "num";
+  if (h.includes("date") || h.includes("period") || h.includes("source") ||
+      h.includes("verification") || h.includes("sector") || h.includes("company")) return "";
+  return "num";
+}
+function babaFormatCell(value, header) {
+  if (value === null || value === undefined || value === "") {
+    return { html: `<span class="missing" title="No stored value for this field">—</span>`, cls: "missing" };
+  }
+  const h = String(header || "").toLowerCase();
+  if (babaIsNumber(value)) {
+    const n = Number(value);
+    let text;
+    if (h.includes("%") || h.includes("growth") || h.includes("yield")) text = `${fmtNum(n, 2)}%`;
+    else if (h.includes("rank") || h.includes("sessions") || h.includes("companies") ||
+             h.includes("count") || h.includes("bars") || h.includes("records")) text = fmtInt(n);
+    else if (h.includes("market cap") || h.includes("paid-up") || h.includes("net profit") ||
+             h.includes("value")) text = fmtNum(n, 0);
+    else text = fmtNum(n, 2);
+    return { html: esc(text), cls: "num" };
+  }
+  const text = String(value);
+  const cls = text.length > 46 ? "wrap" : (babaHeaderClass(header) === "num" ? "num" : "");
+  return { html: esc(text), cls };
+}
+function babaTableHtml(headers, rows) {
+  if (!rows || !rows.length) return `<div class="empty">No rows were produced.</div>`;
+  const head = (headers || []).map((h) => {
+    const cls = babaHeaderClass(h);
+    return `<th${cls ? ` class="${cls}"` : ""}>${esc(h)}</th>`;
+  }).join("");
+  const body = rows.map((row) => `<tr>${(row || []).map((cell, i) => {
+    const f = babaFormatCell(cell, (headers || [])[i]);
+    return `<td class="${f.cls}">${f.html}</td>`;
+  }).join("")}</tr>`).join("");
+  return `<table>${head ? `<thead><tr>${head}</tr></thead>` : ""}<tbody>${body}</tbody></table>`;
+}
+function babaRenderSections(rep, opts = {}) {
+  const parts = [];
+  const want = opts.sections ? new Set(opts.sections) : null;
+  for (const [cid, sec] of Object.entries(rep.sections || {})) {
+    if (want && !want.has(cid)) continue;
+    if (!sec.available) continue;
+    const lines = Array.isArray(sec.summary) ? sec.summary : [];
+    const body = lines.length
+      ? `<ul class="report-list">${lines.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`
+      : `<div class="tablewrap">${babaTableHtml(sec.headers || [], sec.rows || [])}</div>`;
+    parts.push(`<section class="report-section" data-component="${esc(cid)}">
+      <h3>${esc(sec.name || cid)}</h3>${sec.note ? `<p class="hint">${esc(sec.note)}</p>` : ""}${body}
+    </section>`);
+  }
+  const un = (rep.quality && rep.quality.unavailable) || [];
+  if (un.length && opts.showUnavailable !== false) {
+    const relevant = want ? un.filter((u) => want.has(u.id)) : un;
+    if (relevant.length) {
+      parts.push(`<details class="report-unavailable"><summary>${relevant.length} selected ` +
+        `section${relevant.length === 1 ? "" : "s"} could not be produced</summary>` +
+        `<div class="tablewrap">${babaTableHtml(["Section", "Reason"],
+          relevant.map((u) => [u.name || u.id, u.reason || "unavailable"]))}</div></details>`);
+    }
+  }
+  return parts.join("") || `<div class="empty">No selected section produced data for this request.</div>`;
+}
+function babaReportHero(title, subtitle, meta, stats) {
+  return `<header class="report-hero">
+    <h2>${esc(title)}</h2>
+    <p class="report-subtitle">${esc(subtitle)}</p>
+    ${stats && stats.length ? `<div class="stat-row">${stats.map((s) =>
+      `<div class="stat"><div class="k">${esc(s.k)}</div><div class="v">${esc(s.v)}</div></div>`).join("")}</div>` : ""}
+    <p class="hint">${meta}</p>
+  </header>`;
+}
+
+/* --------------------------------------------------- fundamental snapshots */
+const BABA_FIELD_DISPLAY = {
+  eps: "EPS", pe: "P/E", paid_up_capital: "Paid-up capital",
+  profit: "Net profit", net_worth_per_share: "Net worth per share",
+  revenue: "Revenue", book_value_per_share: "Book value per share",
+  dividend_per_share: "Dividend per share", shares_outstanding: "Shares outstanding",
+  public_float: "Public float", promoter_holding_pct: "Promoter holding %",
+  total_equity: "Total equity", total_assets: "Total assets", listing_date: "Listing date",
+};
+/* A stored value can be real and still be implausible at the per-share scale
+   (the source occasionally carries a total where a per-share figure belongs).
+   We keep and display it exactly, but say so instead of silently mixing it into
+   a range or an average. */
+function babaSuspectValue(field, value) {
+  if (!babaIsNumber(value)) return "";
+  const n = Number(value), a = Math.abs(n);
+  if ((field === "EPS" || field === "Net worth per share") && a > 100000) {
+    return "implausible per-share magnitude";
+  }
+  if (field === "P/E" && a > 1000) return "extreme P/E magnitude";
+  if (field === "Paid-up capital" && n < 0) return "negative paid-up capital";
+  return "";
+}
+function babaFieldName(field) {
+  const raw = String(field || "").trim();
+  if (!raw) return "unknown";
+  return BABA_FIELD_DISPLAY[raw.toLowerCase()] ||
+    raw.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+function babaPeriodGroups(records) {
+  const groups = new Map();
+  for (const rec of records || []) {
+    const label = rec.period_label || rec.period_end || "unlabelled period";
+    const end = String(rec.period_end || "").slice(0, 10);
+    const key = `${end}\u0000${label}`;
+    if (!groups.has(key)) groups.set(key, { label, end, fields: {} });
+    const field = babaFieldName(rec.field || rec.source_field);
+    const prior = groups.get(key).fields[field];
+    if (!prior || String(rec.retrieved_at || "") > String(prior.retrieved_at || "")) {
+      groups.get(key).fields[field] = rec;
+    }
+  }
+  return [...groups.values()].sort((a, b) =>
+    (b.end || "").localeCompare(a.end || "") || b.label.localeCompare(a.label));
+}
+async function babaFundamentalSnapshot(sym) {
+  const symbol = String(sym || "").toUpperCase();
+  const [fund, bars] = await Promise.all([
+    api(`/api/fundamentals/${encodeURIComponent(symbol)}`),
+    api(`/api/bars/${encodeURIComponent(symbol)}?limit=1`).catch(() => null),
+  ]);
+  const records = fund.records || [];
+  const periods = babaPeriodGroups(records);
+  const latestPeriod = periods[0] || null;
+  const bar = bars && bars.bars && bars.bars.length ? bars.bars[bars.bars.length - 1] : null;
+  const item = babaCatalogItem(symbol) || {};
+  const core = ["EPS", "P/E", "Net worth per share", "Paid-up capital", "Net profit",
+    "Revenue", "Dividend per share", "Shares outstanding", "Public float"];
+  const have = new Set(records.map((r) => babaFieldName(r.field || r.source_field)));
+  const suspects = [];
+  for (const p of periods) {
+    for (const [field, rec] of Object.entries(p.fields || {})) {
+      const flag = babaSuspectValue(field, rec.value);
+      if (flag) suspects.push({ period: p.label, field, value: rec.value, flag });
+    }
+  }
+  return {
+    symbol, records, periods, latestPeriod, bar, item,
+    name: item.name || "", sector: item.sector || "",
+    missing: core.filter((f) => !have.has(f)), suspects,
+    hasQuarterly: records.some((r) => /quarter/i.test(r.period_label || "")),
+    quarterlyPeriods: periods.filter((p) => /quarter/i.test(p.label)),
+    requestedAt: new Date().toISOString(),
+  };
+}
+function babaMetric(snap, field) {
+  for (const p of snap.periods) if (p.fields[field]) return { ...p.fields[field], period: p };
+  return null;
+}
+function babaRenderFundamentalSnapshot(snap, opts = {}) {
+  const item = snap.item || {};
+  const price = snap.bar ? Number(snap.bar.close) : null;
+  const priceDate = snap.bar ? String(snap.bar.time).slice(0, 10) : "—";
+  const eps = babaMetric(snap, "EPS");
+  const pe = babaMetric(snap, "P/E");
+  const profit = babaMetric(snap, "Net profit");
+  const nw = babaMetric(snap, "Net worth per share");
+  const puc = babaMetric(snap, "Paid-up capital");
+  const latest = snap.latestPeriod;
+  const source = (eps && eps.source) || (latest && Object.values(latest.fields)[0]?.source) || "—";
+  const verification = (eps && eps.verification) || (latest && Object.values(latest.fields)[0]?.verification) || "—";
+  const stats = [
+    { k: "Last stored close", v: price == null ? "—" : `NPR ${fmtNum(price, 2)}` },
+    { k: "Price date", v: priceDate },
+    { k: "Latest EPS", v: eps ? `NPR ${fmtNum(eps.value, 2)}` : "—" },
+    { k: "Latest P/E", v: pe ? `${fmtNum(pe.value, 2)}x` : "—" },
+    { k: "Latest net profit", v: profit ? `NPR ${fmtNum(profit.value, 0)}` : "—" },
+    { k: "Net worth / share", v: nw ? `NPR ${fmtNum(nw.value, 2)}` : "—" },
+    { k: "Paid-up capital", v: puc ? `NPR ${fmtNum(puc.value, 0)}` : "—" },
+    { k: "Reporting period", v: latest ? latest.label : "—" },
+  ];
+  const badges = [];
+  badges.push(`<span class="pill ${snap.records.length ? "pill-info" : "pill-warn"}">${snap.records.length} stored fundamental records</span>`);
+  badges.push(`<span class="pill ${snap.hasQuarterly ? "pill-info" : "pill-warn"}">${snap.hasQuarterly ? "quarterly records available" : "no quarterly record"}</span>`);
+  if (item.has_prices) badges.push(`<span class="pill pill-info">price history available</span>`);
+  const missing = snap.missing.length
+    ? `<div class="report-missing"><b>Not stored:</b> ${snap.missing.map((m) => esc(m)).join(", ")}. ` +
+      `These fields are shown as <span class="missing">—</span>; they are not treated as zero and are not inferred.</div>`
+    : `<div class="report-missing ok">All nine core fields used here have a stored value.</div>`;
+  const suspectHtml = snap.suspects && snap.suspects.length
+    ? `<div class="banner warn"><b>Stored-value check:</b> ${fmtInt(snap.suspects.length)} value(s) ` +
+      `look inconsistent with their field. They are shown exactly as stored and are not silently ` +
+      `converted or dropped. ${snap.suspects.slice(0, 5).map((x) =>
+        `${esc(x.period)} · ${esc(x.field)} = ${esc(babaFormatCell(x.value, x.field).html)} (${esc(x.flag)})`).join("; ")}` +
+      `${snap.suspects.length > 5 ? " …" : ""}</div>`
+    : "";
+  const showPeriods = opts.periods === "all" ? snap.periods : snap.periods.slice(0, opts.periods || 6);
+  const headers = ["Period", "Period end", "EPS (NPR)", "P/E (x)", "Net profit (NPR)",
+    "Net worth/share (NPR)", "Paid-up capital (NPR)", "Source", "Verification"];
+  const rows = showPeriods.map((p) => [
+    p.label, p.end || "—",
+    p.fields.EPS ? p.fields.EPS.value : null,
+    p.fields["P/E"] ? p.fields["P/E"].value : null,
+    p.fields["Net profit"] ? p.fields["Net profit"].value : null,
+    p.fields["Net worth per share"] ? p.fields["Net worth per share"].value : null,
+    p.fields["Paid-up capital"] ? p.fields["Paid-up capital"].value : null,
+    (p.fields.EPS && p.fields.EPS.source) || "—",
+    (p.fields.EPS && p.fields.EPS.verification) || "—",
+  ]);
+  const detail = snap.records.length
+    ? `<div class="tablewrap">${babaTableHtml(headers, rows)}</div>` +
+      (snap.periods.length > showPeriods.length
+        ? `<p class="hint">Showing the newest ${showPeriods.length} of ${snap.periods.length} stored periods. Quarterly analysis shows all periods.</p>` : "")
+    : `<div class="empty"><b>${esc(snap.symbol)}</b> has no stored fundamental records. ` +
+      `The symbol was found in the market catalogue${snap.bar ? ` and its last stored close is NPR ${fmtNum(price, 2)} on ${esc(priceDate)}` : ""}. ` +
+      `Requested dataset: company fundamentals. This is an empty result, not a failed request. ` +
+      `No financial statements are inferred.</div>`;
+  return `<section class="report-symbol" data-symbol="${esc(snap.symbol)}">
+    <div class="report-symbol-head">
+      <div><h3>${esc(snap.symbol)}${snap.name ? ` · ${esc(snap.name)}` : ""}</h3>
+        <p class="hint">${esc(snap.sector || "sector not stored")} · stored fundamentals and end-of-day price</p></div>
+      <div class="report-badges">${badges.join("")}</div>
+    </div>
+    ${babaReportHero("Latest available metrics", `Reporting period: ${latest ? latest.label : "no stored period"}`,
+      `Source: ${esc(source)} · verification: ${esc(verification)} · price is the last stored session, not a live quote.`, stats)}
+    ${missing}
+    ${suspectHtml}
+    ${detail}
+  </section>`;
+}
+
+
 async function loadBabaSection(tab) {
   const body = $("#baba-body");
   if (!body) return;
@@ -14061,152 +14843,516 @@ async function loadBabaSection(tab) {
 /* ------------------------------------------------------------ dashboard */
 async function babaDash(body) {
   body.innerHTML = `<div class="controls">
-      <label>Symbol <input id="baba-sym" placeholder="NABIL" /></label>
+      <label>Symbol
+        <input id="baba-sym" placeholder="Type a symbol or company name" aria-label="Company symbol" />
+      </label>
       <button class="ctb-btn" id="baba-go">Analyse</button>
-      <label>Sector <select id="baba-sector-sel"></select></label>
-      <button class="ctb-btn" id="baba-sector-go">Sector report</button>
+      <label>Sector report
+        <select id="baba-sector-sel" aria-label="Sector report"></select>
+      </label>
+      <button class="ctb-btn" id="baba-sector-go">Open sector report</button>
     </div>
-    <div id="baba-dash-out" class="tablewrap"><div class="empty">Enter a symbol and press Analyse.</div></div>`;
+    <div id="baba-dash-out" class="baba-output"><div class="empty">Choose a symbol from the autocomplete and press Analyse.</div></div>`;
   const sel = $("#baba-sector-sel");
-  // Actual sectors come from the sector map, not the component categories.
   try {
-    const d = await api("/api/sectors");
-    const sectors = Object.keys(d.by_sector || {}).sort();
+    await babaLoadSectors();
+    const sectors = babaSectorNames();
     sel.innerHTML = `<option value="">— choose sector —</option>` +
-      sectors.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join("");
-  } catch (e) { sel.innerHTML = `<option value="">sectors unavailable</option>`; }
+      sectors.map((x) => `<option value="${esc(x)}">${esc(x)} (${(BABA_SECTORS.by[x] || []).length})</option>`).join("");
+  } catch (e) { sel.innerHTML = `<option value="">sectors unavailable: ${esc(e.message)}</option>`; }
 
-  $("#baba-go").onclick = async () => {
-    const sym = ($("#baba-sym").value || "").trim().toUpperCase();
-    if (!sym) return;
+  const run = async (sym) => {
     const out = $("#baba-dash-out");
-    out.innerHTML = `<div class="empty">Loading ${esc(sym)}…</div>`;
+    const symbol = String(sym || ($("#baba-sym").value || "")).trim().toUpperCase();
+    if (!symbol) { out.innerHTML = `<div class="empty">Choose a symbol first.</div>`; return; }
+    out.innerHTML = `<div class="empty">Loading stored fundamentals for ${esc(symbol)}…</div>`;
     try {
-      const rep = await babaPreview(["profile", "last_price", "pe_ratio", "market_cap",
-                                     "net_worth_ps", "eps_quarterly", "elig_result"], [sym]);
-      out.innerHTML = babaRenderSections(rep);
-    } catch (e) { out.innerHTML = `<div class="empty">Could not build dashboard: ${esc(e.message)}</div>`; }
+      const snap = await babaFundamentalSnapshot(symbol);
+      out.innerHTML = babaRenderFundamentalSnapshot(snap, { periods: 4 });
+    } catch (e) {
+      out.innerHTML = `<div class="empty">Could not load ${esc(symbol)}: ${esc(e.message)}. ` +
+        `This is a request failure, not an empty stored record.</div>`;
+    }
   };
+  attachBabaSymbolAutocomplete($("#baba-sym"), { onSelect: (s) => run(s) });
+  $("#baba-go").onclick = () => run();
   $("#baba-sector-go").onclick = () => {
     const s = sel.value;
-    if (!s) return;
+    if (!s) { sel.focus(); return; }
     BABA.sector = s;
-    showView("baba/builder"); viewShown("baba/builder");
-    setTimeout(() => { const el = document.getElementById("rb-sector"); if (el) el.value = s; }, 80);
+    showView("baba/sector");
+    viewShown("baba/sector");
   };
+  const current = ($("#symbol-input") && $("#symbol-input").value || "").trim().toUpperCase();
+  if (current && babaCatalogItem(current)) $("#baba-sym").value = current;
 }
 
 /* -------------------------------------------------------- sector explorer */
-async function babaSector(body) {
-  body.innerHTML = `<div class="empty">Loading sector classifications…</div>`;
+function babaSectorCoverage(rows) {
+  const headers = (rows && rows.headers) || [];
+  const idx = (name) => headers.indexOf(name);
+  const data = rows && rows.rows ? rows.rows : [];
+  const col = (name) => {
+    const i = idx(name);
+    return i < 0 ? [] : data.map((r) => r[i]).filter((v) => babaIsNumber(v)).map(Number);
+  };
+  const median = (values) => {
+    if (!values.length) return null;
+    const ordered = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(ordered.length / 2);
+    return ordered.length % 2 ? ordered[mid] : (ordered[mid - 1] + ordered[mid]) / 2;
+  };
+  const summary = (name, unit, label) => {
+    const values = col(name);
+    return {
+      label, unit, n: values.length,
+      median: median(values),
+      min: values.length ? Math.min(...values) : null,
+      max: values.length ? Math.max(...values) : null,
+    };
+  };
+  return {
+    rows: data,
+    headers,
+    price: summary("Last close (NPR)", "NPR", "Last close"),
+    pe: summary("P/E (x)", "x", "P/E"),
+    eps: summary("EPS (NPR)", "NPR", "EPS"),
+    networth: summary("Net worth/share (NPR)", "NPR", "Net worth/share"),
+    cap: summary("Market cap (NPR)", "NPR", "Market cap"),
+    withPrice: data.filter((r) => babaIsNumber(r[idx("Last close (NPR)")])).length,
+    withEps: data.filter((r) => babaIsNumber(r[idx("EPS (NPR)")])).length,
+    withPe: data.filter((r) => babaIsNumber(r[idx("P/E (x)")])).length,
+    withNetWorth: data.filter((r) => babaIsNumber(r[idx("Net worth/share (NPR)")])).length,
+  };
+}
+function babaMetricSummaryHtml(cov) {
+  const cards = [cov.pe, cov.eps, cov.networth, cov.cap].filter((s) => s.n > 0);
+  if (!cards.length) {
+    return `<div class="empty">No sector-level valuation summary can be calculated: ` +
+      `none of the companies has the relevant stored metric. No average is invented.</div>`;
+  }
+  return `<div class="report-metrics">${cards.map((s) => {
+    const fmt = s.unit === "x" ? (v) => `${fmtNum(v, 2)}x`
+      : s.unit === "NPR" && s.label === "Market cap" ? (v) => `NPR ${fmtNum(v, 0)}`
+      : (v) => `NPR ${fmtNum(v, 2)}`;
+    return `<div class="report-metric">
+      <div class="k">${esc(s.label)}</div>
+      <div class="v">${esc(fmt(s.median))}</div>
+      <div class="hint">median · ${fmtInt(s.n)} of ${fmtInt(cov.rows.length)} companies with a stored value</div>
+      <div class="tiny">range ${esc(fmt(s.min))} – ${esc(fmt(s.max))}</div>
+    </div>`;
+  }).join("")}</div>`;
+}
+async function babaSectorReport(sector) {
+  const out = $("#baba-sector-report");
+  if (!out) return;
+  const syms = (BABA_SECTORS.by[sector] || []).slice();
+  if (!sector) {
+    out.innerHTML = `<div class="empty">Choose a sector to generate its report.</div>`;
+    return;
+  }
+  if (!syms.length) {
+    out.innerHTML = `<div class="empty"><b>${esc(sector)}</b> has no companies in the stored ` +
+      `reference classification. Requested dataset: sector fundamentals. This is an empty ` +
+      `classification result, not a failed request. No companies are invented.</div>`;
+    return;
+  }
+  out.innerHTML = `<div class="empty">Building ${esc(sector)} report from ${fmtInt(syms.length)} stored symbols…</div>`;
+  const components = ["sector_overview", "sector_comparison", "sector_outliers",
+    "sector_eps_rank", "sector_pe_rank", "sector_networth_rank", "sector_cap_rank",
+    "sector_growth_rank"];
   try {
-    const d = await api("/api/sectors");
-    const by = d.by_sector || {};
-    const targets = (BABA.comps.sector_targets || {});
-    const names = Array.from(new Set([...Object.keys(by), ...Object.keys(targets)])).sort();
-    const rows = names.map(n => {
-      const actual = (by[n] || []).length;
-      const target = targets[n];
-      const members = by[n] || [];
-      const sample = members.slice(0, 6).join(", ") + (members.length > 6 ? "…" : "");
-      return [{ html: `<b>${esc(n)}</b>` },
-              { html: `${fmtInt(actual)}` },
-              { html: target == null ? `<span class="pill">—</span>` : fmtInt(target) },
-              { html: esc(sample) || "—" }];
+    const rep = await babaPreview(components, syms, { sector });
+    const comparison = (rep.sections && rep.sections.sector_comparison) || null;
+    if (!comparison || !comparison.available) {
+      out.innerHTML = `<div class="empty">The sector comparison could not be produced: ` +
+        `${esc((comparison && comparison.reason) || "no stored comparison rows")}. ` +
+        `Selected sector: <b>${esc(sector)}</b>, ${fmtInt(syms.length)} classified symbols.</div>`;
+      return;
+    }
+    const cov = babaSectorCoverage(comparison);
+    const generated = rep.generated_at ? new Date(rep.generated_at).toLocaleString() : new Date().toLocaleString();
+    const missingCell = `<span class="missing" title="No stored value">—</span>`;
+    const overview = `<p>This report covers <b>${fmtInt(syms.length)}</b> companies in the stored ` +
+      `<b>${esc(sector)}</b> classification. <b>${fmtInt(cov.withPrice)}</b> have a stored end-of-day close, ` +
+      `<b>${fmtInt(cov.withEps)}</b> have a stored EPS, <b>${fmtInt(cov.withPe)}</b> have a stored or derivable P/E, ` +
+      `and <b>${fmtInt(cov.withNetWorth)}</b> have net worth per share. ` +
+      `No company or financial value is inferred for a missing field.</p>`;
+    const companyTable = `<div class="tablewrap report-company-table">${babaTableHtml(comparison.headers, comparison.rows)}</div>`;
+    const quality = rep.sections && rep.sections.sector_outliers && rep.sections.sector_outliers.available
+      ? babaRenderSections(rep, { sections: ["sector_outliers"], showUnavailable: false })
+      : `<div class="empty">No outlier report was produced.</div>`;
+    const extras = babaRenderSections(rep, {
+      sections: ["sector_eps_rank", "sector_pe_rank", "sector_networth_rank",
+        "sector_cap_rank", "sector_growth_rank"],
+      showUnavailable: false,
     });
-    body.innerHTML = `
-      <p class="hint">${fmtInt(d.total_classified || 0)} symbols classified into
-        ${fmtInt(d.total_sectors || 0)} sectors, from a stored reference
-        classification (${esc(d.source || "reference file")}). The <b>actual</b> column is
-        computed from that classification. The <b>target</b> column is a <b>provisional</b>
-        user-supplied reference count and is <b>not</b> a verified current NEPSE listing count.</p>
-      <div class="tablewrap">${table(["Sector", "Actual companies", "Reference target", "Members (sample)"], rows)}</div>`;
-  } catch (e) { body.innerHTML = `<div class="empty">Could not load sectors: ${esc(e.message)}</div>`; }
+    const unavailable = ((rep.quality && rep.quality.unavailable) || [])
+      .filter((u) => ["sector_comparison", "sector_outliers"].includes(u.id));
+    out.innerHTML = `
+      ${babaReportHero(`Sector Report — ${sector}`,
+        `Stored classification report · generated ${generated}`,
+        `Source: <b>${esc(BABA_SECTORS.source)}</b> · company metrics: stored fundamentals and the latest stored session (end of day, not live) · ` +
+        `sector summaries use only companies with a stored value.`,
+        [
+          { k: "Companies", v: fmtInt(syms.length) },
+          { k: "With stored price", v: fmtInt(cov.withPrice) },
+          { k: "With stored EPS", v: fmtInt(cov.withEps) },
+          { k: "With stored P/E", v: fmtInt(cov.withPe) },
+        ])}
+      <div class="report-toolbar">
+        <label>Export format
+          <select id="baba-sector-fmt">
+            <option value="pdf">PDF</option><option value="xlsx" selected>XLSX</option>
+            <option value="csv">CSV (ZIP)</option><option value="json">JSON</option>
+          </select>
+        </label>
+        <button class="ctb-btn" id="baba-sector-export">Export full sector report</button>
+        <span class="hint">The export contains the same selected sections, sector scope and provenance.</span>
+      </div>
+      <section class="report-section"><h3>Sector overview</h3>${overview}</section>
+      <section class="report-section"><h3>Coverage and data quality</h3>
+        <div class="report-coverage">
+          <span class="pill pill-info">${fmtInt(cov.withPrice)} / ${fmtInt(syms.length)} price records</span>
+          <span class="pill pill-info">${fmtInt(cov.withEps)} / ${fmtInt(syms.length)} EPS records</span>
+          <span class="pill ${cov.withNetWorth < syms.length ? "pill-warn" : "pill-info"}">${fmtInt(cov.withNetWorth)} / ${fmtInt(syms.length)} net-worth records</span>
+          <span class="pill ${cov.withPe < syms.length ? "pill-warn" : "pill-info"}">${fmtInt(cov.withPe)} / ${fmtInt(syms.length)} P/E values</span>
+        </div>
+        <p class="hint">A dash (${missingCell}) means the stored source has no value for that field. ` +
+        `It is not a zero. P/E is shown only when stored or derivable from a positive stored EPS and a stored close.</p>
+      </section>
+      <section class="report-section"><h3>Sector-level summaries</h3>
+        ${babaMetricSummaryHtml(cov)}
+        <p class="hint">These are descriptive summaries of the values visible in the table below — not forecasts, ` +
+        `not sector averages for companies with missing data, and not investment recommendations.</p>
+      </section>
+      <section class="report-section"><h3>Company-by-company comparison</h3>${companyTable}
+        <p class="hint">Long company names wrap inside the table; the table scrolls horizontally on narrow screens. ` +
+        `Price date is the last stored session. All prices are end-of-day historical values.</p>
+      </section>
+      <section class="report-section"><h3>Data-quality notes and missing fields</h3>${quality}
+        ${unavailable.length ? `<p class="hint">${esc(unavailable.map((u) => `${u.name}: ${u.reason}`).join(" · "))}</p>` : ""}
+        <p class="hint">Sector labels are a stored reference classification and can lag a current NEPSE listing. ` +
+        `Financial values come from stored filings; verification and source are carried by the generated export.</p>
+      </section>
+      <details class="report-more"><summary>Additional sector rankings and comparisons</summary>${extras}</details>
+      <footer class="report-footer">
+        <span>Report generated: ${esc(generated)}</span>
+        <span>Symbols in scope: ${fmtInt(syms.length)}</span>
+        <span>Format: JSON preview · export: PDF/XLSX/CSV/JSON</span>
+      </footer>`;
+    $("#baba-sector-export").onclick = () => babaDownloadReport({
+      components, symbols: syms, sector, fmt: $("#baba-sector-fmt").value,
+      title: `Sector Report — ${sector}`,
+      notes: `Stored sector classification. ${fmtInt(syms.length)} companies in scope. ` +
+        `Prices are last stored sessions (end of day), not live quotes.`,
+    }).catch((e) => {
+      out.insertAdjacentHTML("afterbegin",
+        `<div class="banner warn">Export failed: ${esc(e.message)}</div>`);
+    });
+  } catch (e) {
+    out.innerHTML = `<div class="empty">Could not generate the ${esc(sector)} sector report: ${esc(e.message)}. ` +
+      `No table was substituted and no values were invented.</div>`;
+  }
+}
+async function babaDownloadReport({ components, symbols, sector, period, fmt, title, notes }) {
+  const q = new URLSearchParams({ components: components.join(","), format: fmt || "xlsx" });
+  if (symbols && symbols.length) q.set("symbols", symbols.join(","));
+  if (sector) q.set("sector", sector);
+  if (period) q.set("period", period);
+  if (title) q.set("title", title);
+  if (notes) q.set("notes", notes);
+  const r = await fetch(API_BASE + "/api/baba/report/export?" + q.toString(), _withFriendToken({}));
+  if (!r.ok) {
+    let detail = r.statusText;
+    try { const j = await r.json(); detail = j.detail || j.error || detail; } catch (e) { /* not json */ }
+    throw new Error(detail);
+  }
+  const blob = await r.blob();
+  const disp = r.headers.get("content-disposition") || "";
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disp);
+  const fallback = `${(title || "pravaha-report").replace(/[^A-Za-z0-9._ -]+/g, "_")}.${fmt || "xlsx"}`;
+  const name = match ? decodeURIComponent(match[1]) : fallback;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+async function babaSector(body) {
+  body.innerHTML = `<div class="controls">
+      <label>Sector
+        <select id="baba-sector-select" aria-label="Sector"></select>
+      </label>
+      <button class="ctb-btn" id="baba-sector-generate">Generate sector report</button>
+      <span class="hint" id="baba-sector-hint">Reports use stored classifications and stored financial records.</span>
+    </div>
+    <div id="baba-sector-errors" class="error"></div>
+    <section class="card wide baba-sector-card">
+      <h2>Sector catalogue</h2>
+      <div id="baba-sector-explorer" class="tablewrap"><div class="empty">Loading sector classifications…</div></div>
+    </section>
+    <div id="baba-sector-report" class="baba-output"></div>`;
+  try {
+    await babaLoadSectors();
+    const sel = $("#baba-sector-select");
+    const names = babaSectorNames();
+    sel.innerHTML = `<option value="">— choose sector —</option>` + names.map((n) =>
+      `<option value="${esc(n)}">${esc(n)} (${(BABA_SECTORS.by[n] || []).length})</option>`).join("");
+    const rows = names.map((n) => {
+      const members = BABA_SECTORS.by[n] || [];
+      return [
+        n, members.length,
+        members.slice(0, 6).join(", ") + (members.length > 6 ? "…" : ""),
+      ];
+    });
+    $("#baba-sector-explorer").innerHTML =
+      `<p class="hint">${fmtInt((BABA_SECTORS.by && Object.values(BABA_SECTORS.by).reduce((n, a) => n + a.length, 0)) || 0)} ` +
+      `symbols classified into ${fmtInt(names.length)} sectors, from a stored reference classification ` +
+      `(${esc(BABA_SECTORS.source)}). Counts reflect stored classifications, not a live listing feed.</p>` +
+      babaTableHtml(["Sector", "Companies (stored)", "Members (sample)"], rows);
+    if (BABA.sector && names.includes(BABA.sector)) sel.value = BABA.sector;
+    else if (names.length) sel.value = names.includes("Commercial Banks") ? "Commercial Banks" : names[0];
+    const generate = () => {
+      BABA.sector = sel.value;
+      return babaSectorReport(sel.value);
+    };
+    $("#baba-sector-generate").onclick = generate;
+    sel.onchange = () => { BABA.sector = sel.value; };
+    if (BABA.sector) await babaSectorReport(BABA.sector);
+    else if (sel.value) await babaSectorReport(sel.value);
+  } catch (e) {
+    $("#baba-sector-errors").textContent = `Could not load sector classifications: ${e.message}`;
+    $("#baba-sector-explorer").innerHTML = `<div class="empty">Sector catalogue unavailable.</div>`;
+  }
 }
 
 /* ------------------------------------------------------ fundamental scanner */
 async function babaScanner(body) {
   body.innerHTML = `<div class="controls">
-      <label>Symbols (comma or newline separated) <input id="baba-scan-syms" placeholder="NABIL, SCB" /></label>
-      <label>Sector <input id="baba-scan-sector" placeholder="optional" /></label>
-      <button class="ctb-btn" id="baba-scan-go">Run analysis</button>
+      <label class="wide">Symbols (comma separated)
+        <input id="baba-scan-syms" placeholder="Type a symbol or company name" aria-label="Symbols to scan" />
+      </label>
+      <label>Sector filter (optional)
+        <input id="baba-scan-sector" list="baba-sector-names" placeholder="e.g. Hydropower" />
+        <datalist id="baba-sector-names"></datalist>
+      </label>
+      <button class="ctb-btn" id="baba-scan-go">Run fundamental scan</button>
     </div>
-    <div id="baba-scan-out" class="tablewrap"><div class="empty">Enter one or more symbols.</div></div>`;
+    <div id="baba-scan-error" class="error"></div>
+    <div id="baba-scan-out" class="baba-output"><div class="empty">Choose one or more symbols from the autocomplete.</div></div>`;
+  try {
+    await Promise.all([babaLoadSectors(), babaLoadCatalog()]);
+    $("#baba-sector-names").innerHTML = babaSectorNames().map((s) => `<option value="${esc(s)}"></option>`).join("");
+  } catch (e) { /* the run path reports catalogue failures */ }
+  attachBabaSymbolAutocomplete($("#baba-scan-syms"), { multiple: true });
   $("#baba-scan-go").onclick = async () => {
-    const raw = $("#baba-scan-syms").value || "";
-    const syms = [...new Set(raw.split(/[,\n]+/).map(s => s.trim().toUpperCase()).filter(Boolean))];
+    const err = $("#baba-scan-error");
     const out = $("#baba-scan-out");
-    if (!syms.length) { out.innerHTML = `<div class="empty">Enter at least one symbol.</div>`; return; }
-    out.innerHTML = `<div class="empty">Analysing ${fmtInt(syms.length)} symbol(s)…</div>`;
-    try {
-      const comps = ["profile", "last_price", "pe_ratio", "pb_ratio", "net_worth_ps",
-                    "eps_quarterly", "eps_ttm", "dps", "dividend_yield", "market_cap",
-                    "missing_summary", "cmp_side_by_side"];
-      const rep = await babaPreview(comps, syms, { sector: $("#baba-scan-sector").value || undefined });
-      out.innerHTML = babaRenderSections(rep);
-    } catch (e) { out.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+    err.textContent = "";
+    let syms = babaParseSymbols($("#baba-scan-syms").value);
+    if (!syms.length) { err.textContent = "Choose at least one symbol."; return; }
+    const unknown = await babaUnknownSymbols(syms);
+    if (unknown.length) {
+      err.textContent = `Not in the stored symbol catalogue: ${unknown.join(", ")}. ` +
+        `Select an actual catalogue entry; a partial search string is not submitted as a symbol.`;
+      return;
+    }
+    const sectorFilter = babaCanonicalSector($("#baba-scan-sector").value);
+    if (sectorFilter) {
+      const inSector = syms.filter((s) => (babaCatalogItem(s) || {}).sector === sectorFilter);
+      const excluded = syms.filter((s) => !inSector.includes(s));
+      syms = inSector;
+      if (!syms.length) {
+        err.textContent = `None of ${unknown.length ? "" : "the selected symbols"} belongs to ${sectorFilter}. ` +
+          `Excluded: ${excluded.join(", ")}. No criterion result is reported for an excluded symbol.`;
+        out.innerHTML = `<div class="empty">Sector filter ${esc(sectorFilter)} excluded every selected symbol.</div>`;
+        return;
+      }
+    }
+    out.innerHTML = `<div class="empty">Loading stored fundamentals for ${fmtInt(syms.length)} symbol(s)…</div>`;
+    const settled = await Promise.allSettled(syms.map((s) => babaFundamentalSnapshot(s)));
+    const ok = [];
+    const failed = [];
+    settled.forEach((r, i) => {
+      if (r.status === "fulfilled") ok.push(r.value);
+      else failed.push({ symbol: syms[i], reason: String(r.reason && r.reason.message || r.reason) });
+    });
+    const cards = ok.map((snap) => babaRenderFundamentalSnapshot(snap, { periods: 4 })).join("");
+    const failedHtml = failed.length ? `<section class="report-section"><h3>Failed requests</h3>
+      <p class="hint">These are request failures, not empty stored records. No metric is shown for them.</p>
+      <div class="tablewrap">${babaTableHtml(["Symbol", "Error"],
+        failed.map((f) => [f.symbol, f.reason]))}</div></section>` : "";
+    let eligibility = "";
+    if (ok.length) {
+      try {
+        const rep = await babaPreview(["elig_result", "elig_failed"], ok.map((s) => s.symbol));
+        eligibility = `<section class="report-section"><h3>Eligibility screening</h3>
+          <p class="hint">Rules use only stored inputs. A missing input is NEEDS_REVIEW, never PASS.</p>
+          ${babaRenderSections(rep, { showUnavailable: false })}</section>`;
+      } catch (e) {
+        eligibility = `<section class="report-section"><h3>Eligibility screening</h3>
+          <div class="empty">Eligibility could not be evaluated: ${esc(e.message)}</div></section>`;
+      }
+    }
+    out.innerHTML = (ok.length || failed.length)
+      ? `${babaReportHero("Fundamental Scanner", `${fmtInt(ok.length)} symbol(s) loaded from stored records`,
+          `Each metric shows its reporting period and source. Prices are end-of-day, not live quotes.`,
+          [{ k: "Requested", v: fmtInt(syms.length) }, { k: "Loaded", v: fmtInt(ok.length) },
+           { k: "Failed", v: fmtInt(failed.length) },
+           { k: "Quarterly records", v: fmtInt(ok.filter((s) => s.hasQuarterly).length) }])}` +
+        cards + failedHtml + eligibility
+      : `<div class="empty">No symbol produced a stored fundamental record.</div>`;
   };
 }
 
 /* --------------------------------------------------------- quarterly view */
 async function babaQuarterly(body) {
   body.innerHTML = `<div class="controls">
-      <label>Symbol <input id="baba-q-sym" placeholder="NABIL" /></label>
+      <label>Symbol
+        <input id="baba-q-sym" placeholder="Type a symbol or company name" aria-label="Quarterly analysis symbol" />
+      </label>
       <button class="ctb-btn" id="baba-q-go">Quarterly analysis</button>
-    </div><div id="baba-q-out" class="tablewrap"></div>`;
-  $("#baba-q-go").onclick = async () => {
-    const sym = ($("#baba-q-sym").value || "").trim().toUpperCase();
+      <span class="hint">Stored filings only. Quarters are never filled in or shifted.</span>
+    </div>
+    <div id="baba-q-error" class="error"></div>
+    <div id="baba-q-out" class="baba-output"><div class="empty">Choose a symbol to see its stored quarterly periods.</div></div>`;
+
+  const run = async (chosen) => {
+    const err = $("#baba-q-error");
     const out = $("#baba-q-out");
-    if (!sym) { out.innerHTML = `<div class="empty">Enter a symbol.</div>`; return; }
-    out.innerHTML = `<div class="empty">Loading…</div>`;
-    try {
-      const rep = await babaPreview(["q1_results", "q2_results", "q3_results", "q4_results",
-        "q_eps_comparison", "yoy_growth", "seq_growth", "annual_summary",
-        "missing_quarters", "comparability", "fundamental_trend"], [sym]);
-      out.innerHTML = babaRenderSections(rep);
-    } catch (e) { out.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+    err.textContent = "";
+    const sym = String(chosen || ($("#baba-q-sym").value || "")).trim().toUpperCase();
+    if (!sym) { err.textContent = "Choose a symbol first."; return; }
+    const unknown = await babaUnknownSymbols([sym]);
+    if (unknown.length) {
+      err.textContent = `${sym} is not in the stored symbol catalogue. Select a real catalogue entry; a partial search string is not submitted.`;
+      return;
+    }
+    out.innerHTML = `<div class="empty">Loading ${esc(sym)} quarterly records…</div>`;
+    const settled = await Promise.allSettled([
+      babaFundamentalSnapshot(sym),
+      babaPreview(["q_eps_comparison", "yoy_growth", "seq_growth", "annual_summary",
+        "missing_quarters", "comparability", "fundamental_trend"], [sym]),
+    ]);
+    if (settled[0].status !== "fulfilled") {
+      out.innerHTML = `<div class="empty"><b>${esc(sym)}</b>: the fundamentals request failed — ` +
+        `${esc(String(settled[0].reason && settled[0].reason.message || settled[0].reason))}. ` +
+        `This is a request failure, not an empty record.</div>`;
+      return;
+    }
+    const snap = settled[0].value;
+    let growth = "";
+    if (settled[1].status === "fulfilled") {
+      growth = babaRenderSections(settled[1].value, { showUnavailable: false });
+    } else {
+      growth = `<div class="empty">Growth comparisons could not be produced: ` +
+        `${esc(String(settled[1].reason && settled[1].reason.message || settled[1].reason))}. ` +
+        `The stored periods below are unaffected and are not extrapolated.</div>`;
+    }
+    const qEmpty = !snap.hasQuarterly
+      ? `<div class="banner warn"><b>${esc(sym)} has no stored quarterly filing.</b> ` +
+        `Requested dataset: quarterly fundamentals. Latest available stored period: ` +
+        `<b>${esc(snap.latestPeriod ? snap.latestPeriod.label : "none")}</b>. ` +
+        `The symbol remains valid; no quarter is fabricated. Next action: open the company's stored ` +
+        `fundamental records or an alternate supported filing source in Data, rather than starting an ` +
+        `uncontrolled ingest.</div>`
+      : "";
+    out.innerHTML = `${qEmpty}
+      ${babaReportHero(`Quarterly Analysis — ${sym}`,
+        `${snap.name ? esc(snap.name) + " · " : ""}${esc(snap.sector || "sector not stored")}`,
+        `Chronological stored periods (newest first). QoQ and YoY are shown only when both values exist. ` +
+        `Fiscal labels are preserved exactly as stored; prices are end-of-day.`,
+        [
+          { k: "Quarterly periods", v: fmtInt(snap.quarterlyPeriods.length) },
+          { k: "All periods", v: fmtInt(snap.periods.length) },
+          { k: "Latest period", v: snap.latestPeriod ? snap.latestPeriod.label : "—" },
+          { k: "Core fields missing", v: fmtInt(snap.missing.length) },
+        ])}
+      ${babaRenderFundamentalSnapshot(snap, { periods: "all" })}
+      <section class="report-section"><h3>Quarterly comparisons, growth and missing periods</h3>
+        <p class="hint">YoY compares the same quarter in the previous fiscal year. Sequential growth compares ` +
+        `the immediately preceding stored quarter. A comparison is omitted when either endpoint is absent.</p>
+        ${growth}</section>`;
   };
+  attachBabaSymbolAutocomplete($("#baba-q-sym"), { onSelect: (s) => run(s) });
+  $("#baba-q-go").onclick = () => run();
 }
 
 /* ------------------------------------------------------ eligibility screen */
 async function babaEligibility(body) {
   body.innerHTML = `<div class="controls">
-      <label>Symbols <input id="baba-e-syms" placeholder="NABIL" /></label>
-      <button class="ctb-btn" id="baba-e-go">Screen</button>
-    </div><div id="baba-e-out" class="tablewrap"></div>`;
+      <label>Symbols (comma separated)
+        <input id="baba-e-syms" placeholder="Type a symbol or company name" aria-label="Symbols to screen" />
+      </label>
+      <button class="ctb-btn" id="baba-e-go">Screen eligibility</button>
+    </div>
+    <div id="baba-e-error" class="error"></div>
+    <div id="baba-e-out" class="baba-output"><div class="empty">Choose one or more catalogue symbols.</div></div>`;
+  attachBabaSymbolAutocomplete($("#baba-e-syms"), { multiple: true });
   $("#baba-e-go").onclick = async () => {
-    const raw = $("#baba-e-syms").value || "";
-    const syms = [...new Set(raw.split(/[,\n]+/).map(s => s.trim().toUpperCase()).filter(Boolean))];
+    const err = $("#baba-e-error");
     const out = $("#baba-e-out");
-    if (!syms.length) { out.innerHTML = `<div class="empty">Enter at least one symbol.</div>`; return; }
-    out.innerHTML = `<div class="empty">Screening ${fmtInt(syms.length)} symbol(s)…</div>`;
+    err.textContent = "";
+    const syms = babaParseSymbols($("#baba-e-syms").value);
+    if (!syms.length) { err.textContent = "Choose at least one symbol."; return; }
+    const unknown = await babaUnknownSymbols(syms);
+    if (unknown.length) {
+      err.textContent = `Not in the stored symbol catalogue: ${unknown.join(", ")}. ` +
+        `Nothing was submitted; select a real catalogue entry.`;
+      return;
+    }
+    out.innerHTML = `<div class="empty">Screening ${fmtInt(syms.length)} symbol(s) against stored rules…</div>`;
     try {
       const rep = await babaPreview(["elig_config", "elig_result", "elig_failed",
-                                     "elig_listing_age", "elig_share_count", "elig_networth",
-                                     "elig_profit"], syms);
-      out.innerHTML = babaRenderSections(rep);
-    } catch (e) { out.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+        "elig_listing_age", "elig_share_count", "elig_networth", "elig_profit"], syms);
+      out.innerHTML = babaReportHero("Eligibility Screening",
+        `${fmtInt(syms.length)} symbol(s) · ${esc(syms.join(", "))}`,
+        `Every rule uses stored inputs only. A missing input is NEEDS_REVIEW, never PASS.`,
+        [{ k: "Symbols", v: fmtInt(syms.length) }]) + babaRenderSections(rep);
+    } catch (e) {
+      out.innerHTML = `<div class="empty">Eligibility could not be evaluated: ${esc(e.message)}. ` +
+        `This is a request failure, not a pass or an exclusion.</div>`;
+    }
   };
 }
 
 /* ------------------------------------------------------------ comparison */
 async function babaCompare(body) {
   body.innerHTML = `<div class="controls">
-      <label>Symbols <input id="baba-c-syms" placeholder="NABIL, SCB, GBIME" /></label>
+      <label>Symbols (comma separated)
+        <input id="baba-c-syms" placeholder="Type a symbol or company name" aria-label="Symbols to compare" />
+      </label>
       <button class="ctb-btn" id="baba-c-go">Compare</button>
-    </div><div id="baba-c-out" class="tablewrap"></div>`;
+    </div>
+    <div id="baba-c-error" class="error"></div>
+    <div id="baba-c-out" class="baba-output"><div class="empty">Choose two or more catalogue symbols.</div></div>`;
+  attachBabaSymbolAutocomplete($("#baba-c-syms"), { multiple: true });
   $("#baba-c-go").onclick = async () => {
-    const raw = $("#baba-c-syms").value || "";
-    const syms = [...new Set(raw.split(/[,\n]+/).map(s => s.trim().toUpperCase()).filter(Boolean))];
+    const err = $("#baba-c-error");
     const out = $("#baba-c-out");
-    if (!syms.length) { out.innerHTML = `<div class="empty">Enter at least one symbol.</div>`; return; }
-    out.innerHTML = `<div class="empty">Comparing…</div>`;
+    err.textContent = "";
+    const syms = babaParseSymbols($("#baba-c-syms").value);
+    if (!syms.length) { err.textContent = "Choose at least one symbol."; return; }
+    const unknown = await babaUnknownSymbols(syms);
+    if (unknown.length) {
+      err.textContent = `Not in the stored symbol catalogue: ${unknown.join(", ")}. ` +
+        `Nothing was submitted; select a real catalogue entry.`;
+      return;
+    }
+    out.innerHTML = `<div class="empty">Comparing ${fmtInt(syms.length)} symbol(s) from stored records…</div>`;
     try {
       const rep = await babaPreview(["cmp_overview", "cmp_side_by_side", "cmp_eps", "cmp_pe",
         "cmp_pb", "cmp_networth", "cmp_dividend", "cmp_growth", "cmp_profitability",
         "cmp_eligibility", "cmp_warnings"], syms);
-      out.innerHTML = babaRenderSections(rep);
-    } catch (e) { out.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+      out.innerHTML = babaReportHero("Company Comparison",
+        `${fmtInt(syms.length)} symbol(s) · ${esc(syms.join(", "))}`,
+        `Comparisons use stored periods. A blank cell means the value was not stored, not that it is zero.`,
+        [{ k: "Symbols", v: fmtInt(syms.length) }]) + babaRenderSections(rep);
+    } catch (e) {
+      out.innerHTML = `<div class="empty">Comparison could not be produced: ${esc(e.message)}. ` +
+        `This is a request failure, not an empty data result.</div>`;
+    }
   };
 }
 
@@ -14227,6 +15373,7 @@ async function babaJournal(body) {
       ledger holds on that date is rejected rather than silently adjusted.</p>
     <div id="baba-j-msg"></div>
     <div id="baba-j-out" class="tablewrap"></div>`;
+  attachBabaSymbolAutocomplete($("#baba-j-sym"));
 
   const load = async () => {
     const out = $("#baba-j-out");
@@ -14246,6 +15393,12 @@ async function babaJournal(body) {
     const sym = ($("#baba-j-sym").value || "").trim().toUpperCase();
     const msg = $("#baba-j-msg");
     if (!sym) { msg.innerHTML = `<div class="banner">Enter a symbol.</div>`; return; }
+    const unknown = await babaUnknownSymbols([sym]);
+    if (unknown.length) {
+      msg.innerHTML = `<div class="banner">${esc(sym)} is not in the stored symbol catalogue. ` +
+        `Choose a real catalogue entry; the ledger was not changed.</div>`;
+      return;
+    }
     if (!(q > 0) || !Number.isInteger(q)) {
       msg.innerHTML = `<div class="banner">Quantity must be a whole number above zero.</div>`; return;
     }
@@ -14277,28 +15430,19 @@ async function babaJournal(body) {
 async function babaPreview(comps, symbols, extra) {
   const body = { components: comps, symbols: symbols || [], format: "json" };
   if (extra && extra.sector) body.sector = extra.sector;
-  const r = await fetch("/api/baba/report/preview", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  if (extra && extra.period) body.period = extra.period;
+  const init = _withFriendToken({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const r = await fetch(API_BASE + "/api/baba/report/preview", init);
+  if (!r.ok) {
+    let detail = r.statusText;
+    try { const j = await r.json(); detail = j.detail || j.error || detail; } catch (e) { /* not JSON */ }
+    throw new Error(detail);
+  }
   return r.json();
-}
-
-function babaRenderSections(rep) {
-  const parts = [];
-  for (const [cid, sec] of Object.entries(rep.sections || {})) {
-    if (!sec.available) continue;
-    const hdr = sec.headers || [];
-    const rows = (sec.rows || []).map(r => r.map(c => ({ html: esc(c) })));
-    parts.push(`<h4 style="margin-top:12px">${esc(sec.name || cid)}</h4>
-      <div class="tablewrap">${table(hdr, rows)}</div>`);
-  }
-  const un = (rep.quality && rep.quality.unavailable) || [];
-  if (un.length) {
-    parts.push(`<h4 style="margin-top:12px">Unavailable</h4>
-      <div class="tablewrap">${table(["Component", "Reason"],
-        un.map(u => [{html: esc(u.name)}, {html: esc(u.reason)}]))}</div>`);
-  }
-  return parts.join("") || `<div class="empty">No sections produced.</div>`;
 }
 
 async function babaBuilder(body) {
@@ -14308,8 +15452,9 @@ async function babaBuilder(body) {
   const cats = Object.keys(byCat);
   body.innerHTML = `
     <div class="controls">
-      <label>Symbols <input id="rpt-syms" placeholder="NABIL, SCB" /></label>
-      <label>Sector <input id="rpt-sector" placeholder="optional" /></label>
+      <label>Symbols <input id="rpt-syms" placeholder="Type a symbol or company name" /></label>
+      <label>Sector <input id="rpt-sector" list="rpt-sector-names" placeholder="optional" />
+        <datalist id="rpt-sector-names"></datalist></label>
       <label>Period <input id="rpt-period" placeholder="FY2081" /></label>
       <label>Format <select id="rpt-fmt">
         ${["xlsx","csv","pdf","json"].map(f => `<option value="${f}">${f.toUpperCase()}</option>`).join("")}
@@ -14331,6 +15476,11 @@ async function babaBuilder(body) {
     <div id="rpt-out" class="tablewrap"></div>`;
 
   const out = $("#rpt-out");
+  attachBabaSymbolAutocomplete($("#rpt-syms"), { multiple: true });
+  babaLoadSectors().then(() => {
+    const dl = $("#rpt-sector-names");
+    if (dl) dl.innerHTML = babaSectorNames().map((s) => `<option value="${esc(s)}"></option>`).join("");
+  }).catch(() => { /* the builder still accepts a typed sector */ });
   const catHtml = cats.map(cat => `
     <details class="rb-cat" open>
       <summary><b>${esc(cat)}</b>
@@ -14373,7 +15523,7 @@ async function babaBuilder(body) {
 
   const gather = () => ({
     components: $$(".rb-cb:checked").map(c => c.value),
-    symbols: ($("#rpt-syms").value || "").split(/[,\n]+/).map(s => s.trim().toUpperCase()).filter(Boolean),
+    symbols: babaParseSymbols($("#rpt-syms").value),
     sector: $("#rpt-sector").value || undefined,
     period: $("#rpt-period").value || undefined,
     format: $("#rpt-fmt").value,
@@ -14384,6 +15534,12 @@ async function babaBuilder(body) {
   $("#rpt-preview").onclick = async () => {
     const req = gather();
     if (!req.components.length) { $("#rpt-preview-out").innerHTML = `<div class="empty">Select at least one component.</div>`; return; }
+    const unknown = await babaUnknownSymbols(req.symbols);
+    if (unknown.length) {
+      $("#rpt-preview-out").innerHTML = `<div class="empty">Not in the stored symbol catalogue: ` +
+        `${esc(unknown.join(", "))}. Select catalogue entries; a partial search string is not submitted.</div>`;
+      return;
+    }
     $("#rpt-preview-out").innerHTML = `<div class="empty">Assembling preview…</div>`;
     try {
       const rep = await babaPreview(req.components, req.symbols,
@@ -14395,24 +15551,21 @@ async function babaBuilder(body) {
     } catch (e) { $("#rpt-preview-out").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   };
 
-  $("#rpt-export").onclick = () => {
+  $("#rpt-export").onclick = async () => {
     const req = gather();
-    if (!req.components.length) { alert("Select at least one component."); return; }
-    const q = new URLSearchParams({ components: req.components.join(","), format: req.format });
-    if (req.symbols.length) q.set("symbols", req.symbols.join(","));
-    if (req.sector) q.set("sector", req.sector);
-    if (req.period) q.set("period", req.period);
-    if (req.title) q.set("title", req.title);
-    if (req.notes) q.set("notes", req.notes);
-    // A real download of the real generated file — never a placeholder. An
-    // anchor click keeps the page in place; `location = url` aborts the current
-    // navigation (harmless, but it shows up as a failed request).
-    const a = document.createElement("a");
-    a.href = "/api/baba/report/export?" + q.toString();
-    a.download = "";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    if (!req.components.length) { $("#rpt-preview-out").innerHTML = `<div class="empty">Select at least one component.</div>`; return; }
+    const unknown = await babaUnknownSymbols(req.symbols);
+    if (unknown.length) {
+      $("#rpt-preview-out").innerHTML = `<div class="empty">Not in the stored symbol catalogue: ` +
+        `${esc(unknown.join(", "))}. Nothing was exported.</div>`;
+      return;
+    }
+    try {
+      await babaDownloadReport(req);
+    } catch (e) {
+      $("#rpt-preview-out").insertAdjacentHTML("afterbegin",
+        `<div class="banner warn">Export failed: ${esc(e.message)}</div>`);
+    }
   };
 
   $("#rpt-save").onclick = async () => {

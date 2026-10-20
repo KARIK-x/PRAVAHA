@@ -245,6 +245,101 @@ def test_report_with_real_data_has_only_selected_sections():
         assert len(renderer(report)) > 0
 
 
+# ------------------------------------------------- GVL quarterly regression
+@pytest.fixture
+def dev_fundamentals(monkeypatch):
+    """Point the fundamentals reader at the extracted dev store.
+
+    Production data/processed intentionally has no seeded fundamentals in the
+    test checkout, so a regression that pins the real GVL rows must read the
+    same dev database the application/browser uses. Only SQLite is redirected;
+    no write is performed.
+    """
+    processed = _DEV / "processed"
+    db = processed / "megatool_state.sqlite"
+    if not db.is_file():
+        pytest.skip("dev fundamentals database is not present")
+    import megatool.config as config
+
+    monkeypatch.setattr(config.PATHS, "processed", processed)
+    rc = pytest.importorskip("megatool.report_components")
+    monkeypatch.setattr(rc, "_STORE", None, raising=False)
+    rc.clear_report_cache()
+    return processed
+
+
+def test_gvl_quarterly_records_are_real_and_not_reported_as_missing(dev_fundamentals):
+    """GVL was falsely shown as having no quarterly data.
+
+    The stored records do include Q4 2025-2026. The comparison must expose that
+    period with its exact fiscal label and EPS, and the missing-quarter check
+    must mark all four quarters as present rather than invalidating the symbol.
+    """
+    report = rb.assemble_report(rb.ReportRequest(
+        components=["q_eps_comparison", "q4_results", "missing_quarters",
+                    "fundamental_trend", "missing_summary"],
+        symbols=["GVL"], fmt="json"))
+    q_eps = report["sections"]["q_eps_comparison"]
+    assert q_eps["available"] is True, q_eps.get("reason")
+    source = "Fourth Quarter 2025-2026 (Nepali FY 2025-2026)"
+    matching = [r for r in q_eps["rows"] if r[-1] == source]
+    assert matching, q_eps["rows"][:5]
+    assert matching[0][1] == "Q4"
+    assert matching[0][2] == pytest.approx(13.02)
+    assert matching[0][3] == "NPR"
+
+    q4 = report["sections"]["q4_results"]
+    assert q4["available"] is True
+    assert any(r[0] == source and r[1] == pytest.approx(13.02) for r in q4["rows"])
+
+    missing = report["sections"]["missing_quarters"]
+    assert missing["available"] is True
+    for quarter in ("Q1", "Q2", "Q3", "Q4"):
+        row = next((r for r in missing["rows"] if r[0] == quarter), None)
+        assert row is not None, (quarter, missing["rows"])
+        assert row[1] == "present", (quarter, row)
+
+    summary = report["sections"]["missing_summary"]
+    assert summary["available"] is True
+    assert any(source in str(cell) for row in summary["rows"] for cell in row)
+
+
+def test_sector_eps_rank_is_not_expanded_once_per_requested_symbol(monkeypatch):
+    """The sector-level hook must return one ranking, not N identical rankings."""
+    rc = pytest.importorskip("megatool.report_components")
+
+    class _SectorStore:
+        def securities_meta(self):
+            return {}
+
+        def symbols(self):
+            return ["BFC", "CFCL", "CFL"]
+
+    monkeypatch.setattr(rc, "get_store", lambda: _SectorStore())
+    monkeypatch.setattr(rc, "_sector_map", lambda: {
+        "BFC": "Finance Companies",
+        "CFCL": "Finance Companies",
+        "CFL": "Finance Companies",
+    })
+    values = {"BFC": 7.84, "CFCL": 13.44, "CFL": None}
+    monkeypatch.setattr(rc, "_field_value", lambda sym, field: (
+        {"value": values[sym]} if field == "EPS" and values.get(sym) is not None else None))
+    rc._SECTOR_CACHE = None
+    report = rb.assemble_report(rb.ReportRequest(
+        components=["sector_eps_rank", "sector_overview"],
+        symbols=["BFC", "CFCL", "CFL"], sector="Finance Companies", fmt="json"))
+    rank = report["sections"]["sector_eps_rank"]
+    assert rank["available"] is True
+    symbols = [r[1] for r in rank["rows"]]
+    assert symbols == ["CFCL", "BFC"], rank["rows"]
+    assert len(symbols) == len(set(symbols)), "a sector ranking row was repeated per input symbol"
+
+    overview = report["sections"]["sector_overview"]
+    assert overview["available"] is True
+    assert [r[0] for r in overview["rows"]] == ["Finance Companies"], overview["rows"]
+    assert overview["rows"][0][1] == 3
+
+
 # ------------------------------------------------------- component semantics
 def test_source_field_names_are_mapped_to_report_names():
     """The stored keys are snake_case; the report vocabulary is human."""

@@ -22,7 +22,10 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-__all__ = ["get_store", "get_conn", "report_cache", "clear_report_cache"]
+from megatool.sectors import canonical_sector
+
+__all__ = ["get_store", "get_conn", "report_cache", "clear_report_cache",
+           "review_company_names"]
 
 
 _STORE: Any = None
@@ -196,6 +199,67 @@ def _field_value(symbol: str, field: str) -> dict[str, Any] | None:
     return max(matches, key=lambda r: r.get("period_end") or "")
 
 
+_REVIEW_NAMES_CACHE: dict[str, str] | None = None
+
+
+def review_company_names() -> dict[str, str]:
+    """Company names supplied by the stored review sources, keyed by symbol.
+
+    These files already back the sector classification. The name is used only
+    when the security master has no name; it is labelled as review-source
+    metadata rather than silently promoted to a verified field.
+    """
+    global _REVIEW_NAMES_CACHE
+    if _REVIEW_NAMES_CACHE is not None:
+        return _REVIEW_NAMES_CACHE
+    import csv
+    import json
+
+    root = Path(__file__).resolve().parents[1]
+    names: dict[str, str] = {}
+    probe = root / "data/review/source_probe_2026-10-15/yonepse_securities.json"
+    try:
+        if probe.is_file():
+            data = json.loads(probe.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                for row in data:
+                    sym = str(row.get("symbol") or "").strip().upper()
+                    name = str(row.get("companyName") or row.get("securityName") or "").strip()
+                    if sym and name:
+                        names[sym] = name
+    except (OSError, ValueError, TypeError):
+        pass
+    review = root / "data/review/securities_review_UNVERIFIED.csv"
+    try:
+        if review.is_file():
+            with review.open(encoding="utf-8", errors="replace") as fh:
+                for row in csv.DictReader(fh):
+                    sym = str(row.get("symbol") or "").strip().upper()
+                    name = str(row.get("name") or "").strip()
+                    if sym and name and sym not in names:
+                        names[sym] = name
+    except OSError:
+        pass
+    _REVIEW_NAMES_CACHE = names
+    return names
+
+
+def _company_name(symbol: str) -> str:
+    """The attested company name from the security master, or an empty string.
+
+    An empty value is rendered as an explicit em dash by callers. It is never
+    replaced with the symbol repeated as if that were a company name.
+    """
+    try:
+        meta = get_store().securities_meta([symbol]).get(str(symbol).upper(), {})
+    except Exception:  # noqa: BLE001 - a report must not fail on metadata
+        meta = {}
+    name = str(meta.get("name") or "").strip()
+    if name:
+        return name
+    return review_company_names().get(str(symbol).upper(), "")
+
+
 def _shares_outstanding(symbol: str) -> tuple[float | None, str]:
     """Shares outstanding, derived from paid-up capital and disclosed as such.
 
@@ -233,12 +297,30 @@ def compute_profile(req):
     sym = req.symbols[0] if req.symbols else None
     if not sym:
         return _unavailable("Company profile", "no symbol selected")
+    sym = sym.upper()
     recs = _fundamentals(sym)
-    rows = []
-    for r in recs:
-        rows.append([r["field"], r["value"], r["period_label"] or r["period_end"] or "—",
-                     r["source"] or "—", r["verification"] or "—"])
-    return _rows({"name": "Company profile"}, ["Field", "Value", "Period", "Source", "Verification"], rows)
+    if not recs:
+        return _unavailable("Company profile",
+                            f"no stored fundamentals for {sym}; the symbol is still valid")
+    name = _company_name(sym) or "—"
+    sector = canonical_sector(_sector_map().get(sym)) or "—"
+    # One newest value per field. Repeating every historical filing made the
+    # profile look like a wall of duplicate labels and hid which value is current.
+    latest: dict[str, dict[str, Any]] = {}
+    for rec in recs:
+        field = rec["field"]
+        prior = latest.get(field)
+        if prior is None or str(rec.get("period_end") or "") > str(prior.get("period_end") or ""):
+            latest[field] = rec
+    rows = [
+        [sym, name, sector, r["field"], r["value"], r["unit"] or "—",
+         r["period_label"] or r["period_end"] or "—", r["source"] or "—",
+         r["verification"] or "—"]
+        for _, r in sorted(latest.items(), key=lambda kv: kv[0].lower())
+    ]
+    return _rows({"name": "Company profile"},
+                 ["Symbol", "Company", "Sector", "Field", "Latest value", "Unit",
+                  "Period", "Source", "Verification"], rows)
 
 
 def compute_data_coverage(req):
@@ -280,15 +362,37 @@ def compute_missing_summary(req):
     sym = req.symbols[0] if req.symbols else None
     if not sym:
         return _unavailable("Missing-data summary", "no symbol selected")
+    sym = sym.upper()
     wanted = ["EPS", "Net worth per share", "Paid-up capital", "Shares outstanding",
               "Public float", "Revenue", "Net profit", "Dividend per share"]
-    have = {r["field"] for r in _fundamentals(sym)}
+    recs = _fundamentals(sym)
+    if not recs:
+        return _unavailable(
+            "Missing-data summary",
+            f"no stored fundamentals for {sym}. The symbol is not necessarily invalid; "
+            "the financial source simply has no stored record for it.",
+        )
+    have = {r["field"] for r in recs}
     missing = [w for w in wanted if w not in have]
+    period_keys = {
+        (str(r.get("period_end") or ""), r.get("period_label") or r.get("period_end") or "")
+        for r in recs if r.get("period_label") or r.get("period_end")
+    }
+    latest = max(period_keys)[1] if period_keys else "—"
+    reporting_periods = {r.get("period_label") for r in recs if r.get("period_label")}
+    rows: list[list[Any]] = [
+        ["Stored records", len(recs)],
+        ["Reporting periods", len(reporting_periods)],
+        ["Latest reporting period", latest],
+    ]
     if not missing:
-        return _rows({"name": "Missing-data summary"}, ["Result"],
-                     [["No missing core fields."]])
-    return _rows({"name": "Missing-data summary"}, ["Missing field", "Reason"],
-                 [[m, "not present in stored fundamentals"] for m in missing])
+        rows.append(["Missing core fields", "None of the eight core fields is absent."])
+    else:
+        for field in missing:
+            rows.append([f"Missing: {field}",
+                         "not present in stored fundamentals — not inferred or substituted"])
+    return _rows({"name": "Missing-data summary"},
+                 ["Item", "Result"], rows)
 
 
 # --------------------------------------------------------------------------- #
@@ -499,9 +603,10 @@ def compute_eps_quarterly(req):
     sym = req.symbols[0] if req.symbols else None
     if not sym:
         return _unavailable("Quarterly EPS", "no symbol selected")
-    recs = _eps_records(sym)
+    recs = [r for r in _eps_records(sym)
+            if (_period_key(r.get("period_label")) or ("ANNUAL", ""))[0] != "ANNUAL"]
     if not recs:
-        return _unavailable("Quarterly EPS", f"no EPS records for {sym}")
+        return _unavailable("Quarterly EPS", f"no quarterly EPS records for {sym}")
     rows = [[r["period_label"] or r["period_end"], r["value"], r["unit"] or "—",
              r["verification"] or "—"] for r in recs]
     return _rows({"name": "Quarterly EPS"},
@@ -786,20 +891,37 @@ def compute_fundamental_trend(req):
     if not sym:
         return _unavailable("Fundamental trend table", "no symbol selected")
     recs = _fundamentals(sym)
-    periods = sorted({(r["period_label"] or r["period_end"]) for r in recs})
-    fields = ["EPS", "Revenue", "Net profit", "Net worth per share"]
+    fields = [
+        ("EPS", "EPS"),
+        ("P/E", "P/E"),
+        ("Net profit", "Net profit"),
+        ("Net worth per share", "Net worth per share"),
+        ("Paid-up capital", "Paid-up capital"),
+    ]
+    period_keys = sorted({
+        (str(r.get("period_end") or ""), r.get("period_label") or r.get("period_end") or "")
+        for r in recs
+    })
     out = []
-    for p in periods:
-        row: list[Any] = [p]
-        for f in fields:
-            v = next((_num(r["value"]) for r in recs
-                      if r["field"] == f and (r["period_label"] or r["period_end"]) == p), None)
-            row.append(v)
+    for period_end, label in period_keys:
+        row: list[Any] = [label, period_end or "—"]
+        for field, _display in fields:
+            value = next((
+                _num(r["value"]) for r in recs
+                if r["field"] == field
+                and str(r.get("period_end") or "") == period_end
+                and (r.get("period_label") or r.get("period_end") or "") == label
+            ), None)
+            row.append(value)
         out.append(row)
     if not out:
         return _unavailable("Fundamental trend table", "no stored fundamentals")
+    # Newest filing first. Lexicographic label order puts "Annual" before
+    # "First Quarter" and can interleave fiscal years, which made the table
+    # read as if periods were missing or out of sequence.
+    out.sort(key=lambda r: (str(r[1]), str(r[0])), reverse=True)
     return _rows({"name": "Fundamental trend table"},
-                 ["Period"] + fields, out)
+                 ["Period", "Period end", *[display for _field, display in fields]], out)
 
 
 def compute_fundamental_summary(req):
@@ -842,14 +964,22 @@ def _quarter(recs, label):
 
 
 def _q_rows(sym, label):
-    recs = _fundamentals(sym)
+    """EPS-only rows for one quarter, newest period first.
+
+    The old helper selected *every* field whose period label contained the
+    quarter name and then labelled the result "EPS". That produced a table of
+    P/E, paid-up capital and net profit under an EPS heading. This version keeps
+    the section to the metric its title promises and orders the periods
+    chronologically (newest first).
+    """
+    recs = _eps_records(sym)
     q = _quarter(recs, label)
     if not q:
         return None
-    out = []
-    for r in q:
-        out.append([r["period_label"] or r["period_end"], r["value"], r["unit"] or "—"])
-    return out
+    q.sort(key=lambda r: (str(r.get("period_end") or ""), str(r.get("period_label") or "")),
+           reverse=True)
+    return [[r["period_label"] or r["period_end"], r["value"], r["unit"] or "—",
+             r["source"] or "—", r["verification"] or "—"] for r in q]
 
 
 def compute_q1_results(req):
@@ -859,7 +989,7 @@ def compute_q1_results(req):
     rows = _q_rows(sym, "q1") or _q_rows(sym, "first")
     if not rows:
         return _unavailable("Q1 results", "no Q1 record")
-    return _rows({"name": "Q1 results"}, ["Period", "EPS", "Unit"], rows)
+    return _rows({"name": "Q1 results"}, ["Period", "EPS", "Unit", "Source", "Verification"], rows)
 
 
 def compute_q2_results(req):
@@ -869,7 +999,7 @@ def compute_q2_results(req):
     rows = _q_rows(sym, "q2") or _q_rows(sym, "second")
     if not rows:
         return _unavailable("Q2 results", "no Q2 record")
-    return _rows({"name": "Q2 results"}, ["Period", "EPS", "Unit"], rows)
+    return _rows({"name": "Q2 results"}, ["Period", "EPS", "Unit", "Source", "Verification"], rows)
 
 
 def compute_q3_results(req):
@@ -879,7 +1009,7 @@ def compute_q3_results(req):
     rows = _q_rows(sym, "q3") or _q_rows(sym, "third")
     if not rows:
         return _unavailable("Q3 results", "no Q3 record")
-    return _rows({"name": "Q3 results"}, ["Period", "EPS", "Unit"], rows)
+    return _rows({"name": "Q3 results"}, ["Period", "EPS", "Unit", "Source", "Verification"], rows)
 
 
 def compute_q4_results(req):
@@ -889,36 +1019,48 @@ def compute_q4_results(req):
     rows = _q_rows(sym, "q4") or _q_rows(sym, "fourth")
     if not rows:
         return _unavailable("Q4 results", "no Q4 record")
-    return _rows({"name": "Q4 results"}, ["Period", "EPS", "Unit"], rows)
+    return _rows({"name": "Q4 results"}, ["Period", "EPS", "Unit", "Source", "Verification"], rows)
 
 
 def compute_q_eps_comparison(req):
     sym = req.symbols[0] if req.symbols else None
     if not sym:
         return _unavailable("Quarterly EPS comparison", "no symbol selected")
-    recs = _fundamentals(sym)
-    quarters = [r for r in recs if r["field"] == "EPS"
-                and any(q in (r["period_label"] or "").lower() for q in ("q1", "q2", "q3", "q4"))]
+    # ``_fundamentals`` exposes the human field name ("EPS"), while the period
+    # labels say "First Quarter…", not "Q1". The previous test for both
+    # conditions at once could never match a real record, so a symbol with
+    # complete quarterly EPS was reported as having none.
+    quarters = [o for o in _periodic_eps(sym) if o[0] != "ANNUAL"]
     if not quarters:
-        return _unavailable("Quarterly EPS comparison", "no quarterly EPS records")
+        return _unavailable("Quarterly EPS comparison",
+                            f"no quarterly EPS records for {sym}")
+    order = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4}
+    quarters.sort(key=lambda o: (o[1], order.get(o[0], 9)), reverse=True)
     return _rows({"name": "Quarterly EPS comparison"},
-                 ["Quarter", "EPS", "Unit"],
-                 [[r["period_label"], r["value"], r["unit"] or "—"] for r in quarters])
+                 ["Fiscal year", "Quarter", "EPS", "Unit", "Source period"],
+                 [[fy, q, v, "NPR", label] for q, fy, v, label in quarters])
 
 
 def compute_missing_quarters(req):
     sym = req.symbols[0] if req.symbols else None
     if not sym:
         return _unavailable("Missing-quarter report", "no symbol selected")
-    labels = " | ".join((r["period_label"] or "").lower() for r in _fundamentals(sym))
-    missing = [tag for word, tag in (("first", "Q1"), ("second", "Q2"),
-                                     ("third", "Q3"), ("fourth", "Q4"))
-               if word not in labels]
-    if not missing:
-        return _rows({"name": "Missing-quarter report"}, ["Result"],
-                     [["All four quarters present."]])
-    return _rows({"name": "Missing-quarter report"}, ["Missing quarter", "Note"],
-                 [[m, "no stored record — not inferred"] for m in missing])
+    parsed = [o for o in _periodic_eps(sym) if o[0] != "ANNUAL"]
+    if not parsed:
+        return _unavailable("Missing-quarter report",
+                            f"no stored quarterly EPS records for {sym}")
+    latest_fy = max(o[1] for o in parsed)
+    present = {o[0] for o in parsed if o[1] == latest_fy}
+    rows = [
+        [f"Q{n}",
+         "present" if f"Q{n}" in present else "no stored record — not inferred",
+         latest_fy,
+         (next((o[3] for o in parsed if o[0] == f"Q{n}" and o[1] == latest_fy), "")
+          or "—")]
+        for n in range(1, 5)
+    ]
+    return _rows({"name": "Missing-quarter report"},
+                 ["Quarter", "Status", "Fiscal year", "Source period"], rows)
 
 
 def compute_comparability(req):
@@ -926,12 +1068,33 @@ def compute_comparability(req):
     if not sym:
         return _unavailable("Comparability warnings", "no symbol selected")
     recs = _fundamentals(sym)
-    notes = {r.get("notes") for r in recs if r.get("notes")}
+    notes = {str(r.get("notes") or "").strip() for r in recs if r.get("notes")}
+    notes.discard("")
     if not notes:
         return _rows({"name": "Restatement and comparability warnings"}, ["Result"],
-                     [["No restatements recorded."]])
-    return _rows({"name": "Restatement and comparability warnings"}, ["Note"],
-                 [[n] for n in sorted(notes)])
+                     [["No restatements or duplicate-filing notes recorded."]])
+    conflicts = [n for n in notes if "conflict" in n.lower()]
+    duplicates = [n for n in notes if "duplicate" in n.lower()]
+    other = [n for n in notes if n not in conflicts and n not in duplicates]
+    rows: list[list[Any]] = []
+    if conflicts:
+        rows.append(["Conflicting duplicate filings resolved", len(conflicts),
+                     "The ingest retained the latest filing under period supremacy; "
+                     "the conflict is disclosed rather than averaged."])
+        rows.append(["Example conflict", 1, conflicts[-1][:220] + ("…" if len(conflicts[-1]) > 220 else "")])
+    if duplicates:
+        rows.append(["Duplicate filings collapsed", len(duplicates),
+                     "Values were identical or an older duplicate was superseded; "
+                     "no value was summed or averaged."])
+        rows.append(["Example duplicate", 1, duplicates[-1][:220] + ("…" if len(duplicates[-1]) > 220 else "")])
+    if other:
+        rows.append(["Other provenance notes", len(other),
+                     "Non-comparability notes retained from the source."])
+        rows.append(["Example note", 1, other[-1][:220] + ("…" if len(other[-1]) > 220 else "")])
+    rows.append(["Distinct note records", len(notes),
+                 "Counted from stored records. Full ingestion provenance remains in the data export."])
+    return _rows({"name": "Restatement and comparability warnings"},
+                 ["Category", "Count", "Meaning / example"], rows)
 
 
 # --------------------------------------------------------------------------- #
@@ -1075,6 +1238,16 @@ def _sector_map() -> dict[str, str]:
 
     root = Path(__file__).resolve().parents[1]
     mapping: dict[str, str] = {}
+    # The security master is the same source /api/sectors uses, so prefer it.
+    # The review CSVs remain a fallback for a build where the master has not
+    # been populated; they are not allowed to disagree with it.
+    try:
+        for sym, meta in get_store().securities_meta().items():
+            sector = canonical_sector(meta.get("sector"))
+            if sym and sector:
+                mapping[str(sym).upper()] = sector
+    except Exception:  # noqa: BLE001 - report still works from the CSVs
+        pass
     for rel, _label in SECTOR_SOURCES:
         path = root / rel
         if not path.is_file():
@@ -1082,7 +1255,7 @@ def _sector_map() -> dict[str, str]:
         with path.open(encoding="utf-8", errors="replace") as fh:
             for row in csv.DictReader(fh):
                 sym = (row.get("symbol") or "").strip().upper()
-                sector = (row.get("sector") or "").strip()
+                sector = canonical_sector(row.get("sector"))
                 if sym and sector and sym not in mapping:
                     mapping[sym] = sector
     _SECTOR_CACHE = mapping
@@ -1094,13 +1267,32 @@ def compute_sector_overview(req):
     if not sm:
         return _unavailable("Sector overview", "no sector classifications found")
     counts: dict[str, int] = defaultdict(int)
-    for s in sm.values():
-        counts[s] += 1
+    # Count only companies with a stored price series. A reference CSV can
+    # contain a historical or unlisted symbol, and counting those as current
+    # sector members would overstate coverage in the exported overview.
+    try:
+        stored = set(get_store().symbols())
+    except Exception:  # noqa: BLE001
+        stored = set(sm)
+    for sym, sec in sm.items():
+        if sym in stored:
+            counts[sec] += 1
     used = ", ".join(sector_sources_used()) or "none"
-    return _rows({"name": "Sector overview"}, ["Sector", "Companies", "Basis"],
+    target = canonical_sector(req.sector) if req.sector else None
+    if target:
+        # A sector-scoped export must not leak the counts of every other sector.
+        scoped = sorted(((k, counts.get(k, 0)) for k in counts
+                         if canonical_sector(k) == target), key=lambda x: -x[1])
+        return _rows({"name": "Sector overview"},
+                     ["Sector", "Companies with stored prices", "Basis"],
+                     [[k, v, "selected sector classification"] for k, v in scoped]
+                     or [[target, 0, "selected sector classification"]])
+    total = sum(counts.values())
+    return _rows({"name": "Sector overview"},
+                 ["Sector", "Companies with stored prices", "Basis"],
                  [[k, v, "reference classification"] 
                   for k, v in sorted(counts.items(), key=lambda x: -x[1])]
-                 + [["All sectors", len(sm), f"reference files: {used}"]])
+                 + [["All sectors", total, f"reference files: {used}"]])
 
 
 def compute_sector_table(req):
@@ -1108,38 +1300,44 @@ def compute_sector_table(req):
     sector = req.sector
     if not sector:
         return _unavailable("Sector company table", "no sector selected")
-    syms = sorted(s for s, sec in sm.items() if sec.lower() == sector.lower())
+    target = canonical_sector(sector)
+    syms = sorted(s for s, sec in sm.items() if sec.lower() == target.lower())
     if not syms:
-        return _unavailable("Sector company table", f"no companies in sector {sector!r}")
+        return _unavailable("Sector company table",
+                            f"no companies classified in sector {sector!r}")
     out = []
     for sym in syms:
-        recs = _fundamentals(sym)
-        eps = next((_num(r["value"]) for r in recs if r["field"] == "EPS"), None)
+        eps_rec = _field_value(sym, "EPS")
+        eps = _num(eps_rec["value"]) if eps_rec else None
         dates, closes = _prices(sym)
-        out.append([sym, sector, eps if eps is not None else "—",
+        out.append([sym, _company_name(sym) or "—", target,
+                    eps if eps is not None else "—",
                     round(closes[-1], 2) if closes else "—",
+                    _iso(dates[-1]) if dates else "—",
                     len(dates)])
     return _rows({"name": "Sector company table"},
-                 ["Symbol", "Sector", "EPS", "Last close", "Sessions"], out)
+                 ["Symbol", "Company", "Sector", "Latest EPS (NPR)",
+                  "Last close (NPR)", "Price date", "Sessions"], out)
 
 
 def compute_sector_eps_rank(req):
     sm = _sector_map()
-    sector = req.sector or (req.symbols[0] and sm.get(req.symbols[0].upper()))
+    sector = canonical_sector(req.sector)
     if not sector:
         return _unavailable("EPS ranking", "no sector resolvable")
     rows = []
     for sym, sec in sm.items():
         if sec.lower() != sector.lower():
             continue
-        eps = next((_num(r["value"]) for r in _fundamentals(sym) if r["field"] == "EPS"), None)
+        rec = _field_value(sym, "EPS")
+        eps = _num(rec["value"]) if rec else None
         if eps is not None:
-            rows.append([sym, eps])
-    rows.sort(key=lambda r: -(r[1] or 0))
+            rows.append([sym, _company_name(sym) or "—", eps])
+    rows.sort(key=lambda r: -(r[2] or 0))
     if not rows:
         return _unavailable("EPS ranking", "no company in the sector has a stored EPS")
-    return _rows({"name": "EPS ranking"}, ["Rank", "Symbol", "EPS"],
-                 [[i, s, e] for i, (s, e) in enumerate(rows, 1)])
+    return _rows({"name": "EPS ranking"}, ["Rank", "Symbol", "Company", "EPS"],
+                 [[i, s, n, e] for i, (s, n, e) in enumerate(rows, 1)])
 
 
 # --------------------------------------------------------------------------- #
@@ -3054,23 +3252,25 @@ def compute_sector_comparison(req):
         return missing
     sm = _sector_map()
     rows = []
-    for sym in syms:
+    for sym in sorted(syms):
         dates, closes = _prices(sym)
         pe = _field_value(sym, "P/E")
         nw = _field_value(sym, "Net worth per share")
         eps = _field_value(sym, "EPS")
         shares, _basis = _shares_outstanding(sym)
         rows.append([
-            sym, sm.get(sym, "Unclassified"),
-            round(closes[-1], 2) if closes else "",
-            _num(pe["value"]) if pe else "",
-            _num(nw["value"]) if nw else "",
-            _num(eps["value"]) if eps else "",
-            round(closes[-1] * shares, 0) if closes and shares else "",
+            sym, _company_name(sym) or "—", sm.get(sym, "Unclassified"),
+            round(closes[-1], 2) if closes else "—",
+            _iso(dates[-1]) if dates else "—",
+            round(_num(pe["value"]), 2) if pe and _num(pe["value"]) is not None else "—",
+            round(_num(nw["value"]), 2) if nw and _num(nw["value"]) is not None else "—",
+            round(_num(eps["value"]), 2) if eps and _num(eps["value"]) is not None else "—",
+            round(closes[-1] * shares, 2) if closes and shares else "—",
         ])
     return _rows({"name": "Company comparison table"},
-                 ["Symbol", "Sector", "Last close", "P/E",
-                  "Net worth per share", "EPS", "Market cap"], rows)
+                 ["Symbol", "Company", "Sector", "Last close (NPR)", "Price date",
+                  "P/E (x)", "Net worth/share (NPR)", "EPS (NPR)",
+                  "Market cap (NPR)"], rows)
 
 
 def compute_sector_distribution(req):

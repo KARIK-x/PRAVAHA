@@ -1196,6 +1196,8 @@ tbody tr:hover td, tr.click:hover td { background: var(--pravaha-hover); }
    the panel with its header pinned. A table shorter than the cap is unaffected
    (no scrollbar appears), so this only changes tables that actually need it. */
 .tablewrap { max-height: 72vh; overflow-y: auto; }
+/* Report previews are documents, not single tables: let the page scroll them. */
+#rb-results { max-height: none; overflow: visible; }
 .tablewrap thead th {
   position: sticky; top: 0; z-index: 2;
   background: var(--pravaha-panel);
@@ -1383,3 +1385,93 @@ button:active, .ctb-btn:active { transform: translateY(1px); }
 .viz-key-action:hover { color: var(--txt); }
 /* Sector Explorer row highlighted after a turnover-chart click-through. */
 tr.sector-focus { background: rgba(0,217,232,.14); box-shadow: inset 2px 0 0 var(--accent); }
+
+/* ======================================================== BABA shared UI ===
+   The report and autocomplete components are shared by every BABA tab. The
+   styles below keep long company names, large NPR values and missing values
+   readable without turning the whole page into one wide table. */
+.baba-output { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.report-hero { background: linear-gradient(180deg, var(--bg2), var(--bg3));
+  border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+.report-hero h2 { margin: 0 0 4px; font-size: 20px; letter-spacing: -0.01em; }
+.report-subtitle { margin: 0 0 8px; color: var(--txt); font-size: 13px; }
+.report-hero .hint { margin: 10px 0 0; }
+.report-section, .card.baba-sector-card { background: var(--bg2); border: 1px solid var(--line);
+  border-radius: 12px; padding: 14px 16px; min-width: 0; }
+.report-section h3 { margin: 0 0 8px; font-size: 15px; }
+.report-section .tablewrap, .report-company-table { margin-top: 8px; }
+.report-list { margin: 6px 0 0 18px; padding: 0; }
+.report-list li { margin: 3px 0; }
+.report-symbol { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.report-symbol-head { display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; }
+.report-symbol-head h3 { margin: 0; font-size: 17px; }
+.report-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.report-missing { border: 1px dashed var(--line); border-radius: 8px; padding: 9px 11px;
+  color: var(--muted); font-size: 12px; }
+.report-missing.ok { border-style: solid; color: var(--txt); }
+.report-missing .missing { color: var(--txt); font-weight: 700; }
+.report-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px; margin: 10px 0; }
+.report-metric { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+  background: var(--bg3); min-width: 0; }
+.report-metric .k { color: var(--muted); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.04em; }
+.report-metric .v { font-size: 20px; font-weight: 700; margin: 2px 0; }
+.report-metric .hint, .report-metric .tiny { font-size: 11px; margin: 0; }
+.report-metric .tiny { color: var(--muted); margin-top: 2px; }
+.report-coverage { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 8px; }
+.report-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.report-toolbar .hint { margin: 0; }
+.report-footer { display: flex; gap: 16px; flex-wrap: wrap; border-top: 1px solid var(--line);
+  padding-top: 10px; color: var(--muted); font-size: 11px; }
+.report-unavailable, .report-more { border: 1px dashed var(--line); border-radius: 10px;
+  padding: 10px 12px; }
+.report-unavailable summary, .report-more summary { cursor: pointer; color: var(--muted);
+  font-size: 12px; }
+.report-section h4 { margin: 12px 0 6px; }
+.baba-output table, .report-section table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.baba-output th, .baba-output td, .report-section th, .report-section td {
+  padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.baba-output th, .report-section th { color: var(--muted); text-align: left; font-weight: 600;
+  white-space: nowrap; }
+.baba-output th.num, .report-section th.num,
+.baba-output td.num, .report-section td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.baba-output td.wrap, .report-section td.wrap { white-space: normal; overflow-wrap: anywhere;
+  min-width: 150px; max-width: 380px; }
+.baba-output td.missing, .report-section td.missing { text-align: center; }
+.baba-output .missing, .report-section .missing { color: var(--muted); font-weight: 600; }
+.baba-output tbody tr:hover, .report-section tbody tr:hover { background: rgba(255,255,255,.025); }
+.baba-output .tablewrap, .report-section .tablewrap { overflow: auto; max-width: 100%; }
+.tiny { font-size: 11px; color: var(--muted); }
+.baba-sector-card { margin-top: 10px; }
+.baba-sector-card h2 { margin: 0 0 8px; font-size: 16px; }
+
+/* Symbol autocomplete: a fixed, viewport-clamped list, so it is never clipped
+   by a card's overflow or pushed off-screen near the bottom of the page. */
+.sym-ac { position: fixed; z-index: 12000; background: var(--bg2); border: 1px solid var(--line);
+  border-radius: 10px; box-shadow: 0 14px 40px rgba(0,0,0,.45); overflow-y: auto;
+  overscroll-behavior: contain; }
+.sym-ac[hidden] { display: none !important; }
+.sym-ac-item { display: grid; grid-template-columns: minmax(72px, auto) 1fr auto;
+  gap: 2px 10px; padding: 8px 10px; cursor: pointer; border-bottom: 1px solid var(--line); }
+.sym-ac-item:last-child { border-bottom: 0; }
+.sym-ac-item.active, .sym-ac-item:hover { background: var(--bg3); }
+.sym-code { font-weight: 700; color: var(--txt); font-variant-numeric: tabular-nums; }
+.sym-name { color: var(--txt); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sym-sector { color: var(--muted); font-size: 11px; align-self: center; }
+.sym-flags { grid-column: 1 / -1; display: flex; gap: 3px; flex-wrap: wrap; margin-top: 2px; }
+.sym-flag { font-size: 9px; border: 1px solid var(--line); border-radius: 999px;
+  padding: 1px 5px; color: var(--muted); }
+.sym-flag.ok { color: var(--txt); border-color: var(--accent, var(--line)); }
+.sym-flag.warn { color: var(--caution, var(--txt)); border-style: dashed; }
+.sym-ac-empty { padding: 12px; color: var(--muted); font-size: 12px; }
+.sym-picked { display: block; margin-top: 3px; font-size: 10px; color: var(--muted);
+  max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.controls label.wide { flex: 1 1 320px; }
+@media (max-width: 720px) {
+  .report-metrics { grid-template-columns: 1fr; }
+  .report-symbol-head { flex-direction: column; }
+  .sym-ac-item { grid-template-columns: minmax(58px, auto) 1fr; }
+  .sym-sector { grid-column: 1 / -1; }
+}

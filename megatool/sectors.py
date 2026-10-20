@@ -40,11 +40,53 @@ from megatool.market_store import is_valid_nepse_symbol
 
 __all__ = [
     "REQUIRED_COLUMNS",
+    "SECTOR_ALIASES",
     "SectorError",
+    "canonical_sector",
     "classify_sectors",
     "import_sectors",
     "read_sectors_csv",
 ]
+
+#: Source files use both singular and plural spellings for the same industry
+#: (``Commercial Bank`` and ``Commercial Banks``), and a few legacy labels that
+#: predate the canonical names. They describe the same classification, so report
+#: and sector views group them under one label. This is a display/aggregation
+#: alias only: the stored rows are never rewritten.
+SECTOR_ALIASES: dict[str, str] = {
+    "commercial bank": "Commercial Banks",
+    "commercial banks": "Commercial Banks",
+    "development bank": "Development Banks",
+    "development banks": "Development Banks",
+    "finance": "Finance Companies",
+    "finance companies": "Finance Companies",
+    "hotel & tourism": "Hotels",
+    "hotels": "Hotels",
+    "hydro power": "Hydropower",
+    "hydropower": "Hydropower",
+    "investment": "Investment Companies",
+    "investment companies": "Investment Companies",
+    "life insurance": "Life Insurance",
+    "microfinance": "Microfinance",
+    "manufacturing and processing": "Manufacturing and Processing",
+    "mutual fund": "Mutual Fund",
+    "non-life insurance": "Non-Life Insurance",
+    "others": "Others",
+    "trading": "Trading",
+}
+
+
+def canonical_sector(name: str | None) -> str:
+    """Return the canonical display name for a stored sector, never a guess.
+
+    Unknown labels are preserved verbatim (trimmed). Aliasing only merges
+    spellings that unambiguously name the same classification; it does not
+    invent a sector for an unclassified company.
+    """
+    clean = (name or "").strip()
+    if not clean:
+        return ""
+    return SECTOR_ALIASES.get(clean.lower(), clean)
 
 #: Columns that must be present in a sector CSV.
 REQUIRED_COLUMNS = ("symbol", "sector")

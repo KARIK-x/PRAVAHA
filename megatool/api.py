@@ -98,6 +98,7 @@ from megatool.fundamentals import (
     compute_ttm_eps,
     historical_pe,
 )
+from megatool.sectors import canonical_sector
 from megatool.journal import (
     JournalError,
     journal_stats,
@@ -2797,6 +2798,85 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
                 "Finance Companies": 11, "Investment Companies": 6, "Hotels": 3,
                 "Manufacturing and Processing": 2, "Others": 3,
             },
+        }
+
+    @app.get("/api/baba/symbols")
+    def baba_symbols() -> dict[str, Any]:
+        """The authoritative symbol catalogue used by BABA autocomplete.
+
+        A symbol is present when it has stored bars, security-master metadata,
+        or a fundamental record. Presence is deliberately independent of one
+        dataset: a valid company with no quarterly filing must remain
+        selectable, while each dataset flag tells the UI what it can load.
+        """
+        from megatool.report_components import review_company_names
+
+        store = get_store()
+        fallback_names = review_company_names()
+        fundamentals: dict[str, dict[str, Any]] = {}
+        fundamental_error = None
+        try:
+            db = PATHS.processed / "megatool_state.sqlite"
+            with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as conn:
+                rows = conn.execute(
+                    """SELECT symbol, COUNT(*), MAX(period_end),
+                              MAX(CASE WHEN LOWER(COALESCE(period_label, ''))
+                                        LIKE '%quarter%' THEN 1 ELSE 0 END)
+                       FROM fundamentals GROUP BY symbol"""
+                ).fetchall()
+                for symbol, count, latest, has_q in rows:
+                    fundamentals[str(symbol).upper()] = {
+                        "count": int(count or 0),
+                        "latest": str(latest)[:10] if latest else None,
+                        "quarterly": bool(has_q),
+                    }
+        except Exception as exc:  # noqa: BLE001 - the catalogue still works without it
+            fundamental_error = str(exc)
+
+        bar_counts: dict[str, tuple[int, str | None]] = {}
+        try:
+            for symbol, count, _first_date, last_date in store.query_rows(
+                """SELECT symbol, COUNT(*), MIN(trading_date), MAX(trading_date)
+                   FROM price_bars GROUP BY symbol"""
+            ):
+                bar_counts[str(symbol).upper()] = (
+                    int(count or 0),
+                    str(last_date)[:10] if last_date else None,
+                )
+        except Exception:  # noqa: BLE001 - metadata-only catalogue is still useful
+            pass
+
+        try:
+            meta = store.securities_meta()
+        except Exception:  # noqa: BLE001
+            meta = {}
+
+        names = set(bar_counts) | set(fundamentals) | set(meta)
+        out = []
+        for symbol in sorted(names):
+            info = meta.get(symbol, {})
+            f = fundamentals.get(symbol, {})
+            bars, last_date = bar_counts.get(symbol, (0, None))
+            out.append({
+                "symbol": symbol,
+                "name": info.get("name") or fallback_names.get(symbol) or "",
+                "sector": canonical_sector(info.get("sector")) or "",
+                "instrument_type": info.get("instrument_type") or "",
+                "status": info.get("status") or "UNKNOWN",
+                "has_prices": bars > 0,
+                "bars": bars,
+                "last_price_date": last_date,
+                "has_fundamentals": bool(f),
+                "fundamental_count": int(f.get("count") or 0),
+                "latest_period": f.get("latest"),
+                "has_quarterly": bool(f.get("quarterly")),
+            })
+        return {
+            "count": len(out),
+            "symbols": out,
+            "source": "price bars + security master + stored fundamentals; "
+                      "company names fall back to the labelled review sources when the master has none",
+            "fundamental_error": fundamental_error,
         }
 
     def _baba_request(body: dict[str, Any], *, allow_private: bool = True) -> rb.ReportRequest:
@@ -6159,19 +6239,24 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
                     pass
             # Now read the sector map.
             sec_rows = store.execute("SELECT symbol, sector, source FROM security_master WHERE sector IS NOT NULL AND sector != ''").fetchall()
+            # Group by canonical sector. The reference files spell several
+            # industries both singular and plural; merging only those known
+            # aliases prevents one sector appearing twice with two counts.
             sector_map = {}
             for r in sec_rows:
-                sector_map[r[0]] = r[1]
-            # Group by sector.
+                sector_map[r[0]] = canonical_sector(r[1])
             by_sector: dict[str, list[str]] = {}
             for sym, sec in sector_map.items():
                 by_sector.setdefault(sec, []).append(sym)
+            for members in by_sector.values():
+                members.sort()
             return {
                 "sector_map": sector_map,
                 "by_sector": by_sector,
                 "total_classified": len(sector_map),
                 "total_sectors": len(by_sector),
-                "source": "yonepse/securities.json + binayabaral/securities.json (review CSVs)",
+                "source": "security_master (populated from yonepse + binayabaral review sources)",
+                "aliases_applied": True,
             }
         except Exception as exc:
             return {"sector_map": {}, "by_sector": {}, "total_classified": 0, "total_sectors": 0, "error": str(exc)}
