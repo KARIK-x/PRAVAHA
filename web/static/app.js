@@ -18898,6 +18898,7 @@ async function loadSectorOverview() {
   }
 
   const metric = metricSel ? metricSel.value : "index";
+  const mode = ($("#so-mode") && $("#so-mode").value) || "index";
   const chartEl = $("#so-chart");
   let chart = null;
   let tooltip = null;
@@ -18930,14 +18931,23 @@ async function loadSectorOverview() {
       else daily = sec.index;
       if (!daily) return;
       const agg = (metric === "turnover" || metric === "volume") ? "sum" : "last";
-      const vals = groupSeries(daily, agg);
-      const useVals = metric === "index" ? vals : vals;
-      const pts = groupedDates.map((k, j) => ({ time: k, value: useVals[j] })).filter((p) => p.value != null);
+      let vals = groupSeries(daily, agg);
+      if (mode === "pct" || mode === "normalized") {
+        const first = vals.find((v) => v != null);
+        if (first) vals = vals.map((v) => (v == null ? null : (mode === "normalized" ? (v / first) * 100 : ((v / first) - 1) * 100)));
+      }
+      if (mode === "relative") {
+        const first = vals.find((v) => v != null);
+        const nepseVals = groupSeries(data.market.nepse.map((v) => v), "last");
+        const nepseFirst = nepseVals.find((v) => v != null);
+        if (first && nepseFirst) vals = vals.map((v, j) => (v == null || nepseVals[j] == null ? null : (((v / first) / (nepseVals[j] / nepseFirst)) - 1) * 100));
+      }
+      const pts = groupedDates.map((k, j) => ({ time: k, value: vals[j] })).filter((p) => p.value != null);
       if (!pts.length) return;
       const series = chart.addLineSeries({ color: palette[i % palette.length], lineWidth: 2, title: sec.sector });
     window.__soAdded = (window.__soAdded||0)+1;
       series.setData(pts);
-      seriesMap.set(sec.sector, { series, values: useVals, dates: groupedDates });
+      seriesMap.set(sec.sector, { series, values: vals, dates: groupedDates });
     });
     // Companies
     let colorIdx = (data.sectors || []).length;
@@ -18953,7 +18963,11 @@ async function loadSectorOverview() {
         return b.close;
       });
       const agg = (metric === "turnover" || metric === "volume") ? "sum" : "last";
-      const vals = groupSeries(daily, agg);
+      let vals = groupSeries(daily, agg);
+      if (mode === "pct" || mode === "normalized") {
+        const first = vals.find((v) => v != null);
+        if (first) vals = vals.map((v) => (v == null ? null : (mode === "normalized" ? (v / first) * 100 : ((v / first) - 1) * 100)));
+      }
       const pts = groupedDates.map((k, j) => ({ time: k, value: vals[j] })).filter((p) => p.value != null);
       if (!pts.length) return;
       const series = chart.addLineSeries({ color: palette[colorIdx % palette.length], lineWidth: 2, title: sym });
@@ -18980,7 +18994,7 @@ async function loadSectorOverview() {
       }
     }
     const titleEl = $("#so-chart-title");
-    if (titleEl) titleEl.textContent = `${metric === "turnover" ? "Turnover (NPR)" : metric === "volume" ? "Share volume" : "Sector index (rebased 100)"} · ${groupMode} · ${data.start_date} → ${data.end_date} · ${seriesMap.size} series`;
+    if (titleEl) titleEl.textContent = `${metric === "turnover" ? "Turnover (NPR)" : metric === "volume" ? "Share volume" : "Sector index"} · ${mode} · ${groupMode} · ${data.start_date} → ${data.end_date} · ${seriesMap.size} series`;
     const legendEl = $("#so-legend");
     if (legendEl) {
       legendEl.innerHTML = Array.from(seriesMap.keys()).map((name, i) =>
@@ -19063,6 +19077,36 @@ async function loadSectorOverview() {
     chart.timeScale().fitContent();
   }
 
+  // Sector performance matrix: daily percentage changes.
+  const matrixEl = $("#so-matrix");
+  if (matrixEl) {
+    const dailyChanges = (data.sectors || []).map((sec) => {
+      const idx = sec.index || [];
+      const changes = idx.map((v, i) => (i === 0 || idx[i - 1] == null || v == null ? null : ((v / idx[i - 1]) - 1) * 100));
+      const periodReturn = idx.length >= 2 && idx[0] && idx[idx.length - 1] != null ? ((idx[idx.length - 1] / idx[0]) - 1) * 100 : sec.return_period_pct;
+      return { sector: sec.sector, changes, periodReturn, turnover: sec.latest_turnover, volume: sec.latest_volume };
+    });
+    let html = `<div class="tablewrap"><table><thead><tr><th>Sector</th>` +
+      data.dates.map((d) => `<th>${esc(d.slice(5))}</th>`).join("") +
+      `<th>Period return %</th><th>Turnover</th></tr></thead><tbody>`;
+    dailyChanges.forEach((row) => {
+      html += `<tr><td><b>${esc(row.sector)}</b></td>` +
+        row.changes.map((v) => {
+          if (v == null) return `<td>—</td>`;
+          const color = v >= 0 ? "var(--up)" : "var(--down)";
+          return `<td style="color:${color};font-weight:600">${fmtNum(v, 2)}%</td>`;
+        }).join("") +
+        `<td style="font-weight:700">${fmtNum(row.periodReturn, 2)}%</td><td>${fmtNum(row.turnover)}</td></tr>`;
+    });
+    html += `</tbody></table></div>`;
+    // Market total row
+    const nepse = data.market.nepse || [];
+    const nepseChanges = nepse.map((v, i) => (i === 0 || nepse[i - 1] == null || v == null ? null : ((v / nepse[i - 1]) - 1) * 100));
+    const nepsePeriod = nepse.length >= 2 && nepse[0] && nepse[nepse.length - 1] != null ? ((nepse[nepse.length - 1] / nepse[0]) - 1) * 100 : data.market.nepse_return_period_pct;
+    html += `<div class="report-missing ok" style="margin-top:8px">Market total row: NEPSE ${fmtNum(nepse[nepse.length-1])} · period return ${fmtNum(nepsePeriod,2)}% · total turnover ${fmtNum(data.market.latest_total_turnover)} NPR · ${data.data_quality.observations} sessions.</div>`;
+    matrixEl.innerHTML = html;
+  }
+
   // Insights
   const ins = $("#so-insights");
   if (ins) {
@@ -19090,6 +19134,7 @@ async function loadSectorOverview() {
     refresh.addEventListener("click", () => loadSectorOverview());
     if ($("#so-period")) $("#so-period").addEventListener("change", () => loadSectorOverview());
     if ($("#so-metric")) $("#so-metric").addEventListener("change", () => loadSectorOverview());
+    if ($("#so-mode")) $("#so-mode").addEventListener("change", () => loadSectorOverview());
     if (groupSel) groupSel.addEventListener("change", () => loadSectorOverview());
   }
 }

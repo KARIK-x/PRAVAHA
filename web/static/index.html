@@ -355,6 +355,14 @@
               <option value="return">Period return (%)</option>
             </select>
           </label>
+          <label>Chart mode
+            <select id="so-mode">
+              <option value="index">Index level</option>
+              <option value="pct">Percentage change</option>
+              <option value="normalized">Normalized (base 100)</option>
+              <option value="relative">Relative vs NEPSE</option>
+            </select>
+          </label>
           <label>Grouping
             <select id="so-group">
               <option value="daily">Daily</option>
@@ -386,6 +394,8 @@
         <div id="so-breadth" class="chartbox" style="height:220px;"></div>
         <h3>Heatmap snapshot</h3>
         <div id="so-heatmap" class="tablewrap"></div>
+        <h3>Sector performance matrix</h3>
+        <div id="so-matrix" class="tablewrap"></div>
         <h3>Automated insights</h3>
         <div id="so-insights"></div>
         <p class="hint" id="so-quality"></p>
@@ -2547,7 +2557,7 @@
 <!-- Central feature registry: one source of truth for universal search,
      navigation and command suggestions. Must load before app.js. -->
 <script src="/features.js?v=feat1"></script>
-<script src="/app.js?v=wb100"></script>
+<script src="/app.js?v=wb102"></script>
 <script src="/kronos_ui.js?v=wb2"></script>
 </body>
 </html>
