@@ -6345,6 +6345,29 @@ def create_app(store: MarketStore | None = None) -> FastAPI:
         except Exception:  # noqa: BLE001
             pass
 
+        # Drawing tools available in the chart workspace.
+        for tool_id, label, hint in [
+            ("trendline", "Trendline", "Straight line between two pivots"),
+            ("ray", "Ray", "Extends right through the second anchor"),
+            ("extended", "Extended line", "Infinite line in both directions"),
+            ("channel", "Parallel channel", "Parallel channel between anchors"),
+            ("rectangle", "Rectangle", "Opposite-corner rectangle"),
+            ("arrow", "Arrow", "Line with arrow head at anchor 2"),
+            ("fib_retracement", "Fibonacci retracement", "Fibonacci retracement levels"),
+            ("fib_extension", "Fibonacci extension", "Fibonacci extension levels"),
+            ("measure", "Measure", "Price, percentage and bar difference"),
+            ("xabcd", "XABCD", "Harmonic XABCD pattern"),
+            ("abcd", "ABCD", "ABCD harmonic pattern"),
+            ("three_drives", "Three drives", "Three-drives pattern"),
+            ("elliott_impulse", "Elliott impulse", "Elliott impulse wave"),
+            ("elliott_abc", "Elliott correction", "Elliott ABC correction"),
+            ("fib_arc", "Fibonacci arcs", "Concentric Fibonacci arcs"),
+            ("fib_spiral", "Fibonacci spiral", "Golden spiral approximation"),
+            ("hns", "Head & Shoulders (manual)", "Manual head and shoulders annotation"),
+            ("text", "Text note", "Editable text annotation"),
+        ]:
+            add("drawing", label, hint, "drawing tools", {"type": "tool", "tool": tool_id})
+
         # Research topics.
         try:
             topics = research_topics()
