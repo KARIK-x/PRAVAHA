@@ -351,13 +351,30 @@
             <select id="so-metric">
               <option value="index">Sector index (rebased 100)</option>
               <option value="turnover">Turnover (NPR)</option>
+              <option value="volume">Share volume</option>
               <option value="return">Period return (%)</option>
+            </select>
+          </label>
+          <label>Grouping
+            <select id="so-group">
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+              <option value="quarterly">Quarterly</option>
             </select>
           </label>
           <button class="ctb-btn" id="so-refresh">Refresh</button>
           <span class="hint" id="so-status"></span>
         </div>
         <div id="so-snapshot" class="controls" style="gap:8px;flex-wrap:wrap;"></div>
+        <div class="controls">
+          <label style="flex:1;min-width:260px">Sectors
+            <div id="so-sector-picks" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;"></div>
+          </label>
+          <label style="flex:1;min-width:260px">Companies (comma separated)
+            <input id="so-companies" placeholder="NABIL, ADBL, CHCL" />
+          </label>
+        </div>
         <div id="so-chart" class="chartbox big" style="height:360px;"></div>
         <h3>Sector rankings</h3>
         <div id="so-rankings" class="tablewrap"></div>
@@ -2528,7 +2545,7 @@
 <!-- Central feature registry: one source of truth for universal search,
      navigation and command suggestions. Must load before app.js. -->
 <script src="/features.js?v=feat1"></script>
-<script src="/app.js?v=wb98"></script>
+<script src="/app.js?v=wb99"></script>
 <script src="/kronos_ui.js?v=wb2"></script>
 </body>
 </html>

@@ -18788,8 +18788,11 @@ async function ssRunStrategy() {
 
 /* ============================================================ Sector Overview */
 async function loadSectorOverview() {
-  const period = $("#so-period") ? $("#so-period").value : "20";
+  const periodSel = $("#so-period");
+  const metricSel = $("#so-metric");
+  const groupSel = $("#so-group");
   const status = $("#so-status");
+  const period = periodSel ? periodSel.value : "20";
   if (status) status.textContent = "Loading sector analytics…";
   let data;
   try {
@@ -18805,66 +18808,199 @@ async function loadSectorOverview() {
     if (status) status.textContent = "No data";
     return;
   }
-  if (status) status.textContent = `${data.period_sessions} sessions · ${data.start_date} → ${data.end_date}`;
 
-  // Snapshot cards
+  // Selected sectors/companies.
+  const selectedSectors = new Set(Array.from(document.querySelectorAll("#so-sector-picks input:checked")).map((x) => x.value));
+  if (!selectedSectors.size) data.sectors.forEach((s) => selectedSectors.add(s.sector));
+  const companyRaw = ($("#so-companies") && $("#so-companies").value || "").trim();
+  const selectedCompanies = companyRaw ? companyRaw.split(/[,\s]+/).map((x) => x.toUpperCase()).filter(Boolean) : [];
+
+  // Fetch company bars for selected companies.
+  const companySeries = {};
+  await Promise.all(selectedCompanies.map(async (sym) => {
+    try {
+      const d = await api(`/api/bars/${encodeURIComponent(sym)}?limit=${period}`);
+      const bars = d.bars || d.data || [];
+      companySeries[sym] = bars.map((b) => ({ date: b.date || b.trading_date, close: b.close, turnover: b.turnover, volume: b.volume }));
+    } catch (e) {
+      companySeries[sym] = [];
+    }
+  }));
+
+  if (status) status.textContent = `${data.period_sessions} trading sessions · ${data.start_date} → ${data.end_date} · ${data.data_quality.sector_count} sectors · ${data.data_quality.company_count} companies`;
+
+  // Snapshot cards with explicit labels.
   const snap = $("#so-snapshot");
   if (snap) {
     const m = data.market || {};
+    const breadth = (m.breadth && m.breadth[m.breadth.length - 1]) || {};
     const best = data.sectors.length ? data.sectors.reduce((a, b) => ((a.return_period_pct || -999) > (b.return_period_pct || -999) ? a : b)) : null;
     const worst = data.sectors.length ? data.sectors.reduce((a, b) => ((a.return_period_pct || 999) < (b.return_period_pct || 999) ? a : b)) : null;
     const cards = [
-      ["NEPSE", fmtNum(m.nepse && m.nepse[m.nepse.length - 1]), (m.nepse_return_period_pct != null ? `${m.nepse_return_period_pct}%` : "—")],
-      ["Total turnover", fmtNum(m.latest_total_turnover), "NPR"],
-      ["Advancing", (m.breadth && m.breadth[m.breadth.length - 1]) ? m.breadth[m.breadth.length - 1].advancing : "—", "companies"],
-      ["Declining", (m.breadth && m.breadth[m.breadth.length - 1]) ? m.breadth[m.breadth.length - 1].declining : "—", "companies"],
-      ["Strongest sector", best ? best.sector : "—", best && best.return_period_pct != null ? `${best.return_period_pct}%` : "—"],
-      ["Weakest sector", worst ? worst.sector : "—", worst && worst.return_period_pct != null ? `${worst.return_period_pct}%` : "—"],
+      ["NEPSE index", fmtNum(m.nepse && m.nepse[m.nepse.length - 1]), "latest close"],
+      ["NEPSE period return", (m.nepse_return_period_pct != null ? m.nepse_return_period_pct + "%" : "—"), `${data.period_sessions} sessions`],
+      ["Total market turnover", fmtNum(m.latest_total_turnover), "NPR, latest session"],
+      ["Advancing companies", breadth.advancing != null ? breadth.advancing : "—", "latest session"],
+      ["Declining companies", breadth.declining != null ? breadth.declining : "—", "latest session"],
+      ["Strongest sector", best ? best.sector : "—", best && best.return_period_pct != null ? best.return_period_pct + "%" : "—"],
+      ["Weakest sector", worst ? worst.sector : "—", worst && worst.return_period_pct != null ? worst.return_period_pct + "%" : "—"],
       ["Concentration HHI", data.concentration_hhi != null ? data.concentration_hhi : "—", "turnover share"],
-      ["Observations", data.data_quality.observations, data.data_quality.latest_date],
+      ["Sectors analyzed", data.data_quality.sector_count, "distinct sectors"],
+      ["Companies analyzed", data.data_quality.company_count, "unique companies"],
+      ["Trading sessions", data.data_quality.observations, data.data_quality.latest_date],
     ];
     snap.innerHTML = cards.map(([k, v, h]) =>
       `<div class="report-hero" style="min-width:150px;padding:10px 12px"><div class="hint">${esc(k)}</div><div style="font-size:18px;font-weight:700">${esc(String(v))}</div><div class="hint">${esc(String(h))}</div></div>`
     ).join("");
   }
 
-  // Main chart: sector index or turnover.
+  // Grouping helper: aggregate daily rows into weeks/months/quarters.
+  function groupKey(dateStr, mode) {
+    if (mode === "daily") return dateStr;
+    const d = new Date(dateStr + "T00:00:00");
+    if (mode === "weekly") {
+      const tmp = new Date(d);
+      const day = tmp.getDay();
+      const diff = tmp.getDate() - day + (day === 0 ? -6 : 1);
+      tmp.setDate(diff);
+      return tmp.toISOString().slice(0, 10);
+    }
+    if (mode === "monthly") return dateStr.slice(0, 7);
+    if (mode === "quarterly") {
+      const m = parseInt(dateStr.slice(5, 7), 10);
+      const q = Math.floor((m - 1) / 3) + 1;
+      return `${dateStr.slice(0, 4)}-Q${q}`;
+    }
+    return dateStr;
+  }
+  const groupMode = groupSel ? groupSel.value : "daily";
+  const groupedDates = [];
+  const groupMap = new Map();
+  data.dates.forEach((dt) => {
+    const k = groupKey(dt, groupMode);
+    if (!groupMap.has(k)) { groupMap.set(k, []); groupedDates.push(k); }
+    groupMap.get(k).push(dt);
+  });
+
+  function groupSeries(dailyValues, agg) {
+    return groupedDates.map((k) => {
+      const vals = groupMap.get(k).map((dt) => {
+        const i = data.dates.indexOf(dt);
+        return dailyValues[i];
+      }).filter((v) => v != null);
+      if (!vals.length) return null;
+      if (agg === "sum") return vals.reduce((a, b) => a + b, 0);
+      if (agg === "avg") return vals.reduce((a, b) => a + b, 0) / vals.length;
+      if (agg === "first") return vals[0];
+      if (agg === "last") return vals[vals.length - 1];
+      return vals[vals.length - 1];
+    });
+  }
+
+  const metric = metricSel ? metricSel.value : "index";
   const chartEl = $("#so-chart");
+  let chart = null;
+  let tooltip = null;
   if (chartEl && typeof LightweightCharts !== "undefined") {
     chartEl.innerHTML = "";
-    const chart = LightweightCharts.createChart(chartEl, {
+    chart = LightweightCharts.createChart(chartEl, {
       layout: { background: { color: "transparent" }, textColor: "#9db4ae" },
       grid: { vertLines: { color: "rgba(36,69,60,.35)" }, horzLines: { color: "rgba(36,69,60,.35)" } },
       rightPriceScale: { borderColor: "rgba(36,69,60,.55)" },
       timeScale: { borderColor: "rgba(36,69,60,.55)", timeVisible: false },
+      crosshair: { mode: 1 },
     });
-    const metric = $("#so-metric") ? $("#so-metric").value : "index";
-    const palette = ["#E9C46A", "#1FC98A", "#FF6B78", "#7BA7FF", "#F4D58D", "#A8FFD9", "#FFB86B", "#C792EA"];
+    tooltip = document.createElement("div");
+    tooltip.style.cssText = "position:absolute;right:8px;top:8px;background:rgba(6,17,15,.92);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:11px;pointer-events:none;max-width:260px;z-index:5;";
+    chartEl.style.position = "relative";
+    chartEl.appendChild(tooltip);
+
+    const palette = ["#E9C46A", "#1FC98A", "#FF6B78", "#7BA7FF", "#F4D58D", "#A8FFD9", "#FFB86B", "#C792EA", "#9db4ae"];
+    const normalize = (vals) => {
+      const first = vals.find((v) => v != null);
+      if (first == null || first === 0) return vals;
+      return vals.map((v) => (v == null ? null : (v / first) * 100));
+    };
+    const seriesMap = new Map();
     (data.sectors || []).forEach((sec, i) => {
+      if (!selectedSectors.has(sec.sector)) return;
+      let daily = null;
+      if (metric === "turnover") daily = sec.turnover;
+      else if (metric === "volume") daily = sec.volume;
+      else daily = sec.index;
+      if (!daily) return;
+      const agg = (metric === "turnover" || metric === "volume") ? "sum" : "last";
+      const vals = groupSeries(daily, agg);
+      const useVals = metric === "index" ? vals : vals;
+      const pts = groupedDates.map((k, j) => ({ time: k, value: useVals[j] })).filter((p) => p.value != null);
+      if (!pts.length) return;
       const series = chart.addLineSeries({ color: palette[i % palette.length], lineWidth: 2, title: sec.sector });
-      const values = metric === "turnover" ? sec.turnover : (metric === "return" ? null : sec.index);
-      if (metric === "return") {
-        // Single point per sector is not a series; skip time series.
-        return;
-      }
-      const pts = (values || []).map((v, j) => ({ time: data.dates[j], value: v })).filter((p) => p.value != null);
-      if (pts.length) series.setData(pts);
+      series.setData(pts);
+      seriesMap.set(sec.sector, { series, values: useVals, dates: groupedDates });
     });
-    if (metric !== "return") {
-      const nepse = chart.addLineSeries({ color: "#9db4ae", lineWidth: 1, lineStyle: 2, title: "NEPSE" });
-      const pts = (data.market.nepse || []).map((v, j) => ({ time: data.dates[j], value: v })).filter((p) => p.value != null);
-      if (pts.length) nepse.setData(pts);
+    // Companies
+    let colorIdx = (data.sectors || []).length;
+    selectedCompanies.forEach((sym) => {
+      const bars = companySeries[sym] || [];
+      if (!bars.length) return;
+      const byDate = new Map(bars.map((b) => [b.date, b]));
+      const daily = data.dates.map((dt) => {
+        const b = byDate.get(dt);
+        if (!b) return null;
+        if (metric === "turnover") return b.turnover;
+        if (metric === "volume") return b.volume;
+        return b.close;
+      });
+      const agg = (metric === "turnover" || metric === "volume") ? "sum" : "last";
+      const vals = groupSeries(daily, agg);
+      const pts = groupedDates.map((k, j) => ({ time: k, value: vals[j] })).filter((p) => p.value != null);
+      if (!pts.length) return;
+      const series = chart.addLineSeries({ color: palette[colorIdx % palette.length], lineWidth: 2, title: sym });
+      series.setData(pts);
+      seriesMap.set(sym, { series, values: vals, dates: groupedDates });
+      colorIdx++;
+    });
+    // NEPSE
+    if (metric === "index" || metric === "return") {
+      const nepsePts = groupedDates.map((k, j) => {
+        const idxs = groupMap.get(k);
+        const vals = idxs.map((dt) => {
+          const i = data.dates.indexOf(dt);
+          return data.market.nepse[i];
+        }).filter((v) => v != null);
+        if (!vals.length) return null;
+        return { time: k, value: vals[vals.length - 1] };
+      }).filter(Boolean);
+      if (nepsePts.length) {
+        const nepseSeries = chart.addLineSeries({ color: "#9db4ae", lineWidth: 1, lineStyle: 2, title: "NEPSE" });
+        nepseSeries.setData(nepsePts);
+        seriesMap.set("NEPSE", { series: nepseSeries, values: nepsePts.map((p) => p.value), dates: groupedDates });
+      }
     }
     chart.timeScale().fitContent();
+    chart.subscribeCrosshairMove((param) => {
+      if (!tooltip) return;
+      if (!param || !param.time) { tooltip.style.display = "none"; return; }
+      const t = param.time;
+      let html = `<b>${esc(String(t))}</b><br>`;
+      seriesMap.forEach((info, name) => {
+        const i = info.dates.indexOf(t);
+        if (i >= 0 && info.values[i] != null) {
+          html += `${esc(name)}: ${fmtNum(info.values[i])}<br>`;
+        }
+      });
+      tooltip.innerHTML = html;
+      tooltip.style.display = "block";
+    });
   }
 
-  // Rankings table.
+  // Rankings
   const rankEl = $("#so-rankings");
   if (rankEl) {
     const rows = (data.rankings || []).map((s) => [
       { html: esc(s.sector) },
-      { html: fmtNum(s.return_period_pct) },
-      { html: fmtNum(s.turnover_change_pct) },
+      { html: fmtNum(s.return_period_pct) + "%" },
+      { html: fmtNum(s.turnover_change_pct) + "%" },
       { html: fmtNum(s.latest_turnover) },
       { html: fmtNum(s.relative_turnover) },
       { html: s.members },
@@ -18872,33 +19008,33 @@ async function loadSectorOverview() {
     rankEl.innerHTML = table(["Sector", "Period return %", "Turnover change %", "Latest turnover", "Relative turnover", "Members"], rows);
   }
 
-  // Turnover share.
+  // Turnover share
   const shareEl = $("#so-share");
   if (shareEl) {
     const rows = (data.turnover_share || []).map((s) => [
       { html: esc(s.sector) },
       { html: fmtNum(s.turnover) },
-      { html: fmtNum(s.share_pct) },
+      { html: fmtNum(s.share_pct) + "%" },
     ]);
     shareEl.innerHTML = table(["Sector", "Latest turnover", "Share %"], rows)
-      + `<p class="hint">Concentration HHI: ${esc(String(data.concentration_hhi))}. Shares are latest-session turnover shares.</p>`;
+      + `<p class="hint">Concentration HHI: ${esc(String(data.concentration_hhi))}. Latest-session turnover shares.</p>`;
   }
 
-  // Heatmap as simple colored table.
+  // Heatmap
   const heatEl = $("#so-heatmap");
   if (heatEl) {
     const rows = (data.sectors || []).map((s) => {
       const v = s.return_period_pct;
       const color = v == null ? "var(--muted)" : (v >= 0 ? "var(--up)" : "var(--down)");
       return [{ html: `<span style="color:${color};font-weight:700">${esc(s.sector)}</span>` },
-              { html: fmtNum(v) },
+              { html: fmtNum(v) + "%" },
               { html: fmtNum(s.latest_turnover) },
-              { html: fmtNum(s.relative_turnover) }];
+              { html: fmtNum(s.relative_turnover) + "x" }];
     });
     heatEl.innerHTML = table(["Sector", "Period return %", "Latest turnover", "Relative turnover"], rows);
   }
 
-  // Breadth chart.
+  // Breadth
   const breadthEl = $("#so-breadth");
   if (breadthEl && typeof LightweightCharts !== "undefined") {
     breadthEl.innerHTML = "";
@@ -18915,7 +19051,7 @@ async function loadSectorOverview() {
     chart.timeScale().fitContent();
   }
 
-  // Insights.
+  // Insights
   const ins = $("#so-insights");
   if (ins) {
     ins.innerHTML = (data.insights || []).map((x) => `<div class="report-missing ok">${esc(x)}</div>`).join("");
@@ -18926,13 +19062,23 @@ async function loadSectorOverview() {
       `${data.data_quality.sector_count} sectors, ${data.data_quality.company_count} companies. ${data.data_quality.note}`;
   }
 
-  // Bind controls once.
+  // Sector checkboxes
+  const pickBox = $("#so-sector-picks");
+  if (pickBox && !pickBox.dataset.bound) {
+    pickBox.dataset.bound = "1";
+    pickBox.innerHTML = (data.sectors || []).map((s) =>
+      `<label class="chk" style="font-size:12px"><input type="checkbox" value="${esc(s.sector)}" checked /> ${esc(s.sector)}</label>`
+    ).join(" ");
+  }
+
+  // Bind controls
   const refresh = $("#so-refresh");
   if (refresh && refresh.dataset.bound !== "1") {
     refresh.dataset.bound = "1";
     refresh.addEventListener("click", () => loadSectorOverview());
     if ($("#so-period")) $("#so-period").addEventListener("change", () => loadSectorOverview());
     if ($("#so-metric")) $("#so-metric").addEventListener("change", () => loadSectorOverview());
+    if (groupSel) groupSel.addEventListener("change", () => loadSectorOverview());
   }
 }
 
