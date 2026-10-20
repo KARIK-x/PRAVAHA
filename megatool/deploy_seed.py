@@ -27,8 +27,6 @@ SAFETY
 
 from __future__ import annotations
 
-import contextlib
-import json
 import os
 import threading
 from collections.abc import Callable
@@ -113,7 +111,6 @@ def seed_from_snapshot(store: Any, path: Path | None = None) -> dict[str, Any]:
     """
     from datetime import UTC, datetime
 
-    started_at = datetime.now(UTC).replace(tzinfo=None)
     src = path or snapshot_path()
     if not src.is_file():
         raise FileNotFoundError(f"market-data snapshot not found: {src}")
@@ -180,6 +177,8 @@ def seed_from_snapshot(store: Any, path: Path | None = None) -> dict[str, Any]:
             store.execute(sql, [str(src), *chunk])
     finally:
         if prev_limit:
+            import contextlib
+
             with contextlib.suppress(Exception):
                 store.execute(f"SET memory_limit='{prev_limit}'")
     after = int(store.execute("SELECT COUNT(*) FROM price_bars").fetchone()[0])
@@ -189,43 +188,6 @@ def seed_from_snapshot(store: Any, path: Path | None = None) -> dict[str, Any]:
     ).fetchone()
     symbols = int(rows[0] or 0)
     now = datetime.now(UTC).replace(tzinfo=None)
-
-    # Record the load in the ingestion log so ``/api/status`` can report the last
-    # successful fetch. Without this the snapshot path leaves no trace and an
-    # operator cannot tell WHEN the data was loaded or from where.
-    with contextlib.suppress(Exception):
-        from megatool.db import init_app_db, log_ingestion
-
-        init_app_db()  # idempotent: guarantees the ingestion_log table exists
-        snapshot_rows = int(
-            store.execute("SELECT COUNT(*) FROM read_parquet(?)", [str(src)]).fetchone()[0]
-        )
-        log_ingestion(
-            {
-                "source": SNAPSHOT_SOURCE,
-                "started_at": started_at.isoformat(),
-                "finished_at": now.isoformat(),
-                "status": "success",
-                "symbols_requested": symbols,
-                "symbols_succeeded": symbols,
-                "symbols_failed": 0,
-                "rows_read": snapshot_rows,
-                "rows_inserted": max(0, after - before),
-                "rows_updated": max(0, snapshot_rows - max(0, after - before)),
-                "coverage_start": str(rows[1]) if rows[1] else None,
-                "coverage_end": str(rows[2]) if rows[2] else None,
-                "detail": json.dumps(
-                    {
-                        "kind": "snapshot",
-                        "path": str(src),
-                        "note": (
-                            "committed market-data snapshot loaded at startup; "
-                            "the frozen dataset's own dates are the coverage above"
-                        ),
-                    }
-                ),
-            }
-        )
     store.upsert_securities(
         [
             {
