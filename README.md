@@ -68,13 +68,14 @@ Stop the server with `Ctrl-C`.
 
 ## Screenshot gallery
 
-See [`docs/SCREENSHOT_GALLERY.md`](docs/SCREENSHOT_GALLERY.md) for the full gallery. Sample views:
+See [`docs/SCREENSHOT_GALLERY.md`](docs/SCREENSHOT_GALLERY.md) for all 15
+screenshots. Sample views:
 
-![Overview](docs/images/01-overview.png)
-![Financial Screener](docs/images/02-screener.png)
-![Data & Quality](docs/images/03-data-quality.png)
-![Research](docs/images/04-research.png)
-![Sector Overview](docs/images/05-sector-overview.png)
+![Main Dashboard](docs/images/01-dashboard-overview.png)
+![Sector Overview](docs/images/03-sector-overview.png)
+![Interactive Charting](docs/images/10-interactive-charting.png)
+![Data Quality](docs/images/14-data-quality.png)
+![Responsive Interface](docs/images/15-responsive-interface.png)
 
 ## Layout
 
