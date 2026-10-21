@@ -95,6 +95,9 @@ experiments/runs/
 
 # --- Large reference documents (not application code) ---
 *.pages
+
+# --- Third-party market-data seed (redistribution rights unverified) ---
+seed/*.parquet
 NEPSE_Mega_Tool_106_Screenshot_Analysis.pdf
 PRAVAHA.pdf
 logoFimage.png
