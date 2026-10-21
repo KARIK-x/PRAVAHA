@@ -1,4 +1,4 @@
-# Mega Tool
+# PRAVAHA — NEPSE Analytics Platform
 
 Local NEPSE quantitative research, technical analysis, and trading-analytics terminal.
 
@@ -65,6 +65,16 @@ Stop the server with `Ctrl-C`.
   analysis are import-based instead.
 - **No synthetic data in real datasets.** Test fixtures are written to throwaway paths
   and are labelled `SYNTHETIC-TEST-FIXTURE`.
+
+## Screenshot gallery
+
+See [`docs/SCREENSHOT_GALLERY.md`](docs/SCREENSHOT_GALLERY.md) for the full gallery. Sample views:
+
+![Overview](docs/images/01-overview.png)
+![Financial Screener](docs/images/02-screener.png)
+![Data & Quality](docs/images/03-data-quality.png)
+![Research](docs/images/04-research.png)
+![Sector Overview](docs/images/05-sector-overview.png)
 
 ## Layout
 
